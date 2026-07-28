@@ -19,6 +19,7 @@ import {
 import { SyntaxHighlighter, CODE_LINE_HEIGHT } from '@/components/SyntaxHighlighter';
 import { AgentChat } from '@/components/AgentChat';
 import { GitHubExportModal } from '@/components/GitHubExportModal';
+import { DeployModal } from '@/components/DeployModal';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -279,6 +280,7 @@ export default function ProjectEditorScreen() {
   const [renameFilePath, setRenameFilePath] = useState('');
   const [agentOpen, setAgentOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [deployOpen, setDeployOpen] = useState(false);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -686,6 +688,14 @@ export default function ProjectEditorScreen() {
 
         <Pressable
           style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setDeployOpen(true)}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons name="rocket-launch-outline" size={17} color={colors.primary} />
+        </Pressable>
+
+        <Pressable
+          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setExportOpen(true)}
           hitSlop={4}
         >
@@ -919,6 +929,14 @@ export default function ProjectEditorScreen() {
           <Ionicons name="chevron-up" size={16} color={colors.mutedForeground} />
         </Pressable>
       )}
+
+      {/* Deploy */}
+      <DeployModal
+        visible={deployOpen}
+        onClose={() => setDeployOpen(false)}
+        projectId={projectId}
+        projectName={project?.name ?? 'my-project'}
+      />
 
       {/* GitHub export */}
       <GitHubExportModal
