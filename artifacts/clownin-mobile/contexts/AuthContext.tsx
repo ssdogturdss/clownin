@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
 
@@ -92,6 +93,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     applyToken(null);
     queryClient.clear();
+    // Clear all per-project editor state (scroll positions, selected file, terminal open state)
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const staleKeys = allKeys.filter(
+        (k) => k.startsWith('scroll_') || k.startsWith('selected_file_') || k.startsWith('terminal_open_'),
+      );
+      if (staleKeys.length > 0) {
+        await AsyncStorage.multiRemove(staleKeys);
+      }
+    } catch {
+      // cleanup failure is non-critical
+    }
   }, [applyToken, queryClient]);
 
   // Keep the ref in sync
