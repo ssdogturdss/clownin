@@ -19,11 +19,15 @@ function getExecutorCommand(language: string, filePath: string): { cmd: string; 
       return { cmd: "node", args: [filePath] };
     case "typescript":
     case "ts":
-      return { cmd: "npx", args: ["tsx", filePath] };
+      // bun runs TypeScript natively — faster than npx tsx
+      return { cmd: "bun", args: ["run", filePath] };
     case "python":
     case "python3":
     case "py":
       return { cmd: "python3", args: [filePath] };
+    case "bash":
+    case "sh":
+      return { cmd: "bash", args: [filePath] };
     default:
       return null;
   }

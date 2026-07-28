@@ -17,6 +17,7 @@ import {
   useListProjects,
   useCreateProject,
   useDeleteProject,
+  useUpdateProject,
   getListProjectsQueryKey,
 } from '@workspace/api-client-react';
 import type { Project } from '@workspace/api-client-react';
@@ -31,6 +32,7 @@ const LANG_COLORS: Record<string, string> = {
   javascript: '#f7df1e',
   typescript: '#3178c6',
   python: '#3572A5',
+  bash: '#4eaa25',
   plaintext: '#8b949e',
 };
 
@@ -38,6 +40,7 @@ const LANG_LABELS: Record<string, string> = {
   javascript: 'JS',
   typescript: 'TS',
   python: 'PY',
+  bash: 'SH',
 };
 
 function LangBadge({ language }: { language: string }) {
@@ -74,11 +77,14 @@ export default function ProjectsScreen() {
   const { data: projects, isLoading, isError, refetch } = useListProjects();
   const createMutation = useCreateProject();
   const deleteMutation = useDeleteProject();
+  const updateMutation = useUpdateProject();
 
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newLang, setNewLang] = useState<'javascript' | 'python'>('javascript');
+  const [newLang, setNewLang] = useState<'javascript' | 'typescript' | 'python' | 'bash'>('javascript');
   const [refreshing, setRefreshing] = useState(false);
+  const [renameProject, setRenameProject] = useState<Project | null>(null);
+  const [renameName, setRenameName] = useState('');
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -96,6 +102,18 @@ export default function ProjectsScreen() {
       setNewName('');
     } catch {
       Alert.alert('Error', 'Failed to create project');
+    }
+  };
+
+  const handleRename = async () => {
+    if (!renameProject || !renameName.trim()) return;
+    try {
+      await updateMutation.mutateAsync({ id: renameProject.id, data: { name: renameName.trim() } });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+      setRenameProject(null);
+    } catch {
+      Alert.alert('Error', 'Failed to rename project');
     }
   };
 
@@ -210,6 +228,11 @@ export default function ProjectsScreen() {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 router.push(`/(app)/project/${item.id}`);
               }}
+              onLongPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setRenameProject(item);
+                setRenameName(item.name);
+              }}
             >
               <View style={styles.cardTop}>
                 <View style={styles.cardLeft}>
@@ -242,6 +265,41 @@ export default function ProjectsScreen() {
         />
       )}
 
+      {/* Rename Project Modal */}
+      <Modal visible={!!renameProject} transparent animationType="fade" onRequestClose={() => setRenameProject(null)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setRenameProject(null)}>
+          <Pressable style={[styles.modalBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Rename Project</Text>
+            <TextInput
+              style={[styles.modalInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.input }]}
+              placeholder="Project name"
+              placeholderTextColor={colors.mutedForeground}
+              value={renameName}
+              onChangeText={setRenameName}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleRename}
+            />
+            <View style={styles.modalActions}>
+              <Pressable style={[styles.modalBtn, { borderColor: colors.border }]} onPress={() => setRenameProject(null)}>
+                <Text style={[styles.modalBtnText, { color: colors.foreground }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnPrimary, { backgroundColor: colors.primary }]}
+                onPress={handleRename}
+                disabled={updateMutation.isPending}
+              >
+                {updateMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.primaryForeground} />
+                ) : (
+                  <Text style={[styles.modalBtnText, { color: colors.primaryForeground }]}>Rename</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Create Project Modal */}
       <Modal visible={showCreate} transparent animationType="fade" onRequestClose={() => setShowCreate(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowCreate(false)}>
@@ -261,25 +319,30 @@ export default function ProjectsScreen() {
 
             <Text style={[styles.langLabel, { color: colors.mutedForeground }]}>Language</Text>
             <View style={styles.langRow}>
-              {(['javascript', 'python'] as const).map((lang) => (
+              {([
+                { id: 'javascript', label: 'JS' },
+                { id: 'typescript', label: 'TS' },
+                { id: 'python', label: 'PY' },
+                { id: 'bash', label: 'SH' },
+              ] as const).map(({ id, label }) => (
                 <Pressable
-                  key={lang}
+                  key={id}
                   style={[
                     styles.langChip,
                     {
-                      backgroundColor: newLang === lang ? colors.primary : colors.secondary,
-                      borderColor: newLang === lang ? colors.primary : colors.border,
+                      backgroundColor: newLang === id ? colors.primary : colors.secondary,
+                      borderColor: newLang === id ? colors.primary : colors.border,
                     },
                   ]}
-                  onPress={() => setNewLang(lang)}
+                  onPress={() => setNewLang(id)}
                 >
                   <Text
                     style={[
                       styles.langChipText,
-                      { color: newLang === lang ? colors.primaryForeground : colors.foreground },
+                      { color: newLang === id ? colors.primaryForeground : colors.foreground },
                     ]}
                   >
-                    {lang === 'javascript' ? 'JavaScript' : 'Python'}
+                    {label}
                   </Text>
                 </Pressable>
               ))}

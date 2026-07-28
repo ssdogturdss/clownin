@@ -143,6 +143,8 @@ function getDefaultFile(language: string): { path: string; content: string } {
       return { path: "main.py", content: 'print("Hello, Clownin! 🤡")\n' };
     case "typescript":
       return { path: "index.ts", content: 'console.log("Hello, Clownin! 🤡");\n' };
+    case "bash":
+      return { path: "main.sh", content: '#!/usr/bin/env bash\necho "Hello, Clownin! 🤡"\n' };
     case "javascript":
     default:
       return { path: "index.js", content: 'console.log("Hello, Clownin! 🤡");\n' };
