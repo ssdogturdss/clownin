@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { setAuthTokenGetter } from '@workspace/api-client-react';
+import { router } from 'expo-router';
+import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
 
 interface AuthContextValue {
@@ -16,6 +17,30 @@ const USER_KEY = 'clownin_user';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * Decode the JWT payload and return the `exp` timestamp (in seconds).
+ * Returns null if the token is malformed or has no `exp` field.
+ */
+function getTokenExpiry(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    // atob is available in React Native via the Hermes engine
+    const payload = JSON.parse(atob(parts[1]));
+    if (typeof payload.exp !== 'number') return null;
+    return payload.exp;
+  } catch {
+    return null;
+  }
+}
+
+/** Returns true if the token's `exp` has already passed. */
+function isTokenExpired(token: string): boolean {
+  const exp = getTokenExpiry(token);
+  if (exp === null) return false; // no expiry field → treat as valid
+  return Date.now() >= exp * 1000;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -25,6 +50,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthTokenGetter(t ? () => t : null);
   }, []);
 
+  // Keep a ref to the latest logout so the unauthorized handler never goes stale
+  const logoutRef = useRef<() => Promise<void>>(async () => {});
+
+  const logout = useCallback(async () => {
+    await Promise.all([
+      SecureStore.deleteItemAsync(TOKEN_KEY),
+      SecureStore.deleteItemAsync(USER_KEY),
+    ]);
+    setToken(null);
+    setUser(null);
+    applyToken(null);
+  }, [applyToken]);
+
+  // Keep the ref in sync
+  useEffect(() => {
+    logoutRef.current = logout;
+  }, [logout]);
+
+  // Register a global 401 handler — clears credentials and sends user to login
+  useEffect(() => {
+    setUnauthorizedHandler(async () => {
+      await logoutRef.current();
+      router.replace('/(auth)/login');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  // Restore persisted session on app start, skipping expired tokens
   useEffect(() => {
     (async () => {
       try {
@@ -33,9 +86,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           SecureStore.getItemAsync(USER_KEY),
         ]);
         if (storedToken && storedUser) {
-          setToken(storedToken);
-          setUser(JSON.parse(storedUser) as UserProfile);
-          applyToken(storedToken);
+          if (isTokenExpired(storedToken)) {
+            // Token is expired — purge it so the user is sent to login
+            await Promise.all([
+              SecureStore.deleteItemAsync(TOKEN_KEY),
+              SecureStore.deleteItemAsync(USER_KEY),
+            ]);
+          } else {
+            setToken(storedToken);
+            setUser(JSON.parse(storedUser) as UserProfile);
+            applyToken(storedToken);
+          }
         }
       } catch {
         // ignore storage errors
@@ -53,16 +114,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(newToken);
     setUser(newUser);
     applyToken(newToken);
-  };
-
-  const logout = async () => {
-    await Promise.all([
-      SecureStore.deleteItemAsync(TOKEN_KEY),
-      SecureStore.deleteItemAsync(USER_KEY),
-    ]);
-    setToken(null);
-    setUser(null);
-    applyToken(null);
   };
 
   return (
