@@ -14,6 +14,7 @@ import {
   Platform,
   Dimensions,
   KeyboardAvoidingView,
+  Keyboard,
 } from 'react-native';
 import { SyntaxHighlighter } from '@/components/SyntaxHighlighter';
 import { AgentChat } from '@/components/AgentChat';
@@ -116,6 +117,8 @@ export default function ProjectEditorScreen() {
 
   // Selected file state
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
+  // Ref mirror so keyboard handlers always see the current file id without stale closures
+  const selectedFileIdRef = useRef<number | null>(null);
   const [editorContent, setEditorContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,6 +136,8 @@ export default function ProjectEditorScreen() {
   // Pending scroll save: tracks the latest offset to be written for the current file
   const pendingScrollSaveRef = useRef<{ fileId: number; y: number } | null>(null);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks the cursor line (0-based) while editing, used to re-scroll on keyboard show
+  const cursorLineRef = useRef(0);
 
   // Immediately flush any pending scroll save to AsyncStorage (fire-and-forget)
   const flushScrollSave = useCallback(() => {
@@ -186,6 +191,56 @@ export default function ProjectEditorScreen() {
     }, 100);
     return () => clearTimeout(timerId);
   }, [isEditing]);
+
+  // Keep selectedFileIdRef in sync so keyboard handlers always see the current value
+  useEffect(() => { selectedFileIdRef.current = selectedFileId; }, [selectedFileId]);
+
+  // Re-scroll and sync shared scroll state when the keyboard slides in or out.
+  //
+  // keyboardDidShow: the visible area shrank — scroll to keep the cursor line
+  //   visible above the keyboard, then write the new offset into shared state
+  //   and storage so view/edit modes never diverge.
+  //
+  // keyboardDidHide: the visible area expanded back — re-apply the last known
+  //   shared offset so the TextInput doesn't drift from the highlighter's
+  //   position during the layout change.
+  useEffect(() => {
+    if (!isEditing) return;
+
+    const LINE_HEIGHT = 20;
+    const TOP_PADDING = 14;
+
+    const scrollTo = (y: number) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y } });
+      // Explicitly sync shared state so view/edit modes stay in agreement
+      sharedScrollY.current = y;
+      const fileId = selectedFileIdRef.current;
+      if (fileId !== null) saveScrollOffset(fileId, y);
+    };
+
+    const onKeyboardShow = () => {
+      const line = cursorLineRef.current;
+      const targetY = Math.max(0, line * LINE_HEIGHT + TOP_PADDING - LINE_HEIGHT * 2);
+      // Allow the KeyboardAvoidingView layout to settle before scrolling
+      setTimeout(() => scrollTo(targetY), 150);
+    };
+
+    const onKeyboardHide = () => {
+      // Re-anchor the TextInput to sharedScrollY so the layout expansion
+      // after keyboard dismissal doesn't leave a stale offset.
+      const y = sharedScrollY.current;
+      setTimeout(() => scrollTo(y), 50);
+    };
+
+    const subShow = Keyboard.addListener('keyboardDidShow', onKeyboardShow);
+    const subHide = Keyboard.addListener('keyboardDidHide', onKeyboardHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, [isEditing, saveScrollOffset]);
+
   // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
   const pendingFileIdRef = useRef<number | null>(null);
@@ -731,7 +786,13 @@ export default function ProjectEditorScreen() {
                   placeholderTextColor={colors.mutedForeground}
                   autoFocus
                   selection={pendingSelection}
-                  onSelectionChange={() => setPendingSelection(undefined)}
+                  onSelectionChange={(e) => {
+                    setPendingSelection(undefined);
+                    // Track which line the cursor is on so the keyboard listener
+                    // can re-scroll to keep it visible after the keyboard opens.
+                    const start = e.nativeEvent.selection.start;
+                    cursorLineRef.current = editorContent.slice(0, start).split('\n').length - 1;
+                  }}
                   onBlur={() => setIsEditing(false)}
                 />
               ) : (
