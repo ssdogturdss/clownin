@@ -13,11 +13,18 @@ import {
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { Platform } from 'react-native';
 import { setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider } from '@/contexts/AuthContext';
 
-// Set base URL at module level so all API calls reach the correct server
-setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
+// On web (Expo web preview), use relative paths — Replit's proxy routes /api/* on
+// the expo subdomain to the API server, so no absolute base URL is needed.
+// On native (Expo Go on device), we need an absolute URL with the workspace domain.
+if (Platform.OS !== 'web') {
+  setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
+} else {
+  setBaseUrl(null);
+}
 
 SplashScreen.preventAutoHideAsync();
 
