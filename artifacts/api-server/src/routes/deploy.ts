@@ -11,6 +11,7 @@ import { createHash } from "crypto";
 import { db, projectsTable, projectFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
+import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 
 const router: IRouter = Router();
 
@@ -72,16 +73,22 @@ router.post(
     if (!files.length) { res.status(400).json({ error: "No files to deploy" }); return; }
 
     try {
-      // 1. Create site
       const cleanName = (siteName || project.name)
         .toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 63);
 
+      // Prepare files: inject netlify.toml, serverless wrappers, code transforms
+      const { files: deployFiles, type, warning } = prepareNetlifyFiles(
+        files.map((f) => ({ path: f.path, content: f.content }))
+      );
+      req.log.info({ projectId, type }, "Netlify deploy: detected project type");
+
+      // 1. Create site
       const site = await netlifyFetch(token, "/sites", "POST", { name: cleanName }) as { id: string; ssl_url?: string; url?: string };
 
-      // 2. Build file digest map  { "/path": "sha1hex" }
+      // 2. Build file digest map
       const fileMap: Record<string, string> = {};
       const contentMap: Record<string, Buffer> = {};
-      for (const f of files) {
+      for (const f of deployFiles) {
         const buf = Buffer.from(f.content, "utf8");
         const sha1 = createHash("sha1").update(buf).digest("hex");
         const key = f.path.startsWith("/") ? f.path : `/${f.path}`;
@@ -89,29 +96,23 @@ router.post(
         contentMap[key] = buf;
       }
 
-      // 3. Create deploy — Netlify tells us which files it needs
+      // 3. Create deploy — Netlify tells us which files it actually needs
       const deploy = await netlifyFetch(token, `/sites/${site.id}/deploys`, "POST", {
         files: fileMap,
-      }) as { id: string; required: string[]; ssl_url?: string; deploy_ssl_url?: string };
+      }) as { id: string; required: string[]; ssl_url?: string };
 
-      // 4. Upload each required file
+      // 4. Upload required files
       const required = new Set(deploy.required ?? []);
       for (const [path, buf] of Object.entries(contentMap)) {
         const sha1 = fileMap[path];
         if (!required.has(sha1)) continue;
         const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-        await netlifyFetch(
-          token,
-          `/deploys/${deploy.id}/files${encodedPath}`,
-          "PUT",
-          buf,
-          true
-        );
+        await netlifyFetch(token, `/deploys/${deploy.id}/files${encodedPath}`, "PUT", buf, true);
       }
 
       const liveUrl = site.ssl_url || site.url || `https://${cleanName}.netlify.app`;
       req.log.info({ projectId, liveUrl }, "Deployed to Netlify");
-      res.json({ url: liveUrl, platform: "netlify", deployId: deploy.id });
+      res.json({ url: liveUrl, platform: "netlify", deployId: deploy.id, type, warning });
     } catch (err: unknown) {
       req.log.error({ err }, "Netlify deploy failed");
       res.status(500).json({ error: err instanceof Error ? err.message : "Deploy failed" });
@@ -175,10 +176,16 @@ router.post(
       const name = (projectName || project.name)
         .toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 100);
 
-      // 1. Upload each file
+      // Prepare files: inject vercel.json, transform app.listen → module.exports
+      const { files: deployFiles, type, warning } = prepareVercelFiles(
+        files.map((f) => ({ path: f.path, content: f.content }))
+      );
+      req.log.info({ projectId, type }, "Vercel deploy: detected project type");
+
+      // 1. Upload each prepared file
       const fileRefs: Array<{ file: string; sha: string; size: number }> = [];
 
-      for (const f of files) {
+      for (const f of deployFiles) {
         const buf = Buffer.from(f.content, "utf8");
         const sha1 = createHash("sha1").update(buf).digest("hex");
 
@@ -198,12 +205,10 @@ router.post(
         target: "production",
       }) as { url?: string; id?: string };
 
-      const liveUrl = deployment.url
-        ? `https://${deployment.url}`
-        : `https://${name}.vercel.app`;
+      const liveUrl = deployment.url ? `https://${deployment.url}` : `https://${name}.vercel.app`;
 
       req.log.info({ projectId, liveUrl }, "Deployed to Vercel");
-      res.json({ url: liveUrl, platform: "vercel", deploymentId: deployment.id });
+      res.json({ url: liveUrl, platform: "vercel", deploymentId: deployment.id, type, warning });
     } catch (err: unknown) {
       req.log.error({ err }, "Vercel deploy failed");
       res.status(500).json({ error: err instanceof Error ? err.message : "Deploy failed" });

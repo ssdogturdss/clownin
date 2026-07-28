@@ -70,7 +70,7 @@ export function DeployModal({ visible, onClose, projectId, projectName }: Deploy
   const [tokens, setTokens] = useState<Record<Platform, string>>({ netlify: "", vercel: "" });
   const [name, setName] = useState(slugify(projectName));
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string; platform: Platform } | null>(null);
+  const [result, setResult] = useState<{ url: string; platform: Platform; warning?: string } | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -111,7 +111,7 @@ export function DeployModal({ visible, onClose, projectId, projectName }: Deploy
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Deploy failed");
-      setResult({ url: data.url, platform });
+      setResult({ url: data.url, platform, warning: data.warning });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Deploy failed");
     } finally {
@@ -141,6 +141,11 @@ export function DeployModal({ visible, onClose, projectId, projectName }: Deploy
                 <Pressable onPress={() => Linking.openURL(result.url)}>
                   <Text style={[s.successUrl, { color: colors.info }]}>{result.url}</Text>
                 </Pressable>
+                {result.warning ? (
+                  <Text style={[s.deployWarning, { color: colors.warning ?? "#f59e0b", borderColor: colors.border }]}>
+                    ⚠️ {result.warning}
+                  </Text>
+                ) : null}
                 <Pressable
                   style={[s.openBtn, { backgroundColor: colors.primary }]}
                   onPress={() => Linking.openURL(result.url)}
@@ -319,5 +324,14 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     },
     openBtnText: { color: "#fff", fontWeight: "600", fontSize: 16 },
     deployAgainText: { fontSize: 13, marginTop: 4 },
+    deployWarning: {
+      fontSize: 12,
+      lineHeight: 18,
+      textAlign: "center",
+      borderWidth: 1,
+      borderRadius: 8,
+      padding: 10,
+      marginHorizontal: 4,
+    },
   });
 }
