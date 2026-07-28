@@ -159,6 +159,9 @@ export default function ProjectEditorScreen() {
   const [exitCode, setExitCode] = useState<number | null>(null);
   const terminalAnim = useRef(new Animated.Value(0)).current;
   const termScrollRef = useRef<ScrollView>(null);
+  // Batch buffer: collect lines between animation frames to avoid per-chunk re-renders
+  const pendingLinesRef = useRef<TerminalLine[]>([]);
+  const rafScheduledRef = useRef(false);
 
   // New file modal
   const [showNewFile, setShowNewFile] = useState(false);
@@ -319,12 +322,17 @@ export default function ProjectEditorScreen() {
     openTerminal();
 
     const TERMINAL_MAX_LINES = 500;
-    const addLine = (type: TerminalLine['type'], text: string) => {
+
+    // Flush the pending-lines buffer into state in one batch, then scroll once.
+    const flushLines = () => {
+      rafScheduledRef.current = false;
+      const batch = pendingLinesRef.current;
+      if (batch.length === 0) return;
+      pendingLinesRef.current = [];
       setTerminalLines((prev) => {
-        const next = [...prev, { id: `${Date.now()}-${Math.random()}`, type, text }];
+        const next = [...prev, ...batch];
         if (next.length > TERMINAL_MAX_LINES) {
           const trimmed = next.slice(next.length - TERMINAL_MAX_LINES);
-          // Prepend a faint notice so the user knows output was cleared
           return [
             { id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' },
             ...trimmed,
@@ -333,6 +341,15 @@ export default function ProjectEditorScreen() {
         return next;
       });
       setTimeout(() => termScrollRef.current?.scrollToEnd({ animated: true }), 50);
+    };
+
+    // Buffer the line and schedule a single flush on the next animation frame.
+    const addLine = (type: TerminalLine['type'], text: string) => {
+      pendingLinesRef.current.push({ id: `${Date.now()}-${Math.random()}`, type, text });
+      if (!rafScheduledRef.current) {
+        rafScheduledRef.current = true;
+        requestAnimationFrame(flushLines);
+      }
     };
 
     addLine('system', '$ Running...');
