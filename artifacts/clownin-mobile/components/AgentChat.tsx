@@ -10,13 +10,23 @@ import {
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
+  Image,
+  ScrollView,
+  Alert,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 // @ts-ignore — expo/fetch provides streaming on native + web
 import { fetch as expoFetch } from "expo/fetch";
+import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import { useColors } from "@/hooks/useColors";
 import { resolveApiBaseUrl } from "@/app/_layout";
 import { useAuth } from "@/contexts/AuthContext";
+
+type Attachment =
+  | { kind: "image"; name: string; base64: string; mimeType: string; preview: string }
+  | { kind: "text"; name: string; content: string };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ToolCallMsg = {
@@ -83,6 +93,8 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
   const [messages, setMessages] = useState<AgentMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const listRef = useRef<FlatList>(null);
 
   // Conversation history for the backend (only user + assistant text)
@@ -104,15 +116,58 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
     });
   }, []);
 
+  const pickImage = useCallback(async () => {
+    setPickerOpen(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") { Alert.alert("Permission needed", "Allow photo access to attach images."); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      base64: true,
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      const name = asset.fileName ?? `image-${Date.now()}.jpg`;
+      const mimeType = asset.mimeType ?? "image/jpeg";
+      const base64 = asset.base64 ?? "";
+      setAttachments((prev) => [...prev, { kind: "image", name, base64, mimeType, preview: asset.uri }]);
+    }
+  }, []);
+
+  const pickFile = useCallback(async () => {
+    setPickerOpen(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+      setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
+    } catch {
+      Alert.alert("Could not read file", "Only plain text and code files are supported.");
+    }
+  }, []);
+
+  const removeAttachment = useCallback((idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && attachments.length === 0) || busy) return;
     setInput("");
     setBusy(true);
+    setPickerOpen(false);
+
+    const sentAttachments = attachments;
+    setAttachments([]);
+
+    const displayText = text
+      ? `${text}${sentAttachments.length ? "\n" + sentAttachments.map((a) => `📎 ${a.name}`).join("\n") : ""}`
+      : sentAttachments.map((a) => `📎 ${a.name}`).join(", ");
 
     const userMsgId = `u-${Date.now()}`;
-    upsertMsg({ id: userMsgId, kind: "user", text });
-    historyRef.current = [...historyRef.current, { role: "user", content: text }];
+    upsertMsg({ id: userMsgId, kind: "user", text: displayText });
+    historyRef.current = [...historyRef.current, { role: "user", content: text || displayText }];
     scrollToBottom();
 
     // Thinking indicator
@@ -136,7 +191,15 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: text, history: historyRef.current.slice(-20) }),
+        body: JSON.stringify({
+          message: text || "(see attachments)",
+          history: historyRef.current.slice(-20),
+          attachments: sentAttachments.map((a) =>
+            a.kind === "image"
+              ? { kind: "image", name: a.name, base64: a.base64, mimeType: a.mimeType }
+              : { kind: "text", name: a.name, content: a.content }
+          ),
+        }),
         // @ts-ignore
         reactNative: { textStreaming: true },
       });
@@ -421,8 +484,49 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
             />
           )}
 
+          {/* Attachment chips */}
+          {attachments.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipScroll} contentContainerStyle={s.chipRow}>
+              {attachments.map((a, i) => (
+                <View key={i} style={[s.chip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  {a.kind === "image"
+                    ? <Image source={{ uri: a.preview }} style={s.chipThumb} />
+                    : <MaterialCommunityIcons name="file-code-outline" size={14} color={colors.primary} />
+                  }
+                  <Text style={[s.chipName, { color: colors.foreground }]} numberOfLines={1}>{a.name}</Text>
+                  <Pressable onPress={() => removeAttachment(i)} hitSlop={8}>
+                    <MaterialCommunityIcons name="close-circle" size={14} color={colors.mutedForeground} />
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+
+          {/* Picker menu */}
+          {pickerOpen && (
+            <View style={[s.pickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Pressable style={s.pickerRow} onPress={pickImage}>
+                <MaterialCommunityIcons name="image-outline" size={18} color={colors.primary} />
+                <Text style={[s.pickerLabel, { color: colors.foreground }]}>Photo / Image</Text>
+              </Pressable>
+              <View style={[s.pickerDivider, { backgroundColor: colors.border }]} />
+              <Pressable style={s.pickerRow} onPress={pickFile}>
+                <MaterialCommunityIcons name="file-outline" size={18} color={colors.primary} />
+                <Text style={[s.pickerLabel, { color: colors.foreground }]}>Text / Code File</Text>
+              </Pressable>
+            </View>
+          )}
+
           {/* Input */}
           <View style={s.inputRow}>
+            <Pressable
+              style={[s.attachBtn, { borderColor: colors.border, backgroundColor: pickerOpen ? colors.card : "transparent" }]}
+              onPress={() => setPickerOpen((v) => !v)}
+              disabled={busy}
+              hitSlop={4}
+            >
+              <MaterialCommunityIcons name="paperclip" size={20} color={attachments.length > 0 ? colors.primary : colors.mutedForeground} />
+            </Pressable>
             <TextInput
               style={s.input}
               placeholder={busy ? "Agent is working…" : "Describe what to build…"}
@@ -435,11 +539,12 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
               returnKeyType="send"
               onSubmitEditing={send}
               blurOnSubmit
+              onFocus={() => setPickerOpen(false)}
             />
             <Pressable
-              style={[s.sendBtn, { opacity: (!input.trim() || busy) ? 0.4 : 1 }]}
+              style={[s.sendBtn, { opacity: ((!input.trim() && attachments.length === 0) || busy) ? 0.4 : 1 }]}
               onPress={send}
-              disabled={!input.trim() || busy}
+              disabled={(!input.trim() && attachments.length === 0) || busy}
             >
               {busy
                 ? <ActivityIndicator size="small" color="#fff" />
@@ -567,9 +672,18 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       flexDirection: "row",
       alignItems: "flex-end",
       gap: 8,
-      padding: 12,
+      paddingHorizontal: 12,
+      paddingBottom: 12,
+      paddingTop: 8,
       borderTopWidth: 1,
       borderTopColor: colors.border,
+    },
+    attachBtn: {
+      width: 36, height: 36,
+      borderRadius: 10,
+      borderWidth: 1,
+      alignItems: "center",
+      justifyContent: "center",
     },
     input: {
       flex: 1,
@@ -590,6 +704,28 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       alignItems: "center",
       justifyContent: "center",
     },
+    // Attachment chips
+    chipScroll: { maxHeight: 52, borderTopWidth: 1, borderTopColor: colors.border },
+    chipRow: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingVertical: 8, alignItems: "center" },
+    chip: {
+      flexDirection: "row", alignItems: "center", gap: 6,
+      borderWidth: 1, borderRadius: 20,
+      paddingLeft: 4, paddingRight: 8, paddingVertical: 4,
+      maxWidth: 180,
+    },
+    chipThumb: { width: 24, height: 24, borderRadius: 4 },
+    chipName: { fontSize: 12, flex: 1 },
+    // Picker menu
+    pickerMenu: {
+      marginHorizontal: 12,
+      marginBottom: 4,
+      borderWidth: 1,
+      borderRadius: 12,
+      overflow: "hidden",
+    },
+    pickerRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+    pickerLabel: { fontSize: 14 },
+    pickerDivider: { height: 1, marginHorizontal: 14 },
   });
 }
 

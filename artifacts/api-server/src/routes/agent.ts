@@ -201,11 +201,16 @@ router.post(
       return;
     }
 
-    const { message, history } = req.body ?? {};
+    type InboundAttachment =
+      | { kind: "image"; name: string; base64: string; mimeType: string }
+      | { kind: "text"; name: string; content: string };
+
+    const { message, history, attachments } = req.body ?? {};
     if (!message || typeof message !== "string") {
       res.status(400).json({ error: "message is required" });
       return;
     }
+    const inboundAttachments: InboundAttachment[] = Array.isArray(attachments) ? attachments : [];
 
     // Verify project ownership
     const [project] = await db
@@ -252,10 +257,31 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
       ? history
       : [];
 
+    // Build user content — plain string unless images are attached
+    const textFiles = inboundAttachments.filter((a) => a.kind === "text") as { kind: "text"; name: string; content: string }[];
+    const images    = inboundAttachments.filter((a) => a.kind === "image") as { kind: "image"; name: string; base64: string; mimeType: string }[];
+
+    let userText = message;
+    if (textFiles.length > 0) {
+      const ctx = textFiles.map((f) => `--- ${f.name} ---\n${f.content}`).join("\n\n");
+      userText = `${ctx}\n\n${message}`;
+    }
+
+    const userContent: OpenAI.ChatCompletionUserMessageParam["content"] =
+      images.length === 0
+        ? userText
+        : [
+            { type: "text", text: userText },
+            ...images.map((img) => ({
+              type: "image_url" as const,
+              image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+            })),
+          ];
+
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: "system", content: systemPrompt },
       ...conversationHistory,
-      { role: "user", content: message },
+      { role: "user", content: userContent },
     ];
 
     sse("thinking");
