@@ -309,6 +309,8 @@ export default function ProjectEditorScreen() {
 
     addLine('system', '$ Running...');
 
+    const runStartTime = Date.now();
+
     try {
       const url = `https://${process.env.EXPO_PUBLIC_DOMAIN}/api/projects/${projectId}/execute`;
       const response = await expoFetch(url, {
@@ -359,7 +361,8 @@ export default function ProjectEditorScreen() {
                 } else if (event.type === 'exit') {
                   const code = parseInt(event.payload, 10);
                   setExitCode(code);
-                  addLine('system', `\nProcess exited with code ${code}`);
+                  const elapsed = ((Date.now() - runStartTime) / 1000).toFixed(2);
+                  addLine('system', `\nProcess exited with code ${code}  (${elapsed}s)`);
                 }
               } catch {
                 // skip malformed events
