@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
 
@@ -73,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   const applyToken = useCallback((t: string | null) => {
     setAuthTokenGetter(t ? () => t : null);
@@ -89,7 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(null);
     setUser(null);
     applyToken(null);
-  }, [applyToken]);
+    queryClient.clear();
+  }, [applyToken, queryClient]);
 
   // Keep the ref in sync
   useEffect(() => {
