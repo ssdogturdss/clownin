@@ -27,6 +27,7 @@ import { useColors } from '@/hooks/useColors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LANG_COLORS: Record<string, string> = {
   javascript: '#f7df1e',
@@ -131,6 +132,19 @@ export default function ProjectsScreen() {
               await deleteMutation.mutateAsync({ id: project.id });
               await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+              // Clean up all AsyncStorage keys for this project
+              try {
+                const allKeys = await AsyncStorage.getAllKeys();
+                const prefix = `scroll_${project.id}_`;
+                const staleKeys = allKeys.filter((k) => k.startsWith(prefix));
+                staleKeys.push(`selected_file_${project.id}`);
+                staleKeys.push(`terminal_open_${project.id}`);
+                if (staleKeys.length > 0) {
+                  await AsyncStorage.multiRemove(staleKeys);
+                }
+              } catch {
+                // cleanup failure is non-critical
+              }
             } catch {
               Alert.alert('Error', 'Failed to delete project');
             }
