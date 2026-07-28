@@ -1,0 +1,4 @@
+- [Expo web API routing](expo-web-api-routing.md) — Expo web subdomain can't use relative /api paths; must strip ".expo" from hostname at runtime.
+- [SecureStore web fallback](secure-store-web.md) — expo-secure-store is native-only; use localStorage on web via a Platform.OS check shim.
+- [TypeScript execution](typescript-execution.md) — Use bun (not npx tsx) for TypeScript; bun is pre-installed and runs .ts natively without extra deps.
+- [Python runtime](python-runtime.md) — Python not in default nix modules; must install python-3.11 via installProgrammingLanguage.

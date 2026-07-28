@@ -41,6 +41,7 @@ type TerminalLine = { id: string; type: 'stdout' | 'stderr' | 'system'; text: st
 function langIcon(language: string) {
   if (language === 'python') return 'language-python';
   if (language === 'typescript') return 'language-typescript';
+  if (language === 'bash') return 'bash';
   return 'language-javascript';
 }
 
@@ -49,12 +50,14 @@ function FileItem({
   file,
   selected,
   onSelect,
+  onLongPress,
   onDelete,
   colors,
 }: {
   file: ProjectFile;
   selected: boolean;
   onSelect: () => void;
+  onLongPress: () => void;
   onDelete: () => void;
   colors: ReturnType<typeof useColors>;
 }) {
@@ -65,6 +68,7 @@ function FileItem({
         selected && { backgroundColor: colors.primary + '22' },
       ]}
       onPress={onSelect}
+      onLongPress={onLongPress}
     >
       <MaterialCommunityIcons
         name={langIcon(file.language) as React.ComponentProps<typeof MaterialCommunityIcons>['name']}
@@ -166,7 +170,11 @@ export default function ProjectEditorScreen() {
   // New file modal
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
-  const [newFileLang, setNewFileLang] = useState<'javascript' | 'python' | 'plaintext'>('javascript');
+  const [newFileLang, setNewFileLang] = useState<'javascript' | 'typescript' | 'python' | 'bash' | 'plaintext'>('javascript');
+
+  // Rename file modal
+  const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
+  const [renameFilePath, setRenameFilePath] = useState('');
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -357,7 +365,12 @@ export default function ProjectEditorScreen() {
     const runStartTime = Date.now();
 
     try {
-      const url = `https://${process.env.EXPO_PUBLIC_DOMAIN}/api/projects/${projectId}/execute`;
+      // Resolve API host the same way _layout.tsx does:
+      // on the expo web subdomain, strip ".expo" to reach the main proxy domain.
+      const apiHost = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')
+        : process.env.EXPO_PUBLIC_DOMAIN ?? '';
+      const url = `https://${apiHost}/api/projects/${projectId}/execute`;
       const response = await expoFetch(url, {
         method: 'POST',
         headers: {
@@ -444,6 +457,23 @@ export default function ProjectEditorScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {
       Alert.alert('Error', 'Failed to create file');
+    }
+  };
+
+  // Rename file
+  const handleRenameFile = async () => {
+    if (!renameFile || !renameFilePath.trim()) return;
+    try {
+      await updateFileMutation.mutateAsync({
+        id: projectId,
+        fileId: renameFile.id,
+        data: { path: renameFilePath.trim() },
+      });
+      queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
+      setRenameFile(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      Alert.alert('Error', 'Failed to rename file');
     }
   };
 
@@ -572,6 +602,7 @@ export default function ProjectEditorScreen() {
                   file={item}
                   selected={item.id === selectedFileId}
                   onSelect={() => selectFile(item)}
+                  onLongPress={() => { setRenameFile(item); setRenameFilePath(item.path); }}
                   onDelete={() => handleDeleteFile(item)}
                   colors={colors}
                 />
@@ -736,6 +767,42 @@ export default function ProjectEditorScreen() {
         </Pressable>
       )}
 
+      {/* Rename file modal */}
+      <Modal visible={!!renameFile} transparent animationType="fade" onRequestClose={() => setRenameFile(null)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setRenameFile(null)}>
+          <Pressable style={[styles.modalBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Rename File</Text>
+            <TextInput
+              style={[styles.modalInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.input }]}
+              placeholder={renameFile?.path}
+              placeholderTextColor={colors.mutedForeground}
+              value={renameFilePath}
+              onChangeText={setRenameFilePath}
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={handleRenameFile}
+            />
+            <View style={styles.modalActions}>
+              <Pressable style={[styles.modalBtn, { borderColor: colors.border }]} onPress={() => setRenameFile(null)}>
+                <Text style={[styles.modalBtnText, { color: colors.foreground }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, { backgroundColor: colors.primary, borderColor: colors.primary }]}
+                onPress={handleRenameFile}
+                disabled={updateFileMutation.isPending}
+              >
+                {updateFileMutation.isPending
+                  ? <ActivityIndicator size="small" color={colors.primaryForeground} />
+                  : <Text style={[styles.modalBtnText, { color: colors.primaryForeground }]}>Rename</Text>
+                }
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* New file modal */}
       <Modal visible={showNewFile} transparent animationType="fade" onRequestClose={() => setShowNewFile(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowNewFile(false)}>
@@ -755,7 +822,13 @@ export default function ProjectEditorScreen() {
             />
             <Text style={[styles.langLabel, { color: colors.mutedForeground }]}>Language</Text>
             <View style={styles.langRow}>
-              {(['javascript', 'python', 'plaintext'] as const).map((lang) => (
+              {([
+                { id: 'javascript', label: 'JS' },
+                { id: 'typescript', label: 'TS' },
+                { id: 'python', label: 'PY' },
+                { id: 'bash', label: 'SH' },
+                { id: 'plaintext', label: 'TXT' },
+              ] as const).map(({ id: lang, label }) => (
                 <Pressable
                   key={lang}
                   style={[
@@ -768,7 +841,7 @@ export default function ProjectEditorScreen() {
                   onPress={() => setNewFileLang(lang)}
                 >
                   <Text style={[styles.langChipText, { color: newFileLang === lang ? colors.primaryForeground : colors.foreground }]}>
-                    {lang === 'javascript' ? 'JS' : lang === 'python' ? 'PY' : 'TXT'}
+                    {label}
                   </Text>
                 </Pressable>
               ))}
