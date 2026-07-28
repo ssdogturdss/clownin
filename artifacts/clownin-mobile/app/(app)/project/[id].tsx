@@ -286,19 +286,33 @@ export default function ProjectEditorScreen() {
   const createFileMutation = useCreateFile();
   const deleteFileMutation = useDeleteFile();
 
-  // Select file on load — restore saved scroll offset before triggering render
+  // Select file on load — restore last-selected file (or fall back to first),
+  // then restore its saved scroll offset before triggering render
   useEffect(() => {
     if (project?.files && project.files.length > 0 && selectedFileId === null) {
-      const first = project.files[0];
-      AsyncStorage.getItem(`scroll_${projectId}_${first.id}`)
-        .then((saved) => {
-          const parsed = saved !== null ? parseFloat(saved) : NaN;
-          sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
+      AsyncStorage.getItem(`selected_file_${projectId}`)
+        .then((savedId) => {
+          const savedFileId = savedId !== null ? parseInt(savedId, 10) : NaN;
+          const restoredFile =
+            !isNaN(savedFileId) && project.files.find((f) => f.id === savedFileId)
+              ? project.files.find((f) => f.id === savedFileId)!
+              : project.files[0];
+          return AsyncStorage.getItem(`scroll_${projectId}_${restoredFile.id}`)
+            .then((saved) => {
+              const parsed = saved !== null ? parseFloat(saved) : NaN;
+              sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
+            })
+            .catch(() => {
+              sharedScrollY.current = 0;
+            })
+            .finally(() => {
+              setSelectedFileId(restoredFile.id);
+              setEditorContent(restoredFile.content);
+            });
         })
         .catch(() => {
+          const first = project.files[0];
           sharedScrollY.current = 0;
-        })
-        .finally(() => {
           setSelectedFileId(first.id);
           setEditorContent(first.content);
         });
@@ -379,6 +393,7 @@ export default function ProjectEditorScreen() {
     sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
     setSelectedFileId(file.id);
     setEditorContent(file.content);
+    AsyncStorage.setItem(`selected_file_${projectId}`, String(file.id)).catch(() => {});
     Haptics.selectionAsync();
     if (sidebarOpen && Platform.OS !== 'web') {
       toggleSidebar();
@@ -580,6 +595,7 @@ export default function ProjectEditorScreen() {
       setNewFilePath('');
       setSelectedFileId(file.id);
       setEditorContent('');
+      AsyncStorage.setItem(`selected_file_${projectId}`, String(file.id)).catch(() => {});
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {
       Alert.alert('Error', 'Failed to create file');
