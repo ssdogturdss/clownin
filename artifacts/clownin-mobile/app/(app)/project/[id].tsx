@@ -117,6 +117,8 @@ export default function ProjectEditorScreen() {
   // Syntax-highlight editing mode
   const [isEditing, setIsEditing] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
+  // Cursor position to apply when entering edit mode from a line tap
+  const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
   const pendingFileIdRef = useRef<number | null>(null);
@@ -571,6 +573,8 @@ export default function ProjectEditorScreen() {
                   placeholder="// Start coding..."
                   placeholderTextColor={colors.mutedForeground}
                   autoFocus
+                  selection={pendingSelection}
+                  onSelectionChange={() => setPendingSelection(undefined)}
                   onBlur={() => setIsEditing(false)}
                 />
               ) : (
@@ -590,7 +594,13 @@ export default function ProjectEditorScreen() {
                   <SyntaxHighlighter
                     code={editorContent}
                     language={selectedFile.language}
-                    onPress={() => {
+                    onLinePress={(lineIndex) => {
+                      // Compute char offset of the start of the tapped line
+                      const codeLines = editorContent.split('\n');
+                      const charOffset = codeLines
+                        .slice(0, lineIndex)
+                        .reduce((sum, l) => sum + l.length + 1, 0);
+                      setPendingSelection({ start: charOffset, end: charOffset });
                       setIsEditing(true);
                       setTimeout(() => codeInputRef.current?.focus(), 50);
                     }}

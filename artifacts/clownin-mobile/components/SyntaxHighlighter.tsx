@@ -224,7 +224,8 @@ function tokenise(code: string, language: string): Token[][] {
 interface Props {
   code: string;
   language: string;
-  onPress?: () => void;
+  /** Called with the 0-based index of the line the user tapped. */
+  onLinePress?: (lineIndex: number) => void;
   style?: object;
 }
 
@@ -233,42 +234,44 @@ const FONT_FAMILY = Platform.OS === 'ios' ? 'Courier New' : 'monospace';
 export const SyntaxHighlighter = memo(function SyntaxHighlighter({
   code,
   language,
-  onPress,
+  onLinePress,
   style,
 }: Props) {
   const lines = tokenise(code || '', language);
 
   return (
-    <Pressable onPress={onPress} style={{ flex: 1 }}>
-      <ScrollView
-        style={[styles.scroll, style]}
-        contentContainerStyle={styles.content}
-        scrollEnabled
-        showsVerticalScrollIndicator
-        keyboardShouldPersistTaps="handled"
-      >
-        {lines.map((lineTokens, lineIndex) => (
-          <View key={lineIndex} style={styles.line}>
-            {/* Line number */}
-            <Text style={styles.lineNum}>
-              {String(lineIndex + 1).padStart(3, ' ')}
-            </Text>
-            {/* Tokens */}
-            <Text style={styles.codeLine}>
-              {lineTokens.map((tok, ti) => (
-                <Text key={ti} style={{ color: syntaxColors[tok.type] }}>
-                  {tok.value}
-                </Text>
-              ))}
-              {/* Trailing newline spacer so empty lines have height */}
-              {lineTokens.length === 0 ? ' ' : ''}
-            </Text>
-          </View>
-        ))}
-        {/* Extra bottom padding so last line isn't clipped by terminal */}
-        <View style={{ height: 40 }} />
-      </ScrollView>
-    </Pressable>
+    <ScrollView
+      style={[styles.scroll, style]}
+      contentContainerStyle={styles.content}
+      scrollEnabled
+      showsVerticalScrollIndicator
+      keyboardShouldPersistTaps="handled"
+    >
+      {lines.map((lineTokens, lineIndex) => (
+        <Pressable
+          key={lineIndex}
+          onPress={() => onLinePress?.(lineIndex)}
+          style={styles.line}
+        >
+          {/* Line number */}
+          <Text style={styles.lineNum}>
+            {String(lineIndex + 1).padStart(3, ' ')}
+          </Text>
+          {/* Tokens */}
+          <Text style={styles.codeLine}>
+            {lineTokens.map((tok, ti) => (
+              <Text key={ti} style={{ color: syntaxColors[tok.type] }}>
+                {tok.value}
+              </Text>
+            ))}
+            {/* Trailing newline spacer so empty lines have height */}
+            {lineTokens.length === 0 ? ' ' : ''}
+          </Text>
+        </Pressable>
+      ))}
+      {/* Extra bottom padding so last line isn't clipped by terminal */}
+      <View style={{ height: 40 }} />
+    </ScrollView>
   );
 });
 
