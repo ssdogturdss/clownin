@@ -15,6 +15,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
 } from 'react-native';
+import { SyntaxHighlighter } from '@/components/SyntaxHighlighter';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -112,6 +113,10 @@ export default function ProjectEditorScreen() {
   const [editorContent, setEditorContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Syntax-highlight editing mode
+  const [isEditing, setIsEditing] = useState(false);
+  const codeInputRef = useRef<TextInput>(null);
   // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
   const pendingFileIdRef = useRef<number | null>(null);
@@ -215,6 +220,7 @@ export default function ProjectEditorScreen() {
   // When user selects a different file — flush first so no edits are lost
   const selectFile = useCallback(async (file: ProjectFile) => {
     await flushPendingSave();
+    setIsEditing(false);
     setSelectedFileId(file.id);
     setEditorContent(file.content);
     Haptics.selectionAsync();
@@ -531,26 +537,54 @@ export default function ProjectEditorScreen() {
           {/* Code editor */}
           <View style={[styles.editorPane, { backgroundColor: colors.background }]}>
             {selectedFile ? (
-              <TextInput
-                style={[
-                  styles.codeInput,
-                  {
-                    color: colors.foreground,
-                    backgroundColor: colors.background,
-                  },
-                ]}
-                value={editorContent}
-                onChangeText={handleEditorChange}
-                multiline
-                autoCapitalize="none"
-                autoCorrect={false}
-                spellCheck={false}
-                textAlignVertical="top"
-                scrollEnabled
-                keyboardType="default"
-                placeholder="// Start coding..."
-                placeholderTextColor={colors.mutedForeground}
-              />
+              isEditing ? (
+                <TextInput
+                  ref={codeInputRef}
+                  style={[
+                    styles.codeInput,
+                    {
+                      color: colors.foreground,
+                      backgroundColor: colors.background,
+                    },
+                  ]}
+                  value={editorContent}
+                  onChangeText={handleEditorChange}
+                  multiline
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  textAlignVertical="top"
+                  scrollEnabled
+                  keyboardType="default"
+                  placeholder="// Start coding..."
+                  placeholderTextColor={colors.mutedForeground}
+                  autoFocus
+                  onBlur={() => setIsEditing(false)}
+                />
+              ) : (
+                editorContent.length === 0 ? (
+                  <Pressable
+                    style={styles.editorPane}
+                    onPress={() => {
+                      setIsEditing(true);
+                      setTimeout(() => codeInputRef.current?.focus(), 50);
+                    }}
+                  >
+                    <Text style={[styles.codeInput, { color: colors.mutedForeground }]}>
+                      // Start coding...
+                    </Text>
+                  </Pressable>
+                ) : (
+                  <SyntaxHighlighter
+                    code={editorContent}
+                    language={selectedFile.language}
+                    onPress={() => {
+                      setIsEditing(true);
+                      setTimeout(() => codeInputRef.current?.focus(), 50);
+                    }}
+                  />
+                )
+              )
             ) : (
               <View style={styles.noFileSelected}>
                 <Feather name="file-text" size={40} color={colors.border} />
