@@ -129,6 +129,34 @@ export default function ProjectEditorScreen() {
   // Shared scroll offset (pixels) synced between view and edit modes
   const sharedScrollY = useRef(0);
   const viewScrollRef = useRef<ScrollView>(null);
+  // Pending scroll save: tracks the latest offset to be written for the current file
+  const pendingScrollSaveRef = useRef<{ fileId: number; y: number } | null>(null);
+  const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Immediately flush any pending scroll save to AsyncStorage (fire-and-forget)
+  const flushScrollSave = useCallback(() => {
+    if (scrollSaveTimer.current) {
+      clearTimeout(scrollSaveTimer.current);
+      scrollSaveTimer.current = null;
+    }
+    const pending = pendingScrollSaveRef.current;
+    if (!pending) return;
+    pendingScrollSaveRef.current = null;
+    AsyncStorage.setItem(`scroll_${projectId}_${pending.fileId}`, String(pending.y)).catch(() => {});
+  }, [projectId]);
+
+  // Debounce-save the scroll offset; flushed explicitly on file switch and unmount
+  const saveScrollOffset = useCallback((fileId: number, y: number) => {
+    pendingScrollSaveRef.current = { fileId, y };
+    if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
+    scrollSaveTimer.current = setTimeout(() => {
+      const pending = pendingScrollSaveRef.current;
+      if (!pending) return;
+      pendingScrollSaveRef.current = null;
+      scrollSaveTimer.current = null;
+      AsyncStorage.setItem(`scroll_${projectId}_${pending.fileId}`, String(pending.y)).catch(() => {});
+    }, 300);
+  }, [projectId]);
 
   // Scroll the TextInput to show the cursor line when entering edit mode
   useEffect(() => {
@@ -199,12 +227,22 @@ export default function ProjectEditorScreen() {
   const createFileMutation = useCreateFile();
   const deleteFileMutation = useDeleteFile();
 
-  // Select file on load
+  // Select file on load — restore saved scroll offset before triggering render
   useEffect(() => {
     if (project?.files && project.files.length > 0 && selectedFileId === null) {
       const first = project.files[0];
-      setSelectedFileId(first.id);
-      setEditorContent(first.content);
+      AsyncStorage.getItem(`scroll_${projectId}_${first.id}`)
+        .then((saved) => {
+          const parsed = saved !== null ? parseFloat(saved) : NaN;
+          sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
+        })
+        .catch(() => {
+          sharedScrollY.current = 0;
+        })
+        .finally(() => {
+          setSelectedFileId(first.id);
+          setEditorContent(first.content);
+        });
     }
   }, [project]);
 
@@ -253,7 +291,7 @@ export default function ProjectEditorScreen() {
     }
   }, [projectId]);
 
-  // Flush on unmount so navigation away doesn't lose edits
+  // Flush on unmount so navigation away doesn't lose edits or scroll position
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -262,21 +300,31 @@ export default function ProjectEditorScreen() {
       if (content !== null && fileId !== null) {
         updateFileMutation.mutateAsync({ id: projectId, fileId, data: { content } }).catch(() => {});
       }
+      // Flush any pending scroll save immediately
+      if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
+      const pendingScroll = pendingScrollSaveRef.current;
+      if (pendingScroll) {
+        AsyncStorage.setItem(`scroll_${projectId}_${pendingScroll.fileId}`, String(pendingScroll.y)).catch(() => {});
+      }
     };
   }, [projectId]);
 
-  // When user selects a different file — flush first so no edits are lost
+  // When user selects a different file — flush first so no edits or scroll position are lost
   const selectFile = useCallback(async (file: ProjectFile) => {
+    flushScrollSave(); // commit current file's pending scroll before switching
     await flushPendingSave();
     setIsEditing(false);
-    sharedScrollY.current = 0;
+    // Restore persisted scroll position for this file before re-rendering
+    const saved = await AsyncStorage.getItem(`scroll_${projectId}_${file.id}`).catch(() => null);
+    const parsed = saved !== null ? parseFloat(saved) : NaN;
+    sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
     setSelectedFileId(file.id);
     setEditorContent(file.content);
     Haptics.selectionAsync();
     if (sidebarOpen && Platform.OS !== 'web') {
       toggleSidebar();
     }
-  }, [sidebarOpen, flushPendingSave]);
+  }, [sidebarOpen, flushPendingSave, flushScrollSave, projectId]);
 
   // Debounce-save editor content
   const handleEditorChange = useCallback((text: string) => {
@@ -507,6 +555,8 @@ export default function ProjectEditorScreen() {
           try {
             await deleteFileMutation.mutateAsync({ id: projectId, fileId: file.id });
             queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
+            // Clear persisted scroll offset for the deleted file
+            AsyncStorage.removeItem(`scroll_${projectId}_${file.id}`).catch(() => {});
             if (selectedFileId === file.id) {
               setSelectedFileId(null);
               setEditorContent('');
@@ -662,7 +712,9 @@ export default function ProjectEditorScreen() {
                   textAlignVertical="top"
                   scrollEnabled
                   onScroll={(e) => {
-                    sharedScrollY.current = e.nativeEvent.contentOffset.y;
+                    const y = e.nativeEvent.contentOffset.y;
+                    sharedScrollY.current = y;
+                    if (selectedFileId) saveScrollOffset(selectedFileId, y);
                   }}
                   keyboardType="default"
                   placeholder="// Start coding..."
@@ -687,11 +739,12 @@ export default function ProjectEditorScreen() {
                   </Pressable>
                 ) : (
                   <SyntaxHighlighter
+                    key={selectedFileId}
                     code={editorContent}
                     language={selectedFile.language}
                     scrollRef={viewScrollRef}
                     initialScrollY={sharedScrollY.current}
-                    onScrollY={(y) => { sharedScrollY.current = y; }}
+                    onScrollY={(y) => { sharedScrollY.current = y; if (selectedFileId) saveScrollOffset(selectedFileId, y); }}
                     onLinePress={(lineIndex) => {
                       // Compute char offset of the start of the tapped line
                       const codeLines = editorContent.split('\n');
