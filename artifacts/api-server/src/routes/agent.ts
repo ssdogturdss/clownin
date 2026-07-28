@@ -276,8 +276,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
           tools: AGENT_TOOLS,
           tool_choice: "auto",
           stream: true,
-          max_tokens: 4096,
-          temperature: 0.15,
+          max_completion_tokens: 8192,
         });
 
         let textContent = "";

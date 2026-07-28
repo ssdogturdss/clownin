@@ -113,21 +113,62 @@ export function GitHubExportModal({
 
           <ScrollView style={s.body} keyboardShouldPersistTaps="handled">
             {result ? (
-              /* ── Success state ── */
+              /* ── Success + Deploy state ── */
               <View style={s.success}>
-                <Text style={s.successEmoji}>🎉</Text>
-                <Text style={s.successTitle}>Pushed to GitHub!</Text>
-                <Text style={s.successUrl}>{result.repoUrl}</Text>
+                <Text style={s.successEmoji}>🚀</Text>
+                <Text style={s.successTitle}>Live on GitHub</Text>
+                <Pressable onPress={() => Linking.openURL(result.repoUrl)}>
+                  <Text style={[s.successUrl, { color: colors.info }]}>{result.repoUrl}</Text>
+                </Pressable>
+
+                <Text style={s.deployHeading}>Deploy it live — pick a platform</Text>
+
+                {[
+                  {
+                    name: "Vercel",
+                    icon: "triangle-outline" as const,
+                    desc: "Best for JS/TS, Next.js, static sites",
+                    color: "#000",
+                    url: `https://vercel.com/new/clone?repository-url=${encodeURIComponent(result.repoUrl)}`,
+                  },
+                  {
+                    name: "Railway",
+                    icon: "train-variant" as const,
+                    desc: "Any language, batteries included",
+                    color: "#7B3FE4",
+                    url: `https://railway.app/new/github?repo=${encodeURIComponent(result.repoUrl)}`,
+                  },
+                  {
+                    name: "Render",
+                    icon: "cloud-upload-outline" as const,
+                    desc: "Free tier, easy setup, all runtimes",
+                    color: "#46E3B7",
+                    url: `https://dashboard.render.com/web/new?url=${encodeURIComponent(result.repoUrl)}`,
+                  },
+                ].map((p) => (
+                  <Pressable
+                    key={p.name}
+                    style={[s.deployCard, { borderColor: colors.border, backgroundColor: colors.card }]}
+                    onPress={() => Linking.openURL(p.url)}
+                  >
+                    <View style={[s.deployIconBox, { backgroundColor: p.color + "22" }]}>
+                      <MaterialCommunityIcons name={p.icon} size={20} color={p.color === "#000" ? colors.foreground : p.color} />
+                    </View>
+                    <View style={s.deployCardText}>
+                      <Text style={[s.deployCardName, { color: colors.foreground }]}>{p.name}</Text>
+                      <Text style={[s.deployCardDesc, { color: colors.mutedForeground }]}>{p.desc}</Text>
+                    </View>
+                    <MaterialCommunityIcons name="arrow-right" size={16} color={colors.mutedForeground} />
+                  </Pressable>
+                ))}
+
                 <Pressable
-                  style={[s.openBtn, { backgroundColor: colors.primary }]}
+                  style={[s.repoBtn, { borderColor: colors.border }]}
                   onPress={() => Linking.openURL(result.repoUrl)}
                 >
-                  <MaterialCommunityIcons name="open-in-new" size={16} color="#fff" />
-                  <Text style={s.openBtnText}>Open Repo</Text>
+                  <MaterialCommunityIcons name="github" size={16} color={colors.foreground} />
+                  <Text style={[s.repoBtnText, { color: colors.foreground }]}>View on GitHub</Text>
                 </Pressable>
-                <Text style={s.deployHint}>
-                  Connect this repo to Vercel, Railway, or Render to deploy it live in one click.
-                </Text>
               </View>
             ) : (
               /* ── Form ── */
@@ -299,26 +340,47 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     },
     pushBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
 
-    // Success
-    success: { alignItems: "center", paddingVertical: 24, gap: 12 },
-    successEmoji: { fontSize: 48 },
-    successTitle: { fontSize: 20, fontWeight: "700", color: colors.foreground },
-    successUrl: { fontSize: 13, color: colors.mutedForeground },
-    openBtn: {
+    // Success + deploy
+    success: { alignItems: "stretch", paddingVertical: 16, gap: 10 },
+    successEmoji: { fontSize: 40, textAlign: "center" },
+    successTitle: { fontSize: 20, fontWeight: "700", color: colors.foreground, textAlign: "center" },
+    successUrl: { fontSize: 12, textAlign: "center", textDecorationLine: "underline" },
+    deployHeading: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.mutedForeground,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      marginTop: 8,
+    },
+    deployCard: {
       flexDirection: "row",
       alignItems: "center",
+      gap: 12,
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: 12,
+    },
+    deployIconBox: {
+      width: 36,
+      height: 36,
+      borderRadius: 8,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    deployCardText: { flex: 1 },
+    deployCardName: { fontSize: 14, fontWeight: "600" },
+    deployCardDesc: { fontSize: 12, marginTop: 1 },
+    repoBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
       gap: 8,
-      paddingHorizontal: 20,
-      paddingVertical: 12,
+      borderWidth: 1,
       borderRadius: 10,
+      paddingVertical: 11,
+      marginTop: 4,
     },
-    openBtnText: { color: "#fff", fontWeight: "600", fontSize: 15 },
-    deployHint: {
-      fontSize: 13,
-      color: colors.mutedForeground,
-      textAlign: "center",
-      lineHeight: 18,
-      marginHorizontal: 8,
-    },
+    repoBtnText: { fontSize: 14, fontWeight: "500" },
   });
 }
