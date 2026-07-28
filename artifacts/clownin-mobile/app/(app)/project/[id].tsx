@@ -16,6 +16,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   useGetProject,
   useCreateFile,
@@ -119,9 +120,18 @@ export default function ProjectEditorScreen() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const sidebarAnim = useRef(new Animated.Value(1)).current;
 
+  // Auto-run on save
+  const [autoRun, setAutoRun] = useState(false);
+  const autoRunRef = useRef(false);
+  useEffect(() => { autoRunRef.current = autoRun; }, [autoRun]);
+  // Stable ref to handleRun so debounce always calls the latest version
+  const handleRunRef = useRef<(() => void) | null>(null);
+
   // Terminal
   const [terminalVisible, setTerminalVisible] = useState(false);
+  const terminalVisibleRef = useRef(false);
   const [isRunning, setIsRunning] = useState(false);
+  const isRunningRef = useRef(false);
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const terminalAnim = useRef(new Animated.Value(0)).current;
@@ -144,6 +154,25 @@ export default function ProjectEditorScreen() {
       setEditorContent(first.content);
     }
   }, [project]);
+
+  // Restore terminal open/closed state from AsyncStorage per project
+  useEffect(() => {
+    if (!projectId) return;
+    AsyncStorage.getItem(`terminal_open_${projectId}`).then((val) => {
+      if (val === 'true') {
+        terminalVisibleRef.current = true;
+        setTerminalVisible(true);
+        terminalAnim.setValue(1);
+      }
+    }).catch(() => {});
+  }, [projectId]);
+
+  // Persist terminal visibility to AsyncStorage whenever it changes
+  useEffect(() => {
+    if (!projectId) return;
+    terminalVisibleRef.current = terminalVisible;
+    AsyncStorage.setItem(`terminal_open_${projectId}`, terminalVisible ? 'true' : 'false').catch(() => {});
+  }, [terminalVisible, projectId]);
 
   // Flush any pending unsaved content immediately (fire-and-forget)
   const flushPendingSave = useCallback(async () => {
@@ -213,6 +242,10 @@ export default function ProjectEditorScreen() {
           data: { content: text },
         });
         queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
+        // Auto-run after successful save if toggle is on
+        if (autoRunRef.current) {
+          handleRunRef.current?.();
+        }
       } catch {
         // silent save fail
       } finally {
@@ -233,23 +266,30 @@ export default function ProjectEditorScreen() {
   };
 
   // Terminal open/close
-  const openTerminal = () => {
+  const openTerminal = useCallback(() => {
     setTerminalVisible(true);
     Animated.spring(terminalAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 10 }).start();
-  };
+  }, [terminalAnim]);
 
-  const closeTerminal = () => {
+  const closeTerminal = useCallback(() => {
     Animated.timing(terminalAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => {
       setTerminalVisible(false);
     });
-  };
+  }, [terminalAnim]);
 
   // Run code
-  const handleRun = async () => {
+  const handleRun = useCallback(async () => {
     if (!selectedFileId || !token) return;
+    if (isRunningRef.current) return;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setTerminalLines([]);
+    // Append a separator if there are existing lines (preserve last output)
+    setTerminalLines((prev) =>
+      prev.length > 0
+        ? [...prev, { id: `sep-${Date.now()}`, type: 'system', text: '──────────────────────────' }]
+        : prev
+    );
     setExitCode(null);
+    isRunningRef.current = true;
     setIsRunning(true);
     openTerminal();
 
@@ -326,9 +366,13 @@ export default function ProjectEditorScreen() {
       const msg = err instanceof Error ? err.message : 'Execution failed';
       addLine('stderr', msg);
     } finally {
+      isRunningRef.current = false;
       setIsRunning(false);
     }
-  };
+  }, [selectedFileId, token, projectId, openTerminal]);
+
+  // Keep ref always pointing at the latest handleRun so debounce can call it safely
+  useEffect(() => { handleRunRef.current = handleRun; }, [handleRun]);
 
   // Create new file
   const handleCreateFile = async () => {
@@ -408,6 +452,27 @@ export default function ProjectEditorScreen() {
         </View>
 
         {isSaving && <ActivityIndicator size="small" color={colors.mutedForeground} style={styles.saveIndicator} />}
+
+        {/* Auto-run toggle */}
+        <Pressable
+          style={[
+            styles.autoRunBtn,
+            {
+              backgroundColor: autoRun ? colors.primary + '22' : 'transparent',
+              borderColor: autoRun ? colors.primary : colors.border,
+            },
+          ]}
+          onPress={() => {
+            setAutoRun((v) => !v);
+            Haptics.selectionAsync();
+          }}
+          hitSlop={6}
+        >
+          <Feather name="zap" size={13} color={autoRun ? colors.primary : colors.mutedForeground} />
+          <Text style={[styles.autoRunLabel, { color: autoRun ? colors.primary : colors.mutedForeground }]}>
+            Auto
+          </Text>
+        </Pressable>
 
         <Pressable
           style={[styles.runBtn, { backgroundColor: isRunning ? colors.muted : colors.primary }]}
@@ -646,6 +711,16 @@ const styles = StyleSheet.create({
   projectName: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   fileName: { fontSize: 11, fontFamily: 'Inter_400Regular' },
   saveIndicator: { marginRight: 4 },
+  autoRunBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  autoRunLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   runBtn: {
     width: 36,
     height: 36,
