@@ -1,0 +1,23 @@
+kind = "mobile"
+previewPath = "/"
+title = "Clownin"
+version = "1.0.0"
+id = "artifacts/clownin-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/" ]
+localPort = 18689
+
+[services.development]
+run = "pnpm --filter @workspace/clownin-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/clownin-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/clownin-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "18689"
+BASE_PATH = "/"

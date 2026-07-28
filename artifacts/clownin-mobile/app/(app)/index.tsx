@@ -1,0 +1,375 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  TextInput,
+  Platform,
+  RefreshControl,
+} from 'react-native';
+import { router } from 'expo-router';
+import {
+  useListProjects,
+  useCreateProject,
+  useDeleteProject,
+  getListProjectsQueryKey,
+} from '@workspace/api-client-react';
+import type { Project } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthContext';
+import { useColors } from '@/hooks/useColors';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+
+const LANG_COLORS: Record<string, string> = {
+  javascript: '#f7df1e',
+  typescript: '#3178c6',
+  python: '#3572A5',
+  plaintext: '#8b949e',
+};
+
+const LANG_LABELS: Record<string, string> = {
+  javascript: 'JS',
+  typescript: 'TS',
+  python: 'PY',
+};
+
+function LangBadge({ language }: { language: string }) {
+  const color = LANG_COLORS[language] ?? '#8b949e';
+  const label = LANG_LABELS[language] ?? language.slice(0, 2).toUpperCase();
+  return (
+    <View style={[badgeStyles.badge, { backgroundColor: color + '22', borderColor: color + '55' }]}>
+      <Text style={[badgeStyles.text, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
+const badgeStyles = StyleSheet.create({
+  badge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
+  text: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+});
+
+function formatDate(dateStr: string) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = (now.getTime() - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+export default function ProjectsScreen() {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
+  const queryClient = useQueryClient();
+
+  const { data: projects, isLoading, isError, refetch } = useListProjects();
+  const createMutation = useCreateProject();
+  const deleteMutation = useDeleteProject();
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newLang, setNewLang] = useState<'javascript' | 'python'>('javascript');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    try {
+      await createMutation.mutateAsync({ data: { name: newName.trim(), language: newLang } });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+      setShowCreate(false);
+      setNewName('');
+    } catch {
+      Alert.alert('Error', 'Failed to create project');
+    }
+  };
+
+  const handleDelete = (project: Project) => {
+    Alert.alert(
+      'Delete Project',
+      `Delete "${project.name}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteMutation.mutateAsync({ id: project.id });
+              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+            } catch {
+              Alert.alert('Error', 'Failed to delete project');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleLogout = () => {
+    Alert.alert('Sign Out', 'Are you sure?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          router.replace('/(auth)/login');
+        },
+      },
+    ]);
+  };
+
+  const topPad = Platform.OS === 'web' ? 67 : insets.top;
+
+  return (
+    <View style={[styles.root, { backgroundColor: colors.background }]}>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: colors.border }]}>
+        <View>
+          <Text style={[styles.headerTitle, { color: colors.foreground }]}>
+            clownin
+          </Text>
+          {user && (
+            <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
+              @{user.username}
+            </Text>
+          )}
+        </View>
+        <View style={styles.headerActions}>
+          <Pressable
+            style={[styles.iconBtn, { backgroundColor: colors.primary }]}
+            onPress={() => { setShowCreate(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+          >
+            <Ionicons name="add" size={22} color={colors.primaryForeground} />
+          </Pressable>
+          <Pressable style={styles.iconBtn} onPress={handleLogout}>
+            <Ionicons name="log-out-outline" size={22} color={colors.mutedForeground} />
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Content */}
+      {isLoading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : isError ? (
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle-outline" size={48} color={colors.destructive} />
+          <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>Failed to load projects</Text>
+          <Pressable style={[styles.retryBtn, { borderColor: colors.border }]} onPress={() => refetch()}>
+            <Text style={[styles.retryText, { color: colors.foreground }]}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={projects}
+          keyExtractor={(item) => String(item.id)}
+          scrollEnabled={!!(projects && projects.length > 0)}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+          }
+          contentContainerStyle={[
+            styles.list,
+            { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 20 },
+          ]}
+          ListEmptyComponent={
+            <View style={styles.centered}>
+              <MaterialCommunityIcons name="code-braces" size={56} color={colors.border} />
+              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No projects yet</Text>
+              <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+                Tap + to create your first project
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              style={({ pressed }) => [
+                styles.projectCard,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                pressed && styles.cardPressed,
+              ]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push(`/(app)/project/${item.id}`);
+              }}
+            >
+              <View style={styles.cardTop}>
+                <View style={styles.cardLeft}>
+                  <MaterialCommunityIcons
+                    name="folder-outline"
+                    size={18}
+                    color={colors.primary}
+                    style={styles.folderIcon}
+                  />
+                  <Text style={[styles.projectName, { color: colors.foreground }]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </View>
+                <LangBadge language={item.language} />
+              </View>
+              <View style={styles.cardBottom}>
+                <Text style={[styles.dateText, { color: colors.mutedForeground }]}>
+                  Updated {formatDate(item.updatedAt)}
+                </Text>
+                <Pressable
+                  style={styles.deleteBtn}
+                  onPress={() => handleDelete(item)}
+                  hitSlop={8}
+                >
+                  <Ionicons name="trash-outline" size={16} color={colors.destructive} />
+                </Pressable>
+              </View>
+            </Pressable>
+          )}
+        />
+      )}
+
+      {/* Create Project Modal */}
+      <Modal visible={showCreate} transparent animationType="fade" onRequestClose={() => setShowCreate(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setShowCreate(false)}>
+          <Pressable style={[styles.modalBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>New Project</Text>
+
+            <TextInput
+              style={[styles.modalInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.input }]}
+              placeholder="Project name"
+              placeholderTextColor={colors.mutedForeground}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleCreate}
+            />
+
+            <Text style={[styles.langLabel, { color: colors.mutedForeground }]}>Language</Text>
+            <View style={styles.langRow}>
+              {(['javascript', 'python'] as const).map((lang) => (
+                <Pressable
+                  key={lang}
+                  style={[
+                    styles.langChip,
+                    {
+                      backgroundColor: newLang === lang ? colors.primary : colors.secondary,
+                      borderColor: newLang === lang ? colors.primary : colors.border,
+                    },
+                  ]}
+                  onPress={() => setNewLang(lang)}
+                >
+                  <Text
+                    style={[
+                      styles.langChipText,
+                      { color: newLang === lang ? colors.primaryForeground : colors.foreground },
+                    ]}
+                  >
+                    {lang === 'javascript' ? 'JavaScript' : 'Python'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable style={[styles.modalBtn, { borderColor: colors.border }]} onPress={() => setShowCreate(false)}>
+                <Text style={[styles.modalBtnText, { color: colors.foreground }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalBtn, styles.modalBtnPrimary, { backgroundColor: colors.primary }]}
+                onPress={handleCreate}
+                disabled={createMutation.isPending}
+              >
+                {createMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.primaryForeground} />
+                ) : (
+                  <Text style={[styles.modalBtnText, { color: colors.primaryForeground }]}>Create</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+  },
+  headerTitle: { fontSize: 28, fontFamily: 'Inter_700Bold', letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 2 },
+  headerActions: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, minHeight: 300 },
+  emptyTitle: { fontSize: 18, fontFamily: 'Inter_600SemiBold', marginTop: 16 },
+  emptyText: { fontSize: 14, fontFamily: 'Inter_400Regular', marginTop: 6, textAlign: 'center' },
+  retryBtn: { marginTop: 16, paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  retryText: { fontSize: 14, fontFamily: 'Inter_500Medium' },
+  list: { padding: 16, gap: 10 },
+  projectCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 16,
+  },
+  cardPressed: { opacity: 0.8 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
+  folderIcon: { marginRight: 8 },
+  projectName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', flex: 1 },
+  cardBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dateText: { fontSize: 12, fontFamily: 'Inter_400Regular' },
+  deleteBtn: { padding: 4 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
+  modalBox: { width: 320, borderRadius: 16, borderWidth: 1, padding: 24, gap: 12 },
+  modalTitle: { fontSize: 20, fontFamily: 'Inter_700Bold', marginBottom: 4 },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+  },
+  langLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', marginTop: 4 },
+  langRow: { flexDirection: 'row', gap: 8 },
+  langChip: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
+  langChipText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  modalBtnPrimary: { borderWidth: 0 },
+  modalBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
+});
