@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface UpdateProjectBody {
+  /** @minLength 1 */
+  name?: string;
+  description?: string;
 }
