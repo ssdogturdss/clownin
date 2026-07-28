@@ -16,7 +16,7 @@ import {
   KeyboardAvoidingView,
   Keyboard,
 } from 'react-native';
-import { SyntaxHighlighter } from '@/components/SyntaxHighlighter';
+import { SyntaxHighlighter, CODE_LINE_HEIGHT } from '@/components/SyntaxHighlighter';
 import { AgentChat } from '@/components/AgentChat';
 import { GitHubExportModal } from '@/components/GitHubExportModal';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -168,8 +168,8 @@ export default function ProjectEditorScreen() {
   useEffect(() => {
     if (!isEditing) return;
 
-    // Line height and top padding must match the codeInput style (lineHeight: 20, padding: 14)
-    const LINE_HEIGHT = 20;
+    // Line height and top padding must match the codeInput style (see CODE_LINE_HEIGHT, padding: 14)
+    const LINE_HEIGHT = CODE_LINE_HEIGHT;
     const TOP_PADDING = 14;
 
     let targetY: number;
@@ -207,7 +207,7 @@ export default function ProjectEditorScreen() {
   useEffect(() => {
     if (!isEditing) return;
 
-    const LINE_HEIGHT = 20;
+    const LINE_HEIGHT = CODE_LINE_HEIGHT;
     const TOP_PADDING = 14;
 
     const scrollTo = (y: number) => {
@@ -1096,7 +1096,7 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 14,
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: CODE_LINE_HEIGHT,
     fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   noFileSelected: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },

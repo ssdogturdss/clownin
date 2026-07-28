@@ -237,6 +237,9 @@ interface Props {
 
 const FONT_FAMILY = Platform.OS === 'ios' ? 'Courier New' : 'monospace';
 
+/** Shared line-height for code lines. Import this wherever scroll offsets are calculated. */
+export const CODE_LINE_HEIGHT = 20;
+
 export const SyntaxHighlighter = memo(function SyntaxHighlighter({
   code,
   language,
@@ -297,12 +300,12 @@ const styles = StyleSheet.create({
   },
   line: {
     flexDirection: 'row',
-    minHeight: 20,
+    minHeight: CODE_LINE_HEIGHT,
   },
   lineNum: {
     width: 38,
     fontSize: 12,
-    lineHeight: 20,
+    lineHeight: CODE_LINE_HEIGHT,
     fontFamily: FONT_FAMILY,
     color: '#444c56',
     textAlign: 'right',
@@ -312,7 +315,7 @@ const styles = StyleSheet.create({
   codeLine: {
     flex: 1,
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: CODE_LINE_HEIGHT,
     fontFamily: FONT_FAMILY,
     paddingRight: 14,
   },
