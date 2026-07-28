@@ -12,9 +12,10 @@ import OpenAI from "openai";
 const router: IRouter = Router();
 
 function getOpenAI(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  return new OpenAI({ apiKey });
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+  if (!apiKey || !baseURL) throw new Error("Replit AI integration not configured");
+  return new OpenAI({ apiKey, baseURL });
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -263,7 +264,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
         iteration++;
 
         const stream = await openai.chat.completions.create({
-          model: "gpt-4o",
+          model: "gpt-5.6-terra",
           messages,
           tools: AGENT_TOOLS,
           tool_choice: "auto",
