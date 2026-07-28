@@ -299,11 +299,20 @@ export default function ProjectEditorScreen() {
     setIsRunning(true);
     openTerminal();
 
+    const TERMINAL_MAX_LINES = 500;
     const addLine = (type: TerminalLine['type'], text: string) => {
-      setTerminalLines((prev) => [
-        ...prev,
-        { id: `${Date.now()}-${Math.random()}`, type, text },
-      ]);
+      setTerminalLines((prev) => {
+        const next = [...prev, { id: `${Date.now()}-${Math.random()}`, type, text }];
+        if (next.length > TERMINAL_MAX_LINES) {
+          const trimmed = next.slice(next.length - TERMINAL_MAX_LINES);
+          // Prepend a faint notice so the user knows output was cleared
+          return [
+            { id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' },
+            ...trimmed,
+          ];
+        }
+        return next;
+      });
       setTimeout(() => termScrollRef.current?.scrollToEnd({ animated: true }), 50);
     };
 
