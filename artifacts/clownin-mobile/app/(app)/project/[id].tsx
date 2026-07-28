@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SyntaxHighlighter } from '@/components/SyntaxHighlighter';
 import { AgentChat } from '@/components/AgentChat';
+import { GitHubExportModal } from '@/components/GitHubExportModal';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -222,6 +223,7 @@ export default function ProjectEditorScreen() {
   const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
   const [renameFilePath, setRenameFilePath] = useState('');
   const [agentOpen, setAgentOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -629,6 +631,14 @@ export default function ProjectEditorScreen() {
 
         <Pressable
           style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setExportOpen(true)}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons name="github" size={18} color={colors.foreground} />
+        </Pressable>
+
+        <Pressable
+          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setAgentOpen(true)}
           hitSlop={4}
         >
@@ -848,6 +858,14 @@ export default function ProjectEditorScreen() {
           <Ionicons name="chevron-up" size={16} color={colors.mutedForeground} />
         </Pressable>
       )}
+
+      {/* GitHub export */}
+      <GitHubExportModal
+        visible={exportOpen}
+        onClose={() => setExportOpen(false)}
+        projectId={projectId}
+        projectName={project?.name ?? 'my-project'}
+      />
 
       {/* Agent chat */}
       <AgentChat

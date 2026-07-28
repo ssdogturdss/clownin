@@ -1,12 +1,10 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
-import { writeFile, unlink, mkdir } from "fs/promises";
-import { tmpdir } from "os";
 import { join } from "path";
-import { randomUUID } from "crypto";
 import { db, projectsTable, projectFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
+import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import OpenAI from "openai";
 
 const router: IRouter = Router();
@@ -97,10 +95,35 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "install_packages",
+      description:
+        "Install packages for the project. For JavaScript/TypeScript use npm, for Python use pip. Always create package.json first if it doesn't exist before running npm install. Run this before run_code when the code requires external packages.",
+      parameters: {
+        type: "object",
+        properties: {
+          packages: {
+            type: "array",
+            items: { type: "string" },
+            description: "Package names, e.g. ['lodash', 'axios']",
+          },
+          manager: {
+            type: "string",
+            enum: ["npm", "pip"],
+            description: "npm for JS/TS, pip for Python",
+          },
+        },
+        required: ["packages", "manager"],
+      },
+    },
+  },
 ];
 
-// ── Execution helper (collect output, don't stream) ───────────────────────────
+// ── Execution helpers ─────────────────────────────────────────────────────────
 const EXEC_TIMEOUT_MS = 15_000;
+const INSTALL_TIMEOUT_MS = 60_000;
 
 function execCommand(
   language: string,
@@ -125,56 +148,40 @@ function execCommand(
   }
 }
 
-async function runFile(
-  language: string,
-  content: string,
-  filename: string
+function runProcess(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const ext = filename.includes(".") ? filename.split(".").pop() : language;
-  const tmpDir = join(tmpdir(), "clownin-agent");
-  await mkdir(tmpDir, { recursive: true });
-  const tmpFile = join(tmpDir, `${randomUUID()}.${ext}`);
-  await writeFile(tmpFile, content, "utf8");
-
-  const executor = execCommand(language, tmpFile);
-  if (!executor) {
-    await unlink(tmpFile).catch(() => {});
-    return { stdout: "", stderr: `Unsupported language: ${language}`, exitCode: -1 };
-  }
-
   return new Promise((resolve) => {
     const safeEnv: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      TMPDIR: process.env.TMPDIR ?? tmpdir(),
+      TMPDIR: process.env.TMPDIR,
       LANG: process.env.LANG,
     };
 
-    const child = spawn(executor.cmd, executor.args, {
-      timeout: EXEC_TIMEOUT_MS,
-      env: safeEnv,
-    });
+    const child = spawn(cmd, args, { timeout: timeoutMs, env: safeEnv, cwd });
 
     let stdout = "";
     let stderr = "";
 
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      stderr += "\n[Timed out after 15 seconds]";
-    }, EXEC_TIMEOUT_MS);
+      stderr += `\n[Timed out after ${timeoutMs / 1000}s]`;
+    }, timeoutMs);
 
     child.stdout.on("data", (d: Buffer) => { stdout += d.toString("utf8"); });
     child.stderr.on("data", (d: Buffer) => { stderr += d.toString("utf8"); });
 
-    child.on("close", async (code) => {
+    child.on("close", (code) => {
       clearTimeout(timer);
-      await unlink(tmpFile).catch(() => {});
       resolve({ stdout, stderr, exitCode: code ?? -1 });
     });
 
-    child.on("error", async (err) => {
+    child.on("error", (err) => {
       clearTimeout(timer);
-      await unlink(tmpFile).catch(() => {});
       resolve({ stdout: "", stderr: `Process error: ${err.message}`, exitCode: -1 });
     });
   });
@@ -412,13 +419,53 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                   .limit(1);
                 if (!row) { result = `Not found: ${path}`; isError = true; }
                 else {
-                  const { stdout, stderr, exitCode } = await runFile(row.language, row.content, row.path);
-                  const parts = [
-                    stdout && `stdout:\n${stdout.trimEnd()}`,
-                    stderr && `stderr:\n${stderr.trimEnd()}`,
-                    `exit: ${exitCode}`,
-                  ].filter(Boolean);
-                  result = parts.join("\n");
+                  // Sync all project files so multi-file imports and node_modules work
+                  const allFiles = await db.select().from(projectFilesTable)
+                    .where(eq(projectFilesTable.projectId, projectId));
+                  const dir = await syncProjectFiles(projectId, allFiles);
+                  const { join: pathJoin } = await import("path");
+                  const absPath = pathJoin(dir, row.path);
+                  const executor = execCommand(row.language, absPath);
+                  if (!executor) {
+                    result = `Unsupported language: ${row.language}`; isError = true;
+                  } else {
+                    const { stdout, stderr, exitCode } = await runProcess(
+                      executor.cmd, executor.args, dir, EXEC_TIMEOUT_MS
+                    );
+                    const parts = [
+                      stdout && `stdout:\n${stdout.trimEnd()}`,
+                      stderr && `stderr:\n${stderr.trimEnd()}`,
+                      `exit: ${exitCode}`,
+                    ].filter(Boolean);
+                    result = parts.join("\n");
+                    if (exitCode !== 0) isError = true;
+                  }
+                }
+                break;
+              }
+
+              case "install_packages": {
+                const pkgs = (args.packages as string[]) ?? [];
+                const manager = String(args.manager ?? "npm");
+                if (pkgs.length === 0) { result = "No packages specified"; isError = true; break; }
+
+                // Sync files so cwd exists
+                const allFiles = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+                const dir = await syncProjectFiles(projectId, allFiles);
+
+                if (manager === "pip") {
+                  const { stdout, stderr, exitCode } = await runProcess(
+                    "pip3", ["install", "--user", ...pkgs], dir, INSTALL_TIMEOUT_MS
+                  );
+                  result = [stdout && `stdout:\n${stdout.trimEnd()}`, stderr && `stderr:\n${stderr.trimEnd()}`, `exit: ${exitCode}`].filter(Boolean).join("\n");
+                  if (exitCode !== 0) isError = true;
+                } else {
+                  // npm — use project dir as cwd so package.json is respected
+                  const { stdout, stderr, exitCode } = await runProcess(
+                    "npm", ["install", ...pkgs], dir, INSTALL_TIMEOUT_MS
+                  );
+                  result = [stdout && `stdout:\n${stdout.trimEnd()}`, stderr && `stderr:\n${stderr.trimEnd()}`, `exit: ${exitCode}`].filter(Boolean).join("\n");
                   if (exitCode !== 0) isError = true;
                 }
                 break;

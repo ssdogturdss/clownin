@@ -1,12 +1,10 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
-import { writeFile, unlink, mkdir } from "fs/promises";
-import { tmpdir } from "os";
 import { join } from "path";
-import { randomUUID } from "crypto";
 import { db, projectsTable, projectFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
+import { syncProjectFiles } from "../lib/projectWorkspace";
 
 const router: IRouter = Router();
 
@@ -79,19 +77,23 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     return;
   }
 
-  // Write temp file
-  const ext = file.path.includes(".") ? file.path.split(".").pop() : file.language;
-  const tmpDir = join(tmpdir(), "clownin-exec");
-  await mkdir(tmpDir, { recursive: true });
-  const tmpFile = join(tmpDir, `${randomUUID()}.${ext}`);
+  // Sync ALL project files to the per-project workspace so multi-file
+  // imports and installed node_modules work correctly.
+  const allFiles = await db
+    .select()
+    .from(projectFilesTable)
+    .where(eq(projectFilesTable.projectId, projectId));
 
+  let projDir: string;
   try {
-    await writeFile(tmpFile, file.content, "utf8");
+    projDir = await syncProjectFiles(projectId, allFiles);
   } catch (err) {
-    req.log.error({ err }, "Failed to write temp file");
+    req.log.error({ err }, "Failed to sync project files");
     res.status(500).json({ error: "Failed to prepare execution" });
     return;
   }
+
+  const absFilePath = join(projDir, file.path);
 
   // Set up SSE
   res.setHeader("Content-Type", "text/event-stream");
@@ -107,7 +109,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
 
   req.log.info({ projectId, fileId: file.id, language: file.language }, "Executing code");
 
-  const { cmd, args } = getExecutorCommand(file.language, tmpFile)!;
+  const { cmd, args } = getExecutorCommand(file.language, absFilePath)!;
 
   // Strict allowlist — never pass server secrets (DATABASE_URL, JWT_SECRET, etc.)
   // to untrusted user code. Only provide what the runtime needs to find binaries.
@@ -124,6 +126,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   const child = spawn(cmd, args, {
     timeout: EXECUTION_TIMEOUT_MS,
     env: safeEnv,
+    cwd: projDir,
   });
 
   const timeout = setTimeout(() => {
@@ -139,28 +142,18 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     sendEvent("stderr", chunk.toString("utf8"));
   });
 
-  child.on("close", async (code) => {
+  child.on("close", (code) => {
     clearTimeout(timeout);
     sendEvent("exit", String(code ?? -1));
     res.end();
-    try {
-      await unlink(tmpFile);
-    } catch {
-      // ignore cleanup errors
-    }
   });
 
-  child.on("error", async (err) => {
+  child.on("error", (err) => {
     clearTimeout(timeout);
     req.log.error({ err }, "Execution process error");
     sendEvent("stderr", `\n[Execution error: ${err.message}]`);
     sendEvent("exit", "-1");
     res.end();
-    try {
-      await unlink(tmpFile);
-    } catch {
-      // ignore cleanup errors
-    }
   });
 
   // Handle client disconnect

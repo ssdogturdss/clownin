@@ -5,6 +5,7 @@ import projectsRouter from "./projects";
 import filesRouter from "./files";
 import executionRouter from "./execution";
 import agentRouter from "./agent";
+import githubRouter from "./github";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(projectsRouter);
 router.use(filesRouter);
 router.use(executionRouter);
 router.use(agentRouter);
+router.use(githubRouter);
 
 export default router;
