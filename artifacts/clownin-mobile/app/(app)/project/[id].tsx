@@ -119,6 +119,22 @@ export default function ProjectEditorScreen() {
   const codeInputRef = useRef<TextInput>(null);
   // Cursor position to apply when entering edit mode from a line tap
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number } | undefined>(undefined);
+  // Shared scroll offset (pixels) synced between view and edit modes
+  const sharedScrollY = useRef(0);
+  const viewScrollRef = useRef<ScrollView>(null);
+
+  // Restore TextInput scroll position when entering edit mode
+  useEffect(() => {
+    if (!isEditing) return;
+    const y = sharedScrollY.current;
+    if (y <= 0) return;
+    // Wait for the TextInput to mount and receive focus before scrolling
+    const id = setTimeout(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y } });
+    }, 80);
+    return () => clearTimeout(id);
+  }, [isEditing]);
   // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
   const pendingFileIdRef = useRef<number | null>(null);
@@ -223,6 +239,7 @@ export default function ProjectEditorScreen() {
   const selectFile = useCallback(async (file: ProjectFile) => {
     await flushPendingSave();
     setIsEditing(false);
+    sharedScrollY.current = 0;
     setSelectedFileId(file.id);
     setEditorContent(file.content);
     Haptics.selectionAsync();
@@ -569,6 +586,9 @@ export default function ProjectEditorScreen() {
                   spellCheck={false}
                   textAlignVertical="top"
                   scrollEnabled
+                  onScroll={(e) => {
+                    sharedScrollY.current = e.nativeEvent.contentOffset.y;
+                  }}
                   keyboardType="default"
                   placeholder="// Start coding..."
                   placeholderTextColor={colors.mutedForeground}
@@ -594,6 +614,9 @@ export default function ProjectEditorScreen() {
                   <SyntaxHighlighter
                     code={editorContent}
                     language={selectedFile.language}
+                    scrollRef={viewScrollRef}
+                    initialScrollY={sharedScrollY.current}
+                    onScrollY={(y) => { sharedScrollY.current = y; }}
                     onLinePress={(lineIndex) => {
                       // Compute char offset of the start of the tapped line
                       const codeLines = editorContent.split('\n');

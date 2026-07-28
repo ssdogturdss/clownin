@@ -227,6 +227,12 @@ interface Props {
   /** Called with the 0-based index of the line the user tapped. */
   onLinePress?: (lineIndex: number) => void;
   style?: object;
+  /** Forwarded to the internal ScrollView so the parent can call scrollTo(). */
+  scrollRef?: React.RefObject<ScrollView | null>;
+  /** Scroll offset to restore when this component mounts (pixels). */
+  initialScrollY?: number;
+  /** Called on every scroll event with the current Y offset. */
+  onScrollY?: (y: number) => void;
 }
 
 const FONT_FAMILY = Platform.OS === 'ios' ? 'Courier New' : 'monospace';
@@ -236,13 +242,20 @@ export const SyntaxHighlighter = memo(function SyntaxHighlighter({
   language,
   onLinePress,
   style,
+  scrollRef,
+  initialScrollY,
+  onScrollY,
 }: Props) {
   const lines = tokenise(code || '', language);
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.scroll, style]}
       contentContainerStyle={styles.content}
+      contentOffset={initialScrollY ? { x: 0, y: initialScrollY } : undefined}
+      onScroll={onScrollY ? (e) => onScrollY(e.nativeEvent.contentOffset.y) : undefined}
+      scrollEventThrottle={16}
       scrollEnabled
       showsVerticalScrollIndicator
       keyboardShouldPersistTaps="handled"
