@@ -452,7 +452,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                   const absPath = pathJoin(dir, row.path);
                   const executor = execCommand(row.language, absPath);
                   if (!executor) {
-                    result = `Unsupported language: ${row.language}`; isError = true;
+                    result = `Cannot run ${row.path} — only JavaScript, TypeScript, Python, and Bash files can be executed. If you meant to run a different file, specify its path.`; isError = true;
                   } else {
                     const { stdout, stderr, exitCode } = await runProcess(
                       executor.cmd, executor.args, dir, EXEC_TIMEOUT_MS

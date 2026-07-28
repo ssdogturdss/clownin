@@ -647,6 +647,8 @@ export default function ProjectEditorScreen() {
   };
 
   const selectedFile = project?.files.find((f) => f.id === selectedFileId);
+  const RUNNABLE_LANGS = new Set(["javascript", "typescript", "python", "bash", "js", "ts", "py", "sh"]);
+  const canRun = selectedFile ? RUNNABLE_LANGS.has(selectedFile.language) : false;
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const sidebarWidth = sidebarAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 160] });
 
@@ -683,26 +685,28 @@ export default function ProjectEditorScreen() {
 
         {isSaving && <ActivityIndicator size="small" color={colors.mutedForeground} style={styles.saveIndicator} />}
 
-        {/* Auto-run toggle */}
-        <Pressable
-          style={[
-            styles.autoRunBtn,
-            {
-              backgroundColor: autoRun ? colors.primary + '22' : 'transparent',
-              borderColor: autoRun ? colors.primary : colors.border,
-            },
-          ]}
-          onPress={() => {
-            setAutoRun((v) => !v);
-            Haptics.selectionAsync();
-          }}
-          hitSlop={6}
-        >
-          <Feather name="zap" size={13} color={autoRun ? colors.primary : colors.mutedForeground} />
-          <Text style={[styles.autoRunLabel, { color: autoRun ? colors.primary : colors.mutedForeground }]}>
-            Auto
-          </Text>
-        </Pressable>
+        {/* Auto-run toggle — only for executable files */}
+        {canRun && (
+          <Pressable
+            style={[
+              styles.autoRunBtn,
+              {
+                backgroundColor: autoRun ? colors.primary + '22' : 'transparent',
+                borderColor: autoRun ? colors.primary : colors.border,
+              },
+            ]}
+            onPress={() => {
+              setAutoRun((v) => !v);
+              Haptics.selectionAsync();
+            }}
+            hitSlop={6}
+          >
+            <Feather name="zap" size={13} color={autoRun ? colors.primary : colors.mutedForeground} />
+            <Text style={[styles.autoRunLabel, { color: autoRun ? colors.primary : colors.mutedForeground }]}>
+              Auto
+            </Text>
+          </Pressable>
+        )}
 
         <Pressable
           style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -728,17 +732,19 @@ export default function ProjectEditorScreen() {
           <Text style={styles.agentBtnEmoji}>🤡</Text>
         </Pressable>
 
-        <Pressable
-          style={[styles.runBtn, { backgroundColor: isRunning ? colors.muted : colors.primary }]}
-          onPress={handleRun}
-          disabled={isRunning || !selectedFileId}
-        >
-          {isRunning ? (
-            <ActivityIndicator size="small" color={colors.primary} />
-          ) : (
-            <Ionicons name="play" size={16} color={colors.primaryForeground} />
-          )}
-        </Pressable>
+        {canRun && (
+          <Pressable
+            style={[styles.runBtn, { backgroundColor: isRunning ? colors.muted : colors.primary }]}
+            onPress={handleRun}
+            disabled={isRunning || !selectedFileId}
+          >
+            {isRunning ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Ionicons name="play" size={16} color={colors.primaryForeground} />
+            )}
+          </Pressable>
+        )}
       </View>
 
       {/* ── Body: sidebar + editor ────────────────────────────────── */}
