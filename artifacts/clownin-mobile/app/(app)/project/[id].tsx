@@ -123,21 +123,38 @@ export default function ProjectEditorScreen() {
   const codeInputRef = useRef<TextInput>(null);
   // Cursor position to apply when entering edit mode from a line tap
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number } | undefined>(undefined);
+  // Line index to scroll to when entering edit mode from a line tap (0-based)
+  const pendingScrollLineRef = useRef<number | null>(null);
   // Shared scroll offset (pixels) synced between view and edit modes
   const sharedScrollY = useRef(0);
   const viewScrollRef = useRef<ScrollView>(null);
 
-  // Restore TextInput scroll position when entering edit mode
+  // Scroll the TextInput to show the cursor line when entering edit mode
   useEffect(() => {
     if (!isEditing) return;
-    const y = sharedScrollY.current;
-    if (y <= 0) return;
+
+    // Line height and top padding must match the codeInput style (lineHeight: 20, padding: 14)
+    const LINE_HEIGHT = 20;
+    const TOP_PADDING = 14;
+
+    let targetY: number;
+    if (pendingScrollLineRef.current !== null) {
+      // Position the tapped line ~2 lines from the top of the visible area
+      targetY = Math.max(0, pendingScrollLineRef.current * LINE_HEIGHT + TOP_PADDING - LINE_HEIGHT * 2);
+      pendingScrollLineRef.current = null;
+    } else {
+      // Fallback: restore the previous shared scroll position
+      targetY = sharedScrollY.current;
+    }
+
+    if (targetY <= 0) return;
+
     // Wait for the TextInput to mount and receive focus before scrolling
-    const id = setTimeout(() => {
+    const timerId = setTimeout(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y } });
-    }, 80);
-    return () => clearTimeout(id);
+      (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y: targetY } });
+    }, 100);
+    return () => clearTimeout(timerId);
   }, [isEditing]);
   // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
@@ -671,6 +688,8 @@ export default function ProjectEditorScreen() {
                       const charOffset = codeLines
                         .slice(0, lineIndex)
                         .reduce((sum, l) => sum + l.length + 1, 0);
+                      // Store line index so the useEffect can scroll the TextInput to it
+                      pendingScrollLineRef.current = lineIndex;
                       setPendingSelection({ start: charOffset, end: charOffset });
                       setIsEditing(true);
                       setTimeout(() => codeInputRef.current?.focus(), 50);
