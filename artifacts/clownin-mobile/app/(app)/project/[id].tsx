@@ -20,6 +20,7 @@ import { SyntaxHighlighter, CODE_LINE_HEIGHT } from '@/components/SyntaxHighligh
 import { AgentChat } from '@/components/AgentChat';
 import { GitHubExportModal } from '@/components/GitHubExportModal';
 import { DeployModal } from '@/components/DeployModal';
+import { InAppPreview } from '@/components/InAppPreview';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -281,6 +282,7 @@ export default function ProjectEditorScreen() {
   const [agentOpen, setAgentOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [deployOpen, setDeployOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -649,6 +651,7 @@ export default function ProjectEditorScreen() {
   const selectedFile = project?.files.find((f) => f.id === selectedFileId);
   const RUNNABLE_LANGS = new Set(["javascript", "typescript", "python", "bash", "js", "ts", "py", "sh"]);
   const canRun = selectedFile ? RUNNABLE_LANGS.has(selectedFile.language) : false;
+  const canPreview = selectedFile?.language === "html" || selectedFile?.path.endsWith(".html");
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const sidebarWidth = sidebarAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 160] });
 
@@ -684,6 +687,17 @@ export default function ProjectEditorScreen() {
         </View>
 
         {isSaving && <ActivityIndicator size="small" color={colors.mutedForeground} style={styles.saveIndicator} />}
+
+        {/* Preview button — only for HTML files */}
+        {canPreview && (
+          <Pressable
+            style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={() => setPreviewOpen(true)}
+            hitSlop={4}
+          >
+            <MaterialCommunityIcons name="eye-outline" size={17} color={colors.primary} />
+          </Pressable>
+        )}
 
         {/* Auto-run toggle — only for executable files */}
         {canRun && (
@@ -953,6 +967,14 @@ export default function ProjectEditorScreen() {
           <Ionicons name="chevron-up" size={16} color={colors.mutedForeground} />
         </Pressable>
       )}
+
+      {/* In-app HTML preview */}
+      <InAppPreview
+        visible={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        html={selectedFile?.content ?? ""}
+        fileName={selectedFile?.path ?? ""}
+      />
 
       {/* Deploy */}
       <DeployModal

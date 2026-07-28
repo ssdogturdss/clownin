@@ -56,8 +56,9 @@
     "zod-validation-error": "^3.4.0"
   },
   "dependencies": {
-    "expo-document-picker": "^57.0.1",
-    "expo-file-system": "^57.0.1",
-    "expo-secure-store": "~15.0.8"
+    "expo-document-picker": "^14.0.8",
+    "expo-file-system": "^19.0.23",
+    "expo-secure-store": "~15.0.8",
+    "react-native-webview": "^14.0.1"
   }
 }

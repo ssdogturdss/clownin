@@ -452,22 +452,24 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
           {messages.length === 0 ? (
             <View style={s.empty}>
               <Text style={s.emptyEmoji}>🤡</Text>
-              <Text style={s.emptyTitle}>What should I build?</Text>
+              <Text style={s.emptyTitle}>Build real apps from your phone</Text>
               <Text style={s.emptySubtitle}>
-                Describe an app, script, or feature and I'll write it, run it, and fix it for you.
+                Describe what you want. The agent writes the code, runs it, fixes errors — then you deploy live with one tap.
               </Text>
               <View style={s.hints}>
                 {[
-                  "Build a todo list app",
-                  "Write a fibonacci generator",
-                  "Make a web scraper script",
-                ].map((hint) => (
+                  { icon: "🌐", text: "Build a REST API with Express and deploy it" },
+                  { icon: "🕷️", text: "Write a Python web scraper for Hacker News" },
+                  { icon: "📋", text: "Create a full-stack todo app with a database" },
+                  { icon: "📈", text: "Build a landing page with a waitlist form" },
+                ].map(({ icon, text }) => (
                   <Pressable
-                    key={hint}
+                    key={text}
                     style={[s.hintChip, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    onPress={() => setInput(hint)}
+                    onPress={() => setInput(text)}
                   >
-                    <Text style={[s.hintText, { color: colors.foreground }]}>{hint}</Text>
+                    <Text style={s.hintIcon}>{icon}</Text>
+                    <Text style={[s.hintText, { color: colors.foreground }]}>{text}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -662,10 +664,12 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     emptySubtitle: { fontSize: 14, color: colors.mutedForeground, textAlign: "center", lineHeight: 20 },
     hints: { gap: 8, width: "100%", marginTop: 8 },
     hintChip: {
+      flexDirection: "row", alignItems: "center", gap: 8,
       paddingHorizontal: 14, paddingVertical: 10,
       borderRadius: 10, borderWidth: 1,
     },
-    hintText: { fontSize: 13 },
+    hintIcon: { fontSize: 16 },
+    hintText: { fontSize: 13, flex: 1 },
 
     // Input
     inputRow: {

@@ -296,14 +296,34 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
       while (iteration < MAX_ITERATIONS && !aborted) {
         iteration++;
 
-        const stream = await openai.chat.completions.create({
-          model: "gpt-5.6-terra",
-          messages,
-          tools: AGENT_TOOLS,
-          tool_choice: "auto",
-          stream: true,
-          max_completion_tokens: 8192,
-        });
+        // Retry up to 3 times on 429 rate-limit with exponential backoff
+        let stream: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+        {
+          let attempt = 0;
+          const delays = [1000, 2000, 4000];
+          while (true) {
+            try {
+              stream = await openai.chat.completions.create({
+                model: "gpt-5.6-terra",
+                messages,
+                tools: AGENT_TOOLS,
+                tool_choice: "auto",
+                stream: true,
+                max_completion_tokens: 8192,
+              });
+              break;
+            } catch (err: unknown) {
+              const status = (err as { status?: number }).status;
+              if (status === 429 && attempt < delays.length) {
+                req.log.warn({ attempt, delay: delays[attempt] }, "Rate limited — retrying");
+                await new Promise((r) => setTimeout(r, delays[attempt]));
+                attempt++;
+              } else {
+                throw err;
+              }
+            }
+          }
+        }
 
         let textContent = "";
         const toolCallsMap = new Map<
