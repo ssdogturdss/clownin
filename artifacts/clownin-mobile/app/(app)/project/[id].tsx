@@ -633,6 +633,8 @@ export default function ProjectEditorScreen() {
             // Clear persisted scroll offset for the deleted file
             AsyncStorage.removeItem(`scroll_${projectId}_${file.id}`).catch(() => {});
             if (selectedFileId === file.id) {
+              // Remove stale selected-file pointer so it doesn't persist across sessions
+              AsyncStorage.removeItem(`selected_file_${projectId}`).catch(() => {});
               setSelectedFileId(null);
               setEditorContent('');
             }
