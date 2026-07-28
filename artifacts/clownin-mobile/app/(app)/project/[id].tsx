@@ -16,6 +16,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { SyntaxHighlighter } from '@/components/SyntaxHighlighter';
+import { AgentChat } from '@/components/AgentChat';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -192,6 +193,7 @@ export default function ProjectEditorScreen() {
   // Rename file modal
   const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
   const [renameFilePath, setRenameFilePath] = useState('');
+  const [agentOpen, setAgentOpen] = useState(false);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -576,6 +578,14 @@ export default function ProjectEditorScreen() {
         </Pressable>
 
         <Pressable
+          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setAgentOpen(true)}
+          hitSlop={4}
+        >
+          <Text style={styles.agentBtnEmoji}>🤡</Text>
+        </Pressable>
+
+        <Pressable
           style={[styles.runBtn, { backgroundColor: isRunning ? colors.muted : colors.primary }]}
           onPress={handleRun}
           disabled={isRunning || !selectedFileId}
@@ -786,6 +796,14 @@ export default function ProjectEditorScreen() {
         </Pressable>
       )}
 
+      {/* Agent chat */}
+      <AgentChat
+        projectId={projectId}
+        visible={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        onFilesChanged={() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })}
+      />
+
       {/* Rename file modal */}
       <Modal visible={!!renameFile} transparent animationType="fade" onRequestClose={() => setRenameFile(null)}>
         <Pressable style={styles.modalOverlay} onPress={() => setRenameFile(null)}>
@@ -909,6 +927,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   autoRunLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  agentBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  agentBtnEmoji: { fontSize: 18, lineHeight: 22 },
   runBtn: {
     width: 36,
     height: 36,

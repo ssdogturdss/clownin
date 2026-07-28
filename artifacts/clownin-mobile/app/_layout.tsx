@@ -24,7 +24,7 @@ import { AuthProvider } from '@/contexts/AuthContext';
 // The API server lives at:       <id>.kirk.replit.dev/api
 // → strip ".expo" from the hostname to get the API domain.
 // On native, fall back to the EXPO_PUBLIC_DOMAIN env var baked in at bundle time.
-function resolveApiBaseUrl(): string | null {
+export function resolveApiBaseUrl(): string | null {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     const host = window.location.hostname;
     const apiHost = host.replace('.expo.kirk.replit.dev', '.kirk.replit.dev');
