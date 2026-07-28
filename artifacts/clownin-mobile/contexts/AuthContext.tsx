@@ -1,8 +1,36 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
+
+// ---------------------------------------------------------------------------
+// Platform-aware key-value storage
+// expo-secure-store is native-only; fall back to localStorage on web.
+// ---------------------------------------------------------------------------
+const storage = {
+  async getItem(key: string): Promise<string | null> {
+    if (Platform.OS === 'web') {
+      try { return localStorage.getItem(key); } catch { return null; }
+    }
+    return SecureStore.getItemAsync(key);
+  },
+  async setItem(key: string, value: string): Promise<void> {
+    if (Platform.OS === 'web') {
+      try { localStorage.setItem(key, value); } catch { /* ignore */ }
+      return;
+    }
+    await SecureStore.setItemAsync(key, value);
+  },
+  async removeItem(key: string): Promise<void> {
+    if (Platform.OS === 'web') {
+      try { localStorage.removeItem(key); } catch { /* ignore */ }
+      return;
+    }
+    await SecureStore.deleteItemAsync(key);
+  },
+};
 
 interface AuthContextValue {
   token: string | null;
@@ -55,8 +83,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await Promise.all([
-      SecureStore.deleteItemAsync(TOKEN_KEY),
-      SecureStore.deleteItemAsync(USER_KEY),
+      storage.removeItem(TOKEN_KEY),
+      storage.removeItem(USER_KEY),
     ]);
     setToken(null);
     setUser(null);
@@ -82,15 +110,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         const [storedToken, storedUser] = await Promise.all([
-          SecureStore.getItemAsync(TOKEN_KEY),
-          SecureStore.getItemAsync(USER_KEY),
+          storage.getItem(TOKEN_KEY),
+          storage.getItem(USER_KEY),
         ]);
         if (storedToken && storedUser) {
           if (isTokenExpired(storedToken)) {
             // Token is expired — purge it so the user is sent to login
             await Promise.all([
-              SecureStore.deleteItemAsync(TOKEN_KEY),
-              SecureStore.deleteItemAsync(USER_KEY),
+              storage.removeItem(TOKEN_KEY),
+              storage.removeItem(USER_KEY),
             ]);
           } else {
             setToken(storedToken);
@@ -108,8 +136,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (newToken: string, newUser: UserProfile) => {
     await Promise.all([
-      SecureStore.setItemAsync(TOKEN_KEY, newToken),
-      SecureStore.setItemAsync(USER_KEY, JSON.stringify(newUser)),
+      storage.setItem(TOKEN_KEY, newToken),
+      storage.setItem(USER_KEY, JSON.stringify(newUser)),
     ]);
     setToken(newToken);
     setUser(newUser);
