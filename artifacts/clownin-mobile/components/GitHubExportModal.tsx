@@ -162,7 +162,7 @@ export function GitHubExportModal({
                       {
                         name: "Fly.io",
                         icon: "rocket-launch-outline" as const,
-                        desc: "Global edge · fly deploy from CLI",
+                        desc: "Add one GitHub secret → auto-deploys on every push",
                         color: "#8B5CF6",
                         url: "https://fly.io/docs/getting-started/",
                       },
