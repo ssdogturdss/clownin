@@ -84,9 +84,11 @@ interface AgentChatProps {
   visible: boolean;
   onClose: () => void;
   onFilesChanged?: () => void;
+  /** When provided, automatically sent to the agent as the first message on mount. */
+  initialMessage?: string;
 }
 
-export function AgentChat({ projectId, visible, onClose, onFilesChanged }: AgentChatProps) {
+export function AgentChat({ projectId, visible, onClose, onFilesChanged, initialMessage }: AgentChatProps) {
   const colors = useColors();
   const { token } = useAuth();
 
@@ -96,6 +98,8 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // Prevents the auto-send from firing more than once per mount
+  const autoSentRef = useRef(false);
 
   // Conversation history for the backend (only user + assistant text)
   const historyRef = useRef<HistoryEntry[]>([]);
@@ -151,10 +155,20 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged }: Agent
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  // Auto-send initialMessage once when the modal becomes visible
+  React.useEffect(() => {
+    if (!initialMessage || autoSentRef.current || !visible) return;
+    autoSentRef.current = true;
+    // Small delay so the modal finishes its open animation before streaming starts
+    const timer = setTimeout(() => send(initialMessage), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if ((!text && attachments.length === 0) || busy) return;
-    setInput("");
+    if (!overrideText) setInput("");
     setBusy(true);
     setPickerOpen(false);
 

@@ -28,6 +28,30 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { OnboardingScreen } from '@/components/OnboardingScreen';
+
+// ── Idea → language detection ─────────────────────────────────────────────────
+function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' {
+  const lower = idea.toLowerCase();
+  const pythonKw = ['python', 'flask', 'django', 'fastapi', 'scraper', 'scraping', 'pandas', 'numpy', 'data science', 'machine learning', 'ml ', 'matplotlib', 'pip ', 'requests '];
+  const tsKw = ['typescript', 'react', 'next.js', 'nextjs', 'angular', 'vue'];
+  if (pythonKw.some((k) => lower.includes(k))) return 'python';
+  if (tsKw.some((k) => lower.includes(k))) return 'typescript';
+  return 'javascript';
+}
+
+// ── Idea → project name ───────────────────────────────────────────────────────
+function deriveProjectName(idea: string): string {
+  const cleaned = idea
+    .toLowerCase()
+    .replace(/^(build|create|make|write|generate|a |an |the )+/gi, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 5)
+    .join('-');
+  return cleaned.slice(0, 40) || 'my-project';
+}
 
 const LANG_COLORS: Record<string, string> = {
   javascript: '#f7df1e',
@@ -86,6 +110,7 @@ export default function ProjectsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [renameProject, setRenameProject] = useState<Project | null>(null);
   const [renameName, setRenameName] = useState('');
+  const [onboardingSkipped, setOnboardingSkipped] = useState(false);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
