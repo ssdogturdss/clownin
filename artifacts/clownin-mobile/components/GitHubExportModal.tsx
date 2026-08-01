@@ -48,7 +48,12 @@ export function GitHubExportModal({
   const [isPrivate, setIsPrivate] = useState(false);
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ repoUrl: string; owner: string } | null>(null);
+  const [result, setResult] = useState<{
+    repoUrl: string;
+    owner: string;
+    isContainerReady?: boolean;
+    projectType?: string;
+  } | null>(null);
   const [error, setError] = useState("");
 
   // Load saved token
@@ -121,31 +126,71 @@ export function GitHubExportModal({
                   <Text style={[s.successUrl, { color: colors.info }]}>{result.repoUrl}</Text>
                 </Pressable>
 
+                {/* Container-ready badge */}
+                {result.isContainerReady && (
+                  <View style={[s.containerBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Text style={s.containerBadgeIcon}>🐳</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.containerBadgeTitle, { color: colors.foreground }]}>
+                        Container deploy ready
+                      </Text>
+                      <Text style={[s.containerBadgeSub, { color: colors.mutedForeground }]}>
+                        Dockerfile &amp; docker-compose.yml included in the commit
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
                 <Text style={s.deployHeading}>Deploy it live — pick a platform</Text>
 
-                {[
-                  {
-                    name: "Vercel",
-                    icon: "triangle-outline" as const,
-                    desc: "Best for JS/TS, Next.js, static sites",
-                    color: "#000",
-                    url: `https://vercel.com/new/clone?repository-url=${encodeURIComponent(result.repoUrl)}`,
-                  },
-                  {
-                    name: "Railway",
-                    icon: "train-variant" as const,
-                    desc: "Any language, batteries included",
-                    color: "#7B3FE4",
-                    url: `https://railway.app/new/github?repo=${encodeURIComponent(result.repoUrl)}`,
-                  },
-                  {
-                    name: "Render",
-                    icon: "cloud-upload-outline" as const,
-                    desc: "Free tier, easy setup, all runtimes",
-                    color: "#46E3B7",
-                    url: `https://dashboard.render.com/web/new?url=${encodeURIComponent(result.repoUrl)}`,
-                  },
-                ].map((p) => (
+                {(result.isContainerReady
+                  ? [
+                      {
+                        name: "Railway",
+                        icon: "train-variant" as const,
+                        desc: "Connect GitHub → auto-deploys on every push",
+                        color: "#7B3FE4",
+                        url: `https://railway.app/new/github?repo=${encodeURIComponent(result.repoUrl)}`,
+                      },
+                      {
+                        name: "Render",
+                        icon: "cloud-upload-outline" as const,
+                        desc: "Free tier · connect GitHub repo · done",
+                        color: "#46E3B7",
+                        url: `https://dashboard.render.com/web/new?url=${encodeURIComponent(result.repoUrl)}`,
+                      },
+                      {
+                        name: "Fly.io",
+                        icon: "rocket-launch-outline" as const,
+                        desc: "Global edge · fly deploy from CLI",
+                        color: "#8B5CF6",
+                        url: "https://fly.io/docs/getting-started/",
+                      },
+                    ]
+                  : [
+                      {
+                        name: "Vercel",
+                        icon: "triangle-outline" as const,
+                        desc: "Best for JS/TS, Next.js, static sites",
+                        color: "#000",
+                        url: `https://vercel.com/new/clone?repository-url=${encodeURIComponent(result.repoUrl)}`,
+                      },
+                      {
+                        name: "Railway",
+                        icon: "train-variant" as const,
+                        desc: "Any language, batteries included",
+                        color: "#7B3FE4",
+                        url: `https://railway.app/new/github?repo=${encodeURIComponent(result.repoUrl)}`,
+                      },
+                      {
+                        name: "Render",
+                        icon: "cloud-upload-outline" as const,
+                        desc: "Free tier, easy setup, all runtimes",
+                        color: "#46E3B7",
+                        url: `https://dashboard.render.com/web/new?url=${encodeURIComponent(result.repoUrl)}`,
+                      },
+                    ]
+                ).map((p) => (
                   <Pressable
                     key={p.name}
                     style={[s.deployCard, { borderColor: colors.border, backgroundColor: colors.card }]}
@@ -382,5 +427,19 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       marginTop: 4,
     },
     repoBtnText: { fontSize: 14, fontWeight: "500" },
+
+    // Container-ready badge
+    containerBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      borderWidth: 1,
+      borderRadius: 10,
+      padding: 12,
+      marginTop: 4,
+    },
+    containerBadgeIcon: { fontSize: 22 },
+    containerBadgeTitle: { fontSize: 13, fontWeight: "600" },
+    containerBadgeSub: { fontSize: 11, marginTop: 1, lineHeight: 15 },
   });
 }

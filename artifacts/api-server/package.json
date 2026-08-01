@@ -7,7 +7,9 @@
     "dev": "export NODE_ENV=development && fuser -k ${PORT:-8080}/tcp 2>/dev/null; pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --exclude '**/dockerSmoke*'",
+    "test:docker": "DOCKER_SMOKE=1 vitest run src/lib/__tests__/dockerSmoke.test.ts --reporter verbose"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
@@ -32,6 +34,7 @@
     "esbuild": "0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13.1.3",
-    "thread-stream": "3.1.0"
+    "thread-stream": "3.1.0",
+    "vitest": "^4.1.10"
   }
 }

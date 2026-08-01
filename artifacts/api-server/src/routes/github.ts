@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, projectsTable, projectFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
+import { generateContainerFiles } from "../lib/deployConfig";
 
 const router: IRouter = Router();
 
@@ -67,15 +68,20 @@ router.post(
       return;
     }
 
-    const files = await db
+    const dbFiles = await db
       .select()
       .from(projectFilesTable)
       .where(eq(projectFilesTable.projectId, projectId));
 
-    if (files.length === 0) {
+    if (dbFiles.length === 0) {
       res.status(400).json({ error: "Project has no files to push" });
       return;
     }
+
+    // Inject Dockerfile + docker-compose.yml + DEPLOY.md for server projects
+    const { files, type, isContainerReady } = generateContainerFiles(
+      dbFiles.map((f) => ({ path: f.path, content: f.content }))
+    );
 
     try {
       // 1. Get authenticated user
@@ -122,12 +128,16 @@ router.post(
       )) as { sha: string };
 
       // 5. Create initial commit (no parents — empty repo)
+      const commitMsg = isContainerReady
+        ? `Initial commit from Clownin 🤡\n\nProject: ${project.name}\n\nIncludes Dockerfile + docker-compose.yml — ready for Railway, Render, or Fly.io.`
+        : `Initial commit from Clownin 🤡\n\nProject: ${project.name}`;
+
       const commit = (await ghFetch(
         token,
         `/repos/${owner}/${repoName}/git/commits`,
         "POST",
         {
-          message: `Initial commit from Clownin 🤡\n\nProject: ${project.name}`,
+          message: commitMsg,
           tree: tree.sha,
           parents: [],
         }
@@ -145,8 +155,8 @@ router.post(
       });
 
       const repoUrl = `https://github.com/${owner}/${repoName}`;
-      req.log.info({ projectId, repoUrl }, "Pushed to GitHub");
-      res.json({ repoUrl, owner, repoName });
+      req.log.info({ projectId, repoUrl, isContainerReady, type }, "Pushed to GitHub");
+      res.json({ repoUrl, owner, repoName, isContainerReady, projectType: type });
     } catch (err: unknown) {
       req.log.error({ err }, "GitHub push failed");
       res.status(500).json({

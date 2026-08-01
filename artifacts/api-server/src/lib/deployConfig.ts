@@ -29,10 +29,11 @@ export function detectType(files: FileEntry[]): ProjectType {
   const isFlask      = /Flask\s*\(|@app\.route|from flask/.test(allContent);
   const isFastApi    = /FastAPI\s*\(|@app\.(get|post|put|delete)\s*\(/.test(allContent);
 
-  if (hasHtml) return "static";
+  // Server patterns take precedence — a server may contain .html templates
   if (hasPy && (isFlask || isFastApi)) return "python-server";
-  if (hasPy) return "python-script";
   if (hasJs && isHttpServer) return "node-server";
+  if (hasHtml) return "static";
+  if (hasPy) return "python-script";
   if (hasJs) return "node-script";
   return "unknown";
 }
@@ -188,4 +189,271 @@ exports.handler = serverless(app);
 
 function toArray(map: Map<string, string>): FileEntry[] {
   return Array.from(map.entries()).map(([path, content]) => ({ path, content }));
+}
+
+// ─── Container deploy config (Docker / Railway / Render / Fly.io) ────────────
+
+interface NodeSetup {
+  entry: string;
+  isTypeScript: boolean;
+  hasStartScript: boolean;
+  hasBuildScript: boolean;
+}
+
+function detectNodeSetup(files: FileEntry[]): NodeSetup {
+  let pkgMain: string | undefined;
+  let hasStartScript = false;
+  let hasBuildScript = false;
+
+  const pkg = files.find((f) => f.path === "package.json");
+  if (pkg) {
+    try {
+      const parsed = JSON.parse(pkg.content) as {
+        main?: string;
+        scripts?: Record<string, string>;
+      };
+      pkgMain = parsed.main;
+      hasStartScript = !!parsed.scripts?.start;
+      hasBuildScript = !!parsed.scripts?.build;
+    } catch { /* ignore */ }
+  }
+
+  const isTypeScript = files.some(
+    (f) => f.path.endsWith(".ts") && !f.path.endsWith(".d.ts")
+  );
+
+  // Resolve entry point: package.json main → well-known names (JS then TS) → content scan
+  let entry = pkgMain ?? "";
+  if (!entry) {
+    const candidates = [
+      "index.js", "server.js", "app.js", "main.js",
+      "index.ts", "server.ts", "app.ts", "main.ts",
+    ];
+    for (const c of candidates) {
+      if (files.some((f) => f.path === c)) { entry = c; break; }
+    }
+  }
+  if (!entry) {
+    const match = files.find(
+      (f) =>
+        (f.path.endsWith(".js") || f.path.endsWith(".ts")) &&
+        /app\.listen|createServer/.test(f.content)
+    );
+    entry = match?.path ?? "index.js";
+  }
+
+  return { entry, isTypeScript, hasStartScript, hasBuildScript };
+}
+
+interface PythonSetup {
+  entry: string;
+  isFastApi: boolean;
+  appVar: string;
+}
+
+function detectPythonSetup(files: FileEntry[]): PythonSetup {
+  const candidates = ["app.py", "main.py", "server.py", "api.py"];
+  let entry = "";
+  for (const c of candidates) {
+    if (files.some((f) => f.path === c)) { entry = c; break; }
+  }
+  if (!entry) {
+    const match = files.find(
+      (f) => f.path.endsWith(".py") && /Flask|FastAPI|uvicorn/.test(f.content)
+    );
+    entry = match?.path ?? "app.py";
+  }
+
+  const isFastApi = files.some((f) => /FastAPI\s*\(|from fastapi/.test(f.content));
+
+  // Detect the variable name assigned to Flask()/FastAPI() — usually "app"
+  let appVar = "app";
+  const entryFile = files.find((f) => f.path === entry);
+  if (entryFile) {
+    const m = entryFile.content.match(/(\w+)\s*=\s*(?:FastAPI|Flask)\s*\(/);
+    if (m) appVar = m[1];
+  }
+
+  return { entry, isFastApi, appVar };
+}
+
+function nodeDockerfile(setup: NodeSetup): string {
+  const { entry, isTypeScript, hasStartScript, hasBuildScript } = setup;
+
+  if (hasStartScript) {
+    // Delegate to the project's own npm start (handles compiled TS, custom runners, etc.)
+    const buildStep = hasBuildScript
+      ? "RUN npm run build\n"
+      : "";
+    return `# syntax=docker/dockerfile:1
+FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --ignore-scripts
+COPY . .
+${buildStep}EXPOSE 3000
+ENV PORT=3000
+CMD ["npm", "start"]
+`;
+  }
+
+  if (isTypeScript) {
+    // No start script — run with ts-node.
+    // COPY . . first so the build works even when no package.json is present.
+    return `# syntax=docker/dockerfile:1
+FROM node:20-slim
+WORKDIR /app
+COPY . .
+RUN if [ -f package.json ]; then npm install --ignore-scripts; fi
+RUN npm install --ignore-scripts ts-node typescript @types/node
+EXPOSE 3000
+ENV PORT=3000
+CMD ["npx", "ts-node", "${entry}"]
+`;
+  }
+
+  // Plain JavaScript.
+  // COPY . . first so the build works even when no package.json is present.
+  return `# syntax=docker/dockerfile:1
+FROM node:20-slim
+WORKDIR /app
+COPY . .
+RUN if [ -f package.json ]; then npm install --production --ignore-scripts; fi
+EXPOSE 3000
+ENV PORT=3000
+CMD ["node", "${entry}"]
+`;
+}
+
+function pythonDockerfile(setup: PythonSetup): string {
+  const { entry, isFastApi, appVar } = setup;
+  const module = entry.replace(/\.py$/, "");
+
+  if (isFastApi) {
+    // FastAPI requires uvicorn — python module.py does NOT start a server.
+    // Shell form CMD so $PORT is expanded at runtime (default 8000).
+    return `# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+RUN pip install --no-cache-dir uvicorn
+EXPOSE 8000
+ENV PORT=8000
+CMD ["sh", "-c", "uvicorn ${module}:${appVar} --host 0.0.0.0 --port \${PORT:-8000}"]
+`;
+  }
+
+  // Flask — use gunicorn for production binding on 0.0.0.0.
+  // Shell form CMD so $PORT is expanded at runtime (default 8000).
+  return `# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+RUN pip install --no-cache-dir gunicorn
+EXPOSE 8000
+ENV PORT=8000
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:\${PORT:-8000} ${module}:${appVar}"]
+`;
+}
+
+function dockerCompose(port: number): string {
+  return `version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "${port}:${port}"
+    environment:
+      - PORT=${port}
+`;
+}
+
+function deployMd(port: number): string {
+  return `# Deploy this app
+
+This repo includes a \`Dockerfile\` and \`docker-compose.yml\` generated by [Clownin](https://github.com/clownin).
+Any platform that runs Docker containers can host it in under a minute.
+
+---
+
+## Railway (recommended — free tier available)
+
+1. Go to **[railway.app/new](https://railway.app/new)** → click **Deploy from GitHub repo**
+2. Select this repo from the list
+3. Railway auto-detects the Dockerfile and deploys — your URL appears in the dashboard
+
+---
+
+## Render
+
+1. Go to **[dashboard.render.com/web/new](https://dashboard.render.com/web/new)**
+2. Connect your GitHub account → select this repo
+3. Render detects the Dockerfile → click **Create Web Service**
+
+---
+
+## Fly.io
+
+1. Install the CLI: \`brew install flyctl\` (or see [fly.io/docs](https://fly.io/docs/getting-started/installing-flyctl/))
+2. \`fly launch --no-deploy\` inside the repo — accepts the generated config
+3. \`fly deploy\` — your app is live on \`<app>.fly.dev\`
+
+---
+
+## Local Docker
+
+\`\`\`bash
+docker compose up --build
+\`\`\`
+
+Then open http://localhost:${port}
+`;
+}
+
+/**
+ * Injects a Dockerfile, docker-compose.yml, .dockerignore, and DEPLOY.md into
+ * the file list for projects that run as persistent servers (node-server,
+ * python-server). Server detection takes precedence over HTML (template servers
+ * contain .html files but are still servers).
+ * Returns the augmented file list and whether container config was added.
+ */
+export function generateContainerFiles(files: FileEntry[]): {
+  files: FileEntry[];
+  type: ProjectType;
+  isContainerReady: boolean;
+} {
+  const type = detectType(files);
+  const map = new Map(files.map((f) => [f.path, f.content]));
+
+  if (type === "node-server") {
+    const setup = detectNodeSetup(files);
+    if (!map.has("Dockerfile")) map.set("Dockerfile", nodeDockerfile(setup));
+    if (!map.has("docker-compose.yml")) map.set("docker-compose.yml", dockerCompose(3000));
+    if (!map.has("DEPLOY.md")) map.set("DEPLOY.md", deployMd(3000));
+    if (!map.has(".dockerignore")) {
+      map.set(".dockerignore", "node_modules\n.env\n.git\n");
+    }
+    return { files: toArray(map), type, isContainerReady: true };
+  }
+
+  if (type === "python-server") {
+    const setup = detectPythonSetup(files);
+    // Inject minimal requirements.txt when absent so the framework is always installed.
+    // This guarantees `pip install -r requirements.txt` works even with no manifest.
+    if (!map.has("requirements.txt")) {
+      const reqs = setup.isFastApi ? "fastapi\nuvicorn\n" : "flask\ngunicorn\n";
+      map.set("requirements.txt", reqs);
+    }
+    if (!map.has("Dockerfile")) map.set("Dockerfile", pythonDockerfile(setup));
+    if (!map.has("docker-compose.yml")) map.set("docker-compose.yml", dockerCompose(8000));
+    if (!map.has("DEPLOY.md")) map.set("DEPLOY.md", deployMd(8000));
+    if (!map.has(".dockerignore")) {
+      map.set(".dockerignore", "__pycache__\n.env\n.git\n*.pyc\n");
+    }
+    return { files: toArray(map), type, isContainerReady: true };
+  }
+
+  return { files: toArray(map), type, isContainerReady: false };
 }
