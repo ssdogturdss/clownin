@@ -108,7 +108,7 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const TERMINAL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.4);
 
 export default function ProjectEditorScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, initialMessage } = useLocalSearchParams<{ id: string; initialMessage?: string }>();
   const projectId = Number(id);
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -280,9 +280,17 @@ export default function ProjectEditorScreen() {
   const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
   const [renameFilePath, setRenameFilePath] = useState('');
   const [agentOpen, setAgentOpen] = useState(false);
+  const autoOpenedAgentRef = useRef(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [deployOpen, setDeployOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  // Auto-open agent panel when arriving from the onboarding flow
+  useEffect(() => {
+    if (!initialMessage || autoOpenedAgentRef.current || !project) return;
+    autoOpenedAgentRef.current = true;
+    setAgentOpen(true);
+  }, [initialMessage, project]);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -998,6 +1006,7 @@ export default function ProjectEditorScreen() {
         visible={agentOpen}
         onClose={() => setAgentOpen(false)}
         onFilesChanged={() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })}
+        initialMessage={initialMessage}
       />
 
       {/* Rename file modal */}

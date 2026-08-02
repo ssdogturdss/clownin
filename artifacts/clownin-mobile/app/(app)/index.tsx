@@ -193,7 +193,34 @@ export default function ProjectsScreen() {
     ]);
   };
 
+  const handleIdeaSubmit = useCallback(async (idea: string) => {
+    const language = detectLanguage(idea);
+    const name = deriveProjectName(idea);
+    try {
+      const project = await createMutation.mutateAsync({ data: { name, language } });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+      router.push({
+        pathname: '/(app)/project/[id]',
+        params: { id: String(project.id), initialMessage: idea },
+      });
+    } catch {
+      Alert.alert('Error', 'Could not create project. Please try again.');
+    }
+  }, [createMutation, queryClient]);
+
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
+
+  // Show onboarding to first-time users who have no projects yet
+  if (!isLoading && !isError && projects?.length === 0 && !onboardingSkipped) {
+    return (
+      <OnboardingScreen
+        onSubmit={handleIdeaSubmit}
+        onSkip={() => setOnboardingSkipped(true)}
+        isLoading={createMutation.isPending}
+      />
+    );
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>

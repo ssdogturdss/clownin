@@ -119,12 +119,21 @@ router.post(
           blobs.push(...batchBlobs);
         }
 
-        // 3. Create tree (no base_tree so the commit replaces all tracked files)
+        // 3. Get base tree SHA from the parent commit so remote-only files are preserved
+        const parentCommit = (await ghFetch(
+          token,
+          `/repos/${owner}/${repo}/git/commits/${parentSha}`,
+          "GET"
+        )) as { tree: { sha: string } };
+        const baseTreeSha = parentCommit.tree.sha;
+
+        // 4. Create tree on top of existing tree — remote-only files are not touched
         const tree = (await ghFetch(
           token,
           `/repos/${owner}/${repo}/git/trees`,
           "POST",
           {
+            base_tree: baseTreeSha,
             tree: files.map((f, i) => ({
               path: f.path,
               mode: "100644",

@@ -553,13 +553,13 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
               maxLength={2000}
               editable={!busy}
               returnKeyType="send"
-              onSubmitEditing={send}
+              onSubmitEditing={() => send()}
               blurOnSubmit
               onFocus={() => setPickerOpen(false)}
             />
             <Pressable
               style={[s.sendBtn, { opacity: ((!input.trim() && attachments.length === 0) || busy) ? 0.4 : 1 }]}
-              onPress={send}
+              onPress={() => send()}
               disabled={(!input.trim() && attachments.length === 0) || busy}
             >
               {busy
