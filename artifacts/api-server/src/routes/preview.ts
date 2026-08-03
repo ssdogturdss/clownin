@@ -15,6 +15,8 @@ const router: IRouter = Router();
 router.get("/preview/:shortId", async (req, res): Promise<void> => {
   const { shortId } = req.params;
 
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+
   const [project] = await db
     .select()
     .from(projectsTable)
@@ -22,7 +24,7 @@ router.get("/preview/:shortId", async (req, res): Promise<void> => {
     .limit(1);
 
   if (!project || !project.previewEnabled) {
-    res.status(404).send(noPreviewPage("Preview not found"));
+    res.status(404).send(noPreviewPage("Preview not found", undefined, baseUrl));
     return;
   }
 
@@ -40,11 +42,11 @@ router.get("/preview/:shortId", async (req, res): Promise<void> => {
     res.status(200).send(noPreviewPage(
       `"${project.name}" has no HTML file`,
       project.name,
+      baseUrl,
     ));
     return;
   }
 
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
   const fileMap = new Map(files.map((f) => [f.path, f.content]));
   const html = buildPreviewHtml(htmlFile.content, fileMap, project.name, baseUrl);
 
@@ -119,7 +121,7 @@ function buildPreviewHtml(
 function buildMetaTags(projectName: string, baseUrl: string): string {
   const title = `${projectName} — Built with Clownin 🤡`;
   const description = "Built with Clownin — the AI coding app for your phone";
-  const ogImage = `${baseUrl}/assets/og-image.jpg`;
+  const ogImage = `${baseUrl}/preview/og-image.png`;
   return `  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeAttr(title)}</title>
@@ -128,8 +130,8 @@ function buildMetaTags(projectName: string, baseUrl: string): string {
   <meta property="og:description" content="${escapeAttr(description)}">
   <meta property="og:type" content="website">
   <meta property="og:image" content="${escapeAttr(ogImage)}">
-  <meta property="og:image:width" content="1024">
-  <meta property="og:image:height" content="1024">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${escapeAttr(title)}">
   <meta name="twitter:description" content="${escapeAttr(description)}">
@@ -167,14 +169,18 @@ function buildBadge(): string {
 }
 
 /** Returns a full standalone HTML page for the "no preview" state */
-function noPreviewPage(headline: string, projectName?: string): string {
+function noPreviewPage(headline: string, projectName?: string, baseUrl?: string): string {
   const title = projectName ? `${projectName} — Clownin Preview` : "Clownin Preview";
+  const ogImage = baseUrl ? `${baseUrl}/preview/og-image.png` : null;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeAttr(title)}</title>
+  ${ogImage ? `<meta property="og:image" content="${escapeAttr(ogImage)}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="${escapeAttr(ogImage)}">` : ""}
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
