@@ -20,3 +20,4 @@ export * from './registerBody';
 export * from './updateFileBody';
 export * from './updateProjectBody';
 export * from './userProfile';
+export * from './userProfileSubscriptionTier';

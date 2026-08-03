@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, projectsTable, projectFilesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db";
+import { eq, and, count, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -25,10 +25,61 @@ router.post("/projects", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .insert(projectsTable)
-    .values({ userId, name, language, description: description ?? null })
-    .returning();
+  // ── Subscription: project count limit for free tier (atomic) ────────────
+  const [currentUser] = await db
+    .select({ subscriptionTier: usersTable.subscriptionTier })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+
+  // For free-tier users, count + insert happen inside a single transaction
+  // protected by a per-user advisory lock so concurrent requests cannot
+  // both pass the limit check and both successfully insert.
+  let project: typeof projectsTable.$inferSelect;
+
+  if (currentUser?.subscriptionTier === "free") {
+    const txResult = await db.transaction(async (tx) => {
+      // pg_advisory_xact_lock serializes all transactions for this user_id.
+      // The lock is automatically released when the transaction ends.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${userId})`);
+
+      const [{ value: projectCount }] = await tx
+        .select({ value: count() })
+        .from(projectsTable)
+        .where(eq(projectsTable.userId, userId));
+
+      if (projectCount >= 3) {
+        return { limitExceeded: true as const, count: projectCount };
+      }
+
+      const [p] = await tx
+        .insert(projectsTable)
+        .values({ userId, name, language, description: description ?? null })
+        .returning();
+
+      return { limitExceeded: false as const, project: p };
+    });
+
+    if (txResult.limitExceeded) {
+      res.status(402).json({
+        error: "Project limit reached",
+        code: "project_limit_exceeded",
+        limit: 3,
+        tier: "free",
+      });
+      return;
+    }
+
+    project = txResult.project!;
+  } else {
+    // Pro users (or unrecognised tier) — insert directly
+    const [p] = await db
+      .insert(projectsTable)
+      .values({ userId, name, language, description: description ?? null })
+      .returning();
+    project = p;
+  }
+  // ── End subscription enforcement ─────────────────────────────────────────
 
   // Create a default main file based on language
   const mainFile = getDefaultFile(language);

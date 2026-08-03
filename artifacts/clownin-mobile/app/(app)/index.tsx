@@ -29,6 +29,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { OnboardingScreen } from '@/components/OnboardingScreen';
+import { PaywallSheet, type PaywallReason } from '@/components/PaywallSheet';
+import { ProfileModal } from '@/components/ProfileModal';
+import { useProfile, PROFILE_QUERY_KEY } from '@/hooks/useProfile';
 
 // ── Idea → language detection ─────────────────────────────────────────────────
 function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' {
@@ -111,6 +114,11 @@ export default function ProjectsScreen() {
   const [renameProject, setRenameProject] = useState<Project | null>(null);
   const [renameName, setRenameName] = useState('');
   const [onboardingSkipped, setOnboardingSkipped] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<PaywallReason>('project_limit');
+  const [showProfile, setShowProfile] = useState(false);
+
+  const { data: profile } = useProfile();
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -120,14 +128,28 @@ export default function ProjectsScreen() {
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
+    // Proactive project limit check
+    if (profile?.subscriptionTier === 'free' && (projects?.length ?? 0) >= 3) {
+      setPaywallReason('project_limit');
+      setShowPaywall(true);
+      setShowCreate(false);
+      return;
+    }
     try {
       await createMutation.mutateAsync({ data: { name: newName.trim(), language: newLang } });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
       setShowCreate(false);
       setNewName('');
-    } catch {
-      Alert.alert('Error', 'Failed to create project');
+    } catch (err: unknown) {
+      if ((err as any)?.status === 402) {
+        const code = (err as any)?.data?.code;
+        setPaywallReason(code === 'project_limit_exceeded' ? 'project_limit' : 'daily_limit');
+        setShowPaywall(true);
+        setShowCreate(false);
+      } else {
+        Alert.alert('Error', 'Failed to create project');
+      }
     }
   };
 
@@ -179,21 +201,17 @@ export default function ProjectsScreen() {
     );
   };
 
-  const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/(auth)/login');
-        },
-      },
-    ]);
-  };
+  const handleLogout = useCallback(async () => {
+    await logout();
+    router.replace('/(auth)/login');
+  }, [logout]);
 
   const handleIdeaSubmit = useCallback(async (idea: string) => {
+    if (profile?.subscriptionTier === 'free' && (projects?.length ?? 0) >= 3) {
+      setPaywallReason('project_limit');
+      setShowPaywall(true);
+      return;
+    }
     const language = detectLanguage(idea);
     const name = deriveProjectName(idea);
     try {
@@ -204,10 +222,16 @@ export default function ProjectsScreen() {
         pathname: '/(app)/project/[id]',
         params: { id: String(project.id), initialMessage: idea },
       });
-    } catch {
-      Alert.alert('Error', 'Could not create project. Please try again.');
+    } catch (err: unknown) {
+      if ((err as any)?.status === 402) {
+        const code = (err as any)?.data?.code;
+        setPaywallReason(code === 'project_limit_exceeded' ? 'project_limit' : 'daily_limit');
+        setShowPaywall(true);
+      } else {
+        Alert.alert('Error', 'Could not create project. Please try again.');
+      }
     }
-  }, [createMutation, queryClient]);
+  }, [createMutation, queryClient, profile, projects]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -243,8 +267,11 @@ export default function ProjectsScreen() {
           >
             <Ionicons name="add" size={22} color={colors.primaryForeground} />
           </Pressable>
-          <Pressable style={styles.iconBtn} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={22} color={colors.mutedForeground} />
+          <Pressable
+            style={styles.iconBtn}
+            onPress={() => { setShowProfile(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+          >
+            <Ionicons name="person-circle-outline" size={26} color={colors.mutedForeground} />
           </Pressable>
         </View>
       </View>
@@ -365,6 +392,20 @@ export default function ProjectsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Paywall */}
+      <PaywallSheet
+        visible={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        reason={paywallReason}
+      />
+
+      {/* Profile */}
+      <ProfileModal
+        visible={showProfile}
+        onClose={() => setShowProfile(false)}
+        onLogout={handleLogout}
+      />
 
       {/* Create Project Modal */}
       <Modal visible={showCreate} transparent animationType="fade" onRequestClose={() => setShowCreate(false)}>

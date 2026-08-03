@@ -568,11 +568,24 @@ components:
         createdAt:
           type: string
           format: date-time
+        subscriptionTier:
+          type: string
+          enum: [free, pro]
+          description: The user's current subscription tier
+        dailyMessageCount:
+          type: number
+          description: Number of AI messages sent today (resets at start of each new day)
+        dailyMessageLimit:
+          type: number
+          nullable: true
+          description: Daily message cap for the current tier; null means unlimited (Pro)
       required:
         - id
         - username
         - email
         - createdAt
+        - subscriptionTier
+        - dailyMessageCount
 
     AuthResponse:
       type: object

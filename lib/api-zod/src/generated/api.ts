@@ -38,7 +38,10 @@ export const RegisterResponse = zod.object({
   "id": zod.number(),
   "username": zod.string(),
   "email": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "subscriptionTier": zod.enum(['free', 'pro']).describe('The user\'s current subscription tier'),
+  "dailyMessageCount": zod.number().describe('Number of AI messages sent today (resets at start of each new day)'),
+  "dailyMessageLimit": zod.number().nullish().describe('Daily message cap for the current tier; null means unlimited (Pro)')
 })
 })
 
@@ -57,7 +60,10 @@ export const LoginResponse = zod.object({
   "id": zod.number(),
   "username": zod.string(),
   "email": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "subscriptionTier": zod.enum(['free', 'pro']).describe('The user\'s current subscription tier'),
+  "dailyMessageCount": zod.number().describe('Number of AI messages sent today (resets at start of each new day)'),
+  "dailyMessageLimit": zod.number().nullish().describe('Daily message cap for the current tier; null means unlimited (Pro)')
 })
 })
 
@@ -69,7 +75,10 @@ export const GetMeResponse = zod.object({
   "id": zod.number(),
   "username": zod.string(),
   "email": zod.string(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "subscriptionTier": zod.enum(['free', 'pro']).describe('The user\'s current subscription tier'),
+  "dailyMessageCount": zod.number().describe('Number of AI messages sent today (resets at start of each new day)'),
+  "dailyMessageLimit": zod.number().nullish().describe('Daily message cap for the current tier; null means unlimited (Pro)')
 })
 
 

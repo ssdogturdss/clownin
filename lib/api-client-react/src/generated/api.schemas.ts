@@ -26,11 +26,28 @@ export interface LoginBody {
   password: string;
 }
 
+/**
+ * The user's current subscription tier
+ */
+export type UserProfileSubscriptionTier = typeof UserProfileSubscriptionTier[keyof typeof UserProfileSubscriptionTier];
+
+
+export const UserProfileSubscriptionTier = {
+  free: 'free',
+  pro: 'pro',
+} as const;
+
 export interface UserProfile {
   id: number;
   username: string;
   email: string;
   createdAt: string;
+  /** The user's current subscription tier */
+  subscriptionTier: UserProfileSubscriptionTier;
+  /** Number of AI messages sent today (resets at start of each new day) */
+  dailyMessageCount: number;
+  /** Daily message cap for the current tier; null means unlimited (Pro) */
+  dailyMessageLimit?: number | null;
 }
 
 export interface AuthResponse {

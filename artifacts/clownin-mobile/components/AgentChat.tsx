@@ -23,6 +23,9 @@ import * as FileSystem from "expo-file-system";
 import { useColors } from "@/hooks/useColors";
 import { resolveApiBaseUrl } from "@/app/_layout";
 import { useAuth } from "@/contexts/AuthContext";
+import { useQueryClient } from "@tanstack/react-query";
+import { PaywallSheet, type PaywallReason } from "./PaywallSheet";
+import { useProfile, PROFILE_QUERY_KEY } from "@/hooks/useProfile";
 
 type Attachment =
   | { kind: "image"; name: string; base64: string; mimeType: string; preview: string }
@@ -97,6 +100,8 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<PaywallReason>('daily_limit');
   const listRef = useRef<FlatList>(null);
   // Prevents the auto-send from firing more than once per mount
   const autoSentRef = useRef(false);
@@ -105,6 +110,9 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
   const historyRef = useRef<HistoryEntry[]>([]);
   // Current streaming agent message id
   const streamingIdRef = useRef<string | null>(null);
+
+  const { data: profile } = useProfile();
+  const queryClient = useQueryClient();
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
@@ -168,6 +176,16 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if ((!text && attachments.length === 0) || busy) return;
+
+    // Proactive daily limit check (avoids a round trip when we already know)
+    if (profile?.subscriptionTier === 'free' && profile.dailyMessageLimit !== null) {
+      if ((profile.dailyMessageCount ?? 0) >= (profile.dailyMessageLimit ?? 20)) {
+        setPaywallReason('daily_limit');
+        setShowPaywall(true);
+        return;
+      }
+    }
+
     if (!overrideText) setInput("");
     setBusy(true);
     setPickerOpen(false);
@@ -217,6 +235,15 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
         // @ts-ignore
         reactNative: { textStreaming: true },
       });
+
+      if (response.status === 402) {
+        let body: { code?: string } = {};
+        try { body = await response.json(); } catch { /* ignore */ }
+        setMessages((prev) => prev.filter((m) => m.id !== thinkId));
+        setPaywallReason('daily_limit');
+        setShowPaywall(true);
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -345,8 +372,10 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
     } finally {
       setBusy(false);
       streamingIdRef.current = null;
+      // Refresh profile so usage count stays current
+      queryClient.invalidateQueries({ queryKey: PROFILE_QUERY_KEY });
     }
-  }, [input, busy, projectId, token, upsertMsg, scrollToBottom, onFilesChanged]);
+  }, [input, busy, projectId, token, upsertMsg, scrollToBottom, onFilesChanged, profile, queryClient]);
 
   // ── Render helpers ───────────────────────────────────────────────────────────
   const renderItem = useCallback(
@@ -444,6 +473,7 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
   const s = makeStyles(colors);
 
   return (
+    <>
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={s.overlay}>
         <KeyboardAvoidingView
@@ -571,6 +601,8 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
         </KeyboardAvoidingView>
       </View>
     </Modal>
+    <PaywallSheet visible={showPaywall} onClose={() => setShowPaywall(false)} reason={paywallReason} />
+    </>
   );
 }
 

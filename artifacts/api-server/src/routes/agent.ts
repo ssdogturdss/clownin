@@ -1,8 +1,8 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { join } from "path";
-import { db, projectsTable, projectFilesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db";
+import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import OpenAI from "openai";
@@ -223,6 +223,52 @@ router.post(
       res.status(404).json({ error: "Project not found" });
       return;
     }
+
+    // ── Subscription enforcement (atomic) ────────────────────────────────────
+    const [currentUser] = await db
+      .select({ subscriptionTier: usersTable.subscriptionTier })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+
+    if (currentUser?.subscriptionTier === "free") {
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      // Single atomic UPDATE: increment only if under the daily limit.
+      // The CASE resets the count to 1 on a new day; the WHERE prevents
+      // the update when the same-day count is already at the ceiling.
+      // This eliminates the read-modify-write race under concurrent requests.
+      const updated = await db
+        .update(usersTable)
+        .set({
+          dailyMessageCount: sql`CASE WHEN ${usersTable.lastMessageDate} = ${todayStr} THEN ${usersTable.dailyMessageCount} + 1 ELSE 1 END`,
+          lastMessageDate: todayStr,
+        })
+        .where(
+          and(
+            eq(usersTable.id, userId),
+            eq(usersTable.subscriptionTier, "free"),
+            or(
+              isNull(usersTable.lastMessageDate),       // first-ever message
+              ne(usersTable.lastMessageDate, todayStr), // new day → reset to 1
+              lt(usersTable.dailyMessageCount, 20)      // same day, still under limit
+            )
+          )
+        )
+        .returning({ dailyMessageCount: usersTable.dailyMessageCount });
+
+      if (updated.length === 0) {
+        // WHERE matched no rows → limit already reached for today
+        res.status(402).json({
+          error: "Daily message limit reached",
+          code: "daily_limit_exceeded",
+          limit: 20,
+          tier: "free",
+        });
+        return;
+      }
+    }
+    // ── End subscription enforcement ─────────────────────────────────────────
 
     const files = await db
       .select()

@@ -5,10 +5,17 @@
  * Clownin API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { UserProfileSubscriptionTier } from './userProfileSubscriptionTier';
 
 export interface UserProfile {
   id: number;
   username: string;
   email: string;
   createdAt: Date;
+  /** The user's current subscription tier */
+  subscriptionTier: UserProfileSubscriptionTier;
+  /** Number of AI messages sent today (resets at start of each new day) */
+  dailyMessageCount: number;
+  /** Daily message cap for the current tier; null means unlimited (Pro) */
+  dailyMessageLimit?: number | null;
 }

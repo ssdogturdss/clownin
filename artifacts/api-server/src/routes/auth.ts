@@ -6,6 +6,8 @@ import { signToken, requireAuth, getUser } from "../lib/auth";
 
 const router: IRouter = Router();
 
+const FREE_DAILY_LIMIT = 20;
+
 router.post("/auth/register", async (req, res): Promise<void> => {
   const { username, email, password } = req.body ?? {};
 
@@ -53,6 +55,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
   const token = signToken({ userId: user.id, email: user.email, username: user.username });
 
   req.log.info({ userId: user.id }, "User registered");
+  // New users always start on the free tier with no messages sent today.
   res.status(201).json({
     token,
     user: {
@@ -60,6 +63,9 @@ router.post("/auth/register", async (req, res): Promise<void> => {
       username: user.username,
       email: user.email,
       createdAt: user.createdAt,
+      subscriptionTier: user.subscriptionTier,
+      dailyMessageCount: 0,
+      dailyMessageLimit: FREE_DAILY_LIMIT,
     },
   });
 });
@@ -91,6 +97,11 @@ router.post("/auth/login", async (req, res): Promise<void> => {
 
   const token = signToken({ userId: user.id, email: user.email, username: user.username });
 
+  // Compute effective daily count — reset to 0 if it's a new day.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const effectiveDailyCount =
+    user.lastMessageDate === todayStr ? user.dailyMessageCount : 0;
+
   req.log.info({ userId: user.id }, "User logged in");
   res.json({
     token,
@@ -99,6 +110,9 @@ router.post("/auth/login", async (req, res): Promise<void> => {
       username: user.username,
       email: user.email,
       createdAt: user.createdAt,
+      subscriptionTier: user.subscriptionTier,
+      dailyMessageCount: effectiveDailyCount,
+      dailyMessageLimit: user.subscriptionTier === "free" ? FREE_DAILY_LIMIT : null,
     },
   });
 });
@@ -117,12 +131,25 @@ router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
+  // Compute effective daily count — reset if it's a new day
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const effectiveDailyCount =
+    user.lastMessageDate === todayStr ? user.dailyMessageCount : 0;
+
   res.json({
     id: user.id,
     username: user.username,
     email: user.email,
     createdAt: user.createdAt,
+    subscriptionTier: user.subscriptionTier,
+    dailyMessageCount: effectiveDailyCount,
+    dailyMessageLimit: user.subscriptionTier === "free" ? FREE_DAILY_LIMIT : null,
   });
 });
+
+// NOTE: Subscription tier updates are NOT exposed as a client-callable endpoint.
+// Tier changes must originate from a trusted server-side billing event
+// (e.g. a RevenueCat webhook verified with a shared secret). A client-callable
+// PATCH would let any authenticated user self-promote to Pro for free.
 
 export default router;
