@@ -5,18 +5,27 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "clownin-mobile",
-    "userInterfaceStyle": "automatic",
+    "scheme": "clownin",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/icon.png",
-      "resizeMode": "contain",
+      "image": "./assets/images/splash.png",
+      "resizeMode": "cover",
       "backgroundColor": "#0d1117"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "app.clownin",
+      "buildNumber": "1"
     },
-    "android": {},
+    "android": {
+      "package": "app.clownin",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#0d1117"
+      }
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
