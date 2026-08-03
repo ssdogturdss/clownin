@@ -2,3 +2,4 @@
 - [SecureStore web fallback](secure-store-web.md) — expo-secure-store is native-only; use localStorage on web via a Platform.OS check shim.
 - [TypeScript execution](typescript-execution.md) — Use bun (not npx tsx) for TypeScript; bun is pre-installed and runs .ts natively without extra deps.
 - [Python runtime](python-runtime.md) — Python not in default nix modules; must install python-3.11 via installProgrammingLanguage.
+- [API server static assets](api-server-static-assets.md) — esbuild drops non-JS files; copy src/assets/ → dist/assets/ in build.mjs and serve via express.static().

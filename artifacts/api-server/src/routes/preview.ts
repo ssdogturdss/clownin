@@ -44,8 +44,9 @@ router.get("/preview/:shortId", async (req, res): Promise<void> => {
     return;
   }
 
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
   const fileMap = new Map(files.map((f) => [f.path, f.content]));
-  const html = buildPreviewHtml(htmlFile.content, fileMap, project.name);
+  const html = buildPreviewHtml(htmlFile.content, fileMap, project.name, baseUrl);
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -62,6 +63,7 @@ function buildPreviewHtml(
   rawHtml: string,
   fileMap: Map<string, string>,
   projectName: string,
+  baseUrl: string,
 ): string {
   let html = rawHtml;
 
@@ -96,7 +98,7 @@ function buildPreviewHtml(
   );
 
   // Inject social meta tags into <head>
-  const metaTags = buildMetaTags(projectName);
+  const metaTags = buildMetaTags(projectName, baseUrl);
   if (/<head>/i.test(html)) {
     html = html.replace(/<head>/i, `<head>\n${metaTags}`);
   } else if (/<html/i.test(html)) {
@@ -114,9 +116,10 @@ function buildPreviewHtml(
   return html;
 }
 
-function buildMetaTags(projectName: string): string {
+function buildMetaTags(projectName: string, baseUrl: string): string {
   const title = `${projectName} — Built with Clownin 🤡`;
   const description = "Built with Clownin — the AI coding app for your phone";
+  const ogImage = `${baseUrl}/assets/og-image.jpg`;
   return `  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeAttr(title)}</title>
@@ -124,9 +127,13 @@ function buildMetaTags(projectName: string): string {
   <meta property="og:title" content="${escapeAttr(title)}">
   <meta property="og:description" content="${escapeAttr(description)}">
   <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary">
+  <meta property="og:image" content="${escapeAttr(ogImage)}">
+  <meta property="og:image:width" content="1024">
+  <meta property="og:image:height" content="1024">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${escapeAttr(title)}">
-  <meta name="twitter:description" content="${escapeAttr(description)}">`;
+  <meta name="twitter:description" content="${escapeAttr(description)}">
+  <meta name="twitter:image" content="${escapeAttr(ogImage)}">`;
 }
 
 function buildBadge(): string {

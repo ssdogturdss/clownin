@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import path from "path";
 import router, { previewRouter } from "./routes";
 import { logger } from "./lib/logger";
 
@@ -28,6 +29,9 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Static assets (og-image, etc.) — served before any routes
+app.use("/assets", express.static(path.join(__dirname, "assets")));
 
 // Public preview pages — mounted outside /api so the URL is /preview/:shortId
 app.use(previewRouter);
