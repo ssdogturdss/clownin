@@ -61,10 +61,18 @@ export interface Project {
   name: string;
   language: string;
   description?: string | null;
+  /** Whether the public preview link is active */
+  previewEnabled: boolean;
+  /** Short ID used in the public preview URL (/preview/:shortId) */
+  previewShortId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface EnablePreviewResponse {
+  shortId: string;
+  previewEnabled: boolean;
+}
 export interface ProjectFile {
   id: number;
   projectId: number;
@@ -108,4 +116,3 @@ export interface UpdateFileBody {
 export interface ExecuteBody {
   fileId: number;
 }
-

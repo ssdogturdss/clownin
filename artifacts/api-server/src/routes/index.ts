@@ -20,3 +20,6 @@ router.use(githubRouter);
 router.use(deployRouter);
 
 export default router;
+
+// Re-export preview router so app.ts can mount it outside /api
+export { default as previewRouter } from "./preview";

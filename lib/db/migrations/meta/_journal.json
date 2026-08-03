@@ -15,6 +15,13 @@
       "when": 1785717224894,
       "tag": "0001_panoramic_blizzard",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785718951412,
+      "tag": "0002_preview_fields",
+      "breakpoints": true
     }
   ]
 }

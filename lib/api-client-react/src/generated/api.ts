@@ -23,6 +23,7 @@ import type {
   AuthResponse,
   CreateFileBody,
   CreateProjectBody,
+  EnablePreviewResponse,
   ErrorResponse,
   ExecuteBody,
   HealthStatus,
@@ -726,6 +727,77 @@ export const useDeleteProject = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getDeleteProjectMutationOptions(options));
+    }
+
+export const getEnablePreviewUrl = (id: number,) => {
+
+
+
+
+  return `/api/projects/${id}/preview/enable`
+}
+
+/**
+ * @summary Enable the public preview link for a project
+ */
+export const enablePreview = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<EnablePreviewResponse> => {
+
+  return customFetch<EnablePreviewResponse>(getEnablePreviewUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getEnablePreviewMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enablePreview>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof enablePreview>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['enablePreview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof enablePreview>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  enablePreview(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type EnablePreviewMutationResult = NonNullable<Awaited<ReturnType<typeof enablePreview>>>
+
+    export type EnablePreviewMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Enable the public preview link for a project
+ */
+export const useEnablePreview = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enablePreview>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof enablePreview>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getEnablePreviewMutationOptions(options));
     }
 
 export const getListFilesUrl = (id: number,) => {

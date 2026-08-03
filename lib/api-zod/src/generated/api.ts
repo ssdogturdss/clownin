@@ -25,7 +25,6 @@ export const registerBodyUsernameMin = 3;
 export const registerBodyPasswordMin = 6;
 
 
-
 export const RegisterBody = zod.object({
   "username": zod.string().min(registerBodyUsernameMin),
   "email": zod.string(),
@@ -91,6 +90,8 @@ export const ListProjectsResponseItem = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
+  "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -115,6 +116,8 @@ export const CreateProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
+  "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -133,6 +136,8 @@ export const GetProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
+  "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 }).and(zod.object({
@@ -156,8 +161,6 @@ export const UpdateProjectParams = zod.object({
 })
 
 
-
-
 export const UpdateProjectBody = zod.object({
   "name": zod.string().min(1).optional(),
   "description": zod.string().optional()
@@ -169,6 +172,8 @@ export const UpdateProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
+  "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
   "updatedAt": zod.coerce.date()
 })
@@ -183,7 +188,12 @@ export const DeleteProjectParams = zod.object({
 
 export const DeleteProjectResponse = zod.void()
 
-
+/**
+ * @summary Enable the public preview link for a project
+ */
+export const EnablePreviewParams = zod.object({
+  "id": zod.coerce.number()
+})
 /**
  * @summary List files in a project
  */
@@ -300,3 +310,7 @@ export const ExecuteCodeBody = zod.object({
 export const ExecuteCodeResponse = zod.unknown()
 
 
+export const EnablePreviewResponse = zod.object({
+  "shortId": zod.string(),
+  "previewEnabled": zod.boolean()
+})

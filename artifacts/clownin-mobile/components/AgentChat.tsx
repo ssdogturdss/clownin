@@ -152,7 +152,7 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
       const result = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
-      const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+      const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'utf8' });
       setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
     } catch {
       Alert.alert("Could not read file", "Only plain text and code files are supported.");

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { join } from "path";
+import { tmpdir } from "os";
 import { db, projectsTable, projectFilesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";

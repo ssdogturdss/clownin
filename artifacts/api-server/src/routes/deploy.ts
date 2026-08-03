@@ -28,7 +28,7 @@ async function netlifyFetch(
     Authorization: `Bearer ${token}`,
     "User-Agent": "Clownin-App/1.0",
   };
-  let bodyInit: BodyInit | undefined;
+  let bodyInit: Buffer | string | undefined;
 
   if (isOctet && body instanceof Buffer) {
     headers["Content-Type"] = "application/octet-stream";
@@ -58,7 +58,7 @@ router.post(
   requireAuth,
   async (req, res): Promise<void> => {
     const { userId } = getUser(req);
-    const projectId = parseInt(req.params.id, 10);
+    const projectId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
     if (isNaN(projectId)) { res.status(400).json({ error: "Invalid project id" }); return; }
 
     const { token, siteName } = req.body ?? {};
@@ -134,7 +134,7 @@ async function vercelFetch(
     "User-Agent": "Clownin-App/1.0",
     ...extraHeaders,
   };
-  let bodyInit: BodyInit | undefined;
+  let bodyInit: Buffer | string | undefined;
 
   if (body instanceof Buffer) {
     headers["Content-Type"] = "application/octet-stream";
@@ -158,7 +158,7 @@ router.post(
   requireAuth,
   async (req, res): Promise<void> => {
     const { userId } = getUser(req);
-    const projectId = parseInt(req.params.id, 10);
+    const projectId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
     if (isNaN(projectId)) { res.status(400).json({ error: "Invalid project id" }); return; }
 
     const { token, projectName } = req.body ?? {};

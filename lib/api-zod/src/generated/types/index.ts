@@ -9,6 +9,7 @@
 export * from './authResponse';
 export * from './createFileBody';
 export * from './createProjectBody';
+export * from './enablePreviewResponse';
 export * from './errorResponse';
 export * from './executeBody';
 export * from './healthStatus';

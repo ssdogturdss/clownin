@@ -21,6 +21,7 @@ import { AgentChat } from '@/components/AgentChat';
 import { GitHubExportModal } from '@/components/GitHubExportModal';
 import { DeployModal } from '@/components/DeployModal';
 import { InAppPreview } from '@/components/InAppPreview';
+import { SharePreviewModal } from '@/components/SharePreviewModal';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -284,6 +285,7 @@ export default function ProjectEditorScreen() {
   const [exportOpen, setExportOpen] = useState(false);
   const [deployOpen, setDeployOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   // Auto-open agent panel when arriving from the onboarding flow
   useEffect(() => {
@@ -730,6 +732,15 @@ export default function ProjectEditorScreen() {
           </Pressable>
         )}
 
+        {/* Share button */}
+        <Pressable
+          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setShareOpen(true)}
+          hitSlop={4}
+        >
+          <Ionicons name="share-outline" size={18} color={colors.foreground} />
+        </Pressable>
+
         <Pressable
           style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setDeployOpen(true)}
@@ -1007,6 +1018,16 @@ export default function ProjectEditorScreen() {
         onClose={() => setAgentOpen(false)}
         onFilesChanged={() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })}
         initialMessage={initialMessage}
+      />
+
+      {/* Share preview */}
+      <SharePreviewModal
+        visible={shareOpen}
+        onClose={() => setShareOpen(false)}
+        projectId={projectId}
+        projectName={project?.name ?? 'my-project'}
+        hasHtmlFile={!!(project?.files.some((f) => f.path.endsWith('.html')))}
+        onOpenDeploy={() => setDeployOpen(true)}
       />
 
       {/* Rename file modal */}
