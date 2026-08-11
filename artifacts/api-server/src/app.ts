@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
 import router, { previewRouter } from "./routes";
+import privacyRouter from "./routes/privacy";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -35,6 +36,9 @@ app.use("/preview", express.static(path.join(__dirname, "assets")));
 
 // Public preview pages — mounted outside /api so the URL is /preview/:shortId
 app.use(previewRouter);
+
+// Privacy policy — stable public URL for App Store Connect
+app.use(privacyRouter);
 
 app.use("/api", router);
 

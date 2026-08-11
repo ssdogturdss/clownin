@@ -1,0 +1,142 @@
+import { Router } from "express";
+
+const privacyRouter = Router();
+
+privacyRouter.get("/privacy", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy – Clownin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f0f0f;
+      color: #e5e5e5;
+      line-height: 1.7;
+      padding: 2rem 1rem;
+    }
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+      color: #ffffff;
+    }
+    .subtitle {
+      color: #888;
+      font-size: 0.9rem;
+      margin-bottom: 2.5rem;
+    }
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #ffffff;
+      margin-top: 2rem;
+      margin-bottom: 0.5rem;
+    }
+    p, li {
+      color: #ccc;
+      font-size: 0.97rem;
+    }
+    ul {
+      padding-left: 1.4rem;
+      margin-top: 0.4rem;
+    }
+    li { margin-bottom: 0.25rem; }
+    a { color: #7c9eff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    hr {
+      border: none;
+      border-top: 1px solid #2a2a2a;
+      margin: 2.5rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="subtitle">Clownin &nbsp;·&nbsp; Last updated: August 9, 2026</p>
+
+    <p>
+      Clownin ("we", "us", or "our") is a mobile coding assistant that lets you
+      create, edit, and run projects on your phone. This Privacy Policy explains
+      what information we collect, how we use it, and your rights.
+    </p>
+
+    <h2>1. Information We Collect</h2>
+    <ul>
+      <li><strong>Account information</strong> – your email address and username when you create an account.</li>
+      <li><strong>AI message content</strong> – the prompts you send to the AI assistant and the responses returned, so we can deliver the service and improve it.</li>
+      <li><strong>Project files</strong> – code files and project metadata you create or import inside the app.</li>
+      <li><strong>Usage data</strong> – feature interactions, error logs, and crash reports used to diagnose bugs and improve the experience.</li>
+      <li><strong>Device information</strong> – device model, OS version, and a randomly generated device identifier used for session management.</li>
+    </ul>
+
+    <h2>2. How We Use Your Information</h2>
+    <ul>
+      <li>Provide, maintain, and improve the Clownin service.</li>
+      <li>Authenticate your account and keep your projects secure.</li>
+      <li>Process AI requests and return results to you.</li>
+      <li>Send transactional emails (e.g. password reset).</li>
+      <li>Detect abuse, enforce our terms of service, and comply with legal obligations.</li>
+    </ul>
+
+    <h2>3. Data Sharing</h2>
+    <p>
+      We do not sell your personal data. We may share data with:
+    </p>
+    <ul>
+      <li><strong>AI providers</strong> – your prompts are forwarded to a large language model provider to generate responses. That provider processes data under its own privacy terms.</li>
+      <li><strong>Infrastructure providers</strong> – cloud hosting and database services that process data on our behalf under data-processing agreements.</li>
+      <li><strong>Legal authorities</strong> – if required by law or to protect the rights, safety, or property of Clownin or others.</li>
+    </ul>
+
+    <h2>4. Data Retention</h2>
+    <p>
+      We retain account information and project data for as long as your account is active. You may request deletion at any time (see Section 6). Usage logs are retained for up to 90 days.
+    </p>
+
+    <h2>5. Security</h2>
+    <p>
+      We use industry-standard security practices including encryption in transit (TLS) and access controls. No method of transmission over the internet is 100% secure; we cannot guarantee absolute security.
+    </p>
+
+    <h2>6. Your Rights & Choices</h2>
+    <ul>
+      <li><strong>Access & correction</strong> – you can view and update your account details inside the app.</li>
+      <li><strong>Deletion</strong> – email us to request deletion of your account and associated data. We will process requests within 30 days.</li>
+      <li><strong>Data portability</strong> – you can export your project files from within the app at any time.</li>
+    </ul>
+
+    <h2>7. Children's Privacy</h2>
+    <p>
+      Clownin is not directed to children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided us with personal data, please contact us.
+    </p>
+
+    <h2>8. Changes to This Policy</h2>
+    <p>
+      We may update this Privacy Policy from time to time. We will notify you of material changes via the app or by email. Continued use of Clownin after changes take effect constitutes acceptance of the updated policy.
+    </p>
+
+    <h2>9. Contact Us</h2>
+    <p>
+      If you have questions about this Privacy Policy or want to exercise your rights, contact us at:
+      <br /><br />
+      <a href="mailto:privacy@clownin.app">privacy@clownin.app</a>
+    </p>
+
+    <hr />
+    <p style="font-size:0.82rem; color:#555;">© 2026 Clownin. All rights reserved.</p>
+  </div>
+</body>
+</html>`);
+});
+
+export default privacyRouter;
