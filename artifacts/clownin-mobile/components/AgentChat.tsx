@@ -59,25 +59,37 @@ type HistoryEntry = { role: "user" | "assistant"; content: string };
 function toolLabel(tool: string, args: Record<string, unknown>): string {
   const path = typeof args.path === "string" ? args.path : "";
   switch (tool) {
-    case "list_files":   return "Listing files…";
-    case "read_file":    return `Reading ${path}`;
-    case "write_file":   return `Writing ${path}`;
-    case "create_file":  return `Creating ${path}`;
-    case "delete_file":  return `Deleting ${path}`;
-    case "run_code":     return `Running ${path}`;
-    default:             return tool;
+    case "list_files":      return "Listing files…";
+    case "read_file":       return `Reading ${path}`;
+    case "write_file":      return `Writing ${path}`;
+    case "create_file":     return `Creating ${path}`;
+    case "delete_file":     return `Deleting ${path}`;
+    case "run_code":        return `Running ${path}`;
+    case "install_packages": {
+      const pkgs = Array.isArray(args.packages) ? (args.packages as string[]).join(", ") : "";
+      return `Installing ${pkgs}`;
+    }
+    case "enable_preview":  return "Generating preview link…";
+    case "deploy": {
+      const platform = typeof args.platform === "string" ? args.platform : "hosting";
+      return `Deploying to ${platform}…`;
+    }
+    default:                return tool;
   }
 }
 
 function toolIcon(tool: string): string {
   switch (tool) {
-    case "list_files":   return "format-list-bulleted";
-    case "read_file":    return "file-eye-outline";
+    case "list_files":       return "format-list-bulleted";
+    case "read_file":        return "file-eye-outline";
     case "write_file":
-    case "create_file":  return "file-edit-outline";
-    case "delete_file":  return "file-remove-outline";
-    case "run_code":     return "play-circle-outline";
-    default:             return "wrench-outline";
+    case "create_file":      return "file-edit-outline";
+    case "delete_file":      return "file-remove-outline";
+    case "run_code":         return "play-circle-outline";
+    case "install_packages": return "package-down";
+    case "enable_preview":   return "link-variant";
+    case "deploy":           return "rocket-launch-outline";
+    default:                 return "wrench-outline";
   }
 }
 

@@ -1,10 +1,12 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { join } from "path";
+import { randomBytes, createHash } from "crypto";
 import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
+import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 import OpenAI from "openai";
 
 const router: IRouter = Router();
@@ -116,6 +118,42 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
           },
         },
         required: ["packages", "manager"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "enable_preview",
+      description:
+        "Generate or retrieve the shareable live-preview link for this project. The link is public and works instantly — no deployment needed. Use this whenever the user asks to preview, share, or show their project. Returns the full URL.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "deploy",
+      description:
+        "Deploy the project to a live hosting platform (Netlify or Vercel). Use this when the user wants a permanent public URL — not just a preview. Requires a platform API token. If the user hasn't provided a token, ask for it before calling this tool.",
+      parameters: {
+        type: "object",
+        properties: {
+          platform: {
+            type: "string",
+            enum: ["netlify", "vercel"],
+            description: "Hosting platform to deploy to",
+          },
+          token: {
+            type: "string",
+            description: "Platform API token (Netlify personal access token or Vercel access token)",
+          },
+          site_name: {
+            type: "string",
+            description: "Optional site/project name slug. Defaults to the project name.",
+          },
+        },
+        required: ["platform", "token"],
       },
     },
   },
@@ -295,6 +333,10 @@ When the user asks you to build something:
 2. Write complete, working code — no TODOs, no placeholders, no "add your logic here".
 3. After writing, always run_code to verify. Fix errors and re-run until exit 0.
 4. Be brief in your final response: what you built + how to run it. No lengthy explanations.
+
+Preview & Deploy:
+- If the user asks to preview, share, or show their project → call enable_preview immediately. No setup needed.
+- If the user asks to deploy or publish → call deploy. If they haven't provided a token, ask for it first, then call deploy once you have it.
 
 Current files:
 ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}`;
@@ -558,6 +600,153 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                   );
                   result = [stdout && `stdout:\n${stdout.trimEnd()}`, stderr && `stderr:\n${stderr.trimEnd()}`, `exit: ${exitCode}`].filter(Boolean).join("\n");
                   if (exitCode !== 0) isError = true;
+                }
+                break;
+              }
+
+              case "enable_preview": {
+                // Fetch project and reuse or generate a short ID
+                const [proj] = await db.select().from(projectsTable)
+                  .where(eq(projectsTable.id, projectId)).limit(1);
+
+                let shortId = (proj?.previewEnabled && proj?.previewShortId) ? proj.previewShortId : null;
+                if (!shortId) {
+                  // Generate a unique 10-hex short ID (same algorithm as preview/enable route)
+                  for (let attempt = 0; attempt < 5; attempt++) {
+                    const candidate = randomBytes(5).toString("hex");
+                    const [conflict] = await db.select({ id: projectsTable.id })
+                      .from(projectsTable)
+                      .where(eq(projectsTable.previewShortId, candidate))
+                      .limit(1);
+                    if (!conflict) { shortId = candidate; break; }
+                  }
+                  if (!shortId) { result = "Could not generate preview ID — try again."; isError = true; break; }
+                }
+
+                await db.update(projectsTable)
+                  .set({ previewShortId: shortId, previewEnabled: true })
+                  .where(eq(projectsTable.id, projectId));
+
+                const baseUrl = `${req.protocol}://${req.get("host")}`;
+                result = `Preview ready! Share this link:\n${baseUrl}/preview/${shortId}`;
+                break;
+              }
+
+              case "deploy": {
+                const platform  = String(args.platform ?? "netlify");
+                const token     = String(args.token ?? "");
+                const siteName  = args.site_name ? String(args.site_name) : undefined;
+
+                if (!token) {
+                  result = "token is required. Please provide your Netlify or Vercel API token.";
+                  isError = true;
+                  break;
+                }
+
+                const allFiles = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+                if (!allFiles.length) {
+                  result = "No files to deploy — create some files first.";
+                  isError = true;
+                  break;
+                }
+
+                const [proj] = await db.select().from(projectsTable)
+                  .where(eq(projectsTable.id, projectId)).limit(1);
+
+                const cleanName = (siteName || proj?.name || "clownin-app")
+                  .toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-")
+                  .replace(/^-|-$/g, "").slice(0, 63);
+
+                const rawFiles = allFiles.map((f) => ({ path: f.path, content: f.content }));
+
+                if (platform === "netlify") {
+                  const { files: deployFiles, type, warning } = prepareNetlifyFiles(rawFiles);
+
+                  // 1. Create site
+                  const siteRes = await fetch(`https://api.netlify.com/api/v1/sites`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "User-Agent": "Clownin-App/1.0" },
+                    body: JSON.stringify({ name: cleanName }),
+                  });
+                  if (!siteRes.ok) {
+                    const err = (await siteRes.json().catch(() => ({}))).message || `Netlify error ${siteRes.status}`;
+                    result = `Netlify error: ${err}`; isError = true; break;
+                  }
+                  const site = await siteRes.json() as { id: string; ssl_url?: string; url?: string };
+
+                  // 2. Build digest map
+                  const fileMap: Record<string, string> = {};
+                  const contentMap: Record<string, Buffer> = {};
+                  for (const f of deployFiles) {
+                    const buf = Buffer.from(f.content, "utf8");
+                    const sha1 = createHash("sha1").update(buf).digest("hex");
+                    const key = f.path.startsWith("/") ? f.path : `/${f.path}`;
+                    fileMap[key] = sha1;
+                    contentMap[key] = buf;
+                  }
+
+                  // 3. Create deploy
+                  const deployRes = await fetch(`https://api.netlify.com/api/v1/sites/${site.id}/deploys`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "User-Agent": "Clownin-App/1.0" },
+                    body: JSON.stringify({ files: fileMap }),
+                  });
+                  if (!deployRes.ok) {
+                    const err = (await deployRes.json().catch(() => ({}))).message || `Netlify deploy error ${deployRes.status}`;
+                    result = `Netlify error: ${err}`; isError = true; break;
+                  }
+                  const deploy = await deployRes.json() as { id: string; required: string[] };
+
+                  // 4. Upload required files
+                  const required = new Set(deploy.required ?? []);
+                  for (const [path, buf] of Object.entries(contentMap)) {
+                    const sha1 = fileMap[path];
+                    if (!required.has(sha1)) continue;
+                    const encoded = path.split("/").map(encodeURIComponent).join("/");
+                    await fetch(`https://api.netlify.com/api/v1/deploys/${deploy.id}/files${encoded}`, {
+                      method: "PUT",
+                      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream", "Content-Length": String(buf.length), "User-Agent": "Clownin-App/1.0" },
+                      body: buf,
+                    });
+                  }
+
+                  const liveUrl = site.ssl_url || site.url || `https://${cleanName}.netlify.app`;
+                  result = `Deployed to Netlify! 🚀\nLive URL: ${liveUrl}\nType: ${type}${warning ? `\nNote: ${warning}` : ""}`;
+
+                } else if (platform === "vercel") {
+                  const { files: deployFiles, type, warning } = prepareVercelFiles(rawFiles);
+
+                  // 1. Upload files
+                  const fileRefs: Array<{ file: string; sha: string; size: number }> = [];
+                  for (const f of deployFiles) {
+                    const buf = Buffer.from(f.content, "utf8");
+                    const sha1 = createHash("sha1").update(buf).digest("hex");
+                    await fetch(`https://api.vercel.com/v2/files`, {
+                      method: "POST",
+                      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream", "Content-Length": String(buf.length), "x-vercel-digest": sha1, "User-Agent": "Clownin-App/1.0" },
+                      body: buf,
+                    });
+                    fileRefs.push({ file: f.path, sha: sha1, size: buf.length });
+                  }
+
+                  // 2. Create deployment
+                  const deplRes = await fetch(`https://api.vercel.com/v13/deployments`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "User-Agent": "Clownin-App/1.0" },
+                    body: JSON.stringify({ name: cleanName, files: fileRefs, projectSettings: { framework: null }, target: "production" }),
+                  });
+                  const depl = await deplRes.json() as { url?: string; id?: string; error?: { message?: string } };
+                  if (!deplRes.ok) {
+                    result = `Vercel error: ${depl.error?.message || deplRes.status}`; isError = true; break;
+                  }
+
+                  const liveUrl = depl.url ? `https://${depl.url}` : `https://${cleanName}.vercel.app`;
+                  result = `Deployed to Vercel! 🚀\nLive URL: ${liveUrl}\nType: ${type}${warning ? `\nNote: ${warning}` : ""}`;
+
+                } else {
+                  result = `Unknown platform: ${platform}. Supported: netlify, vercel.`;
+                  isError = true;
                 }
                 break;
               }
