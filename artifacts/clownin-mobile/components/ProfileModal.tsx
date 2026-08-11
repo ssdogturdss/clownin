@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -147,6 +148,15 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
 
                 {/* Divider */}
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* Privacy Policy */}
+                <Pressable
+                  style={styles.privacyBtn}
+                  onPress={() => Linking.openURL('https://clownin.app/privacy')}
+                >
+                  <Ionicons name="shield-checkmark-outline" size={16} color={colors.mutedForeground} />
+                  <Text style={[styles.privacyText, { color: colors.mutedForeground }]}>Privacy Policy</Text>
+                </Pressable>
 
                 {/* Sign out */}
                 <Pressable style={styles.signOutBtn} onPress={handleLogout}>
@@ -288,6 +298,16 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 1,
     marginVertical: 4,
+  },
+  privacyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  privacyText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
   },
   signOutBtn: {
     flexDirection: 'row',
