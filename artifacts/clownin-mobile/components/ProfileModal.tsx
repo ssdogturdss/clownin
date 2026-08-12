@@ -8,8 +8,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Linking,
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -149,14 +149,24 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
                 {/* Divider */}
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-                {/* Privacy Policy */}
-                <Pressable
-                  style={styles.privacyBtn}
-                  onPress={() => Linking.openURL('https://clownin.app/privacy')}
-                >
-                  <Ionicons name="shield-checkmark-outline" size={16} color={colors.mutedForeground} />
-                  <Text style={[styles.privacyText, { color: colors.mutedForeground }]}>Privacy Policy</Text>
-                </Pressable>
+                {/* Legal links */}
+                <View style={styles.legalRow}>
+                  <Pressable
+                    style={styles.legalBtn}
+                    onPress={() => WebBrowser.openBrowserAsync('https://clownin.app/privacy')}
+                  >
+                    <Ionicons name="shield-checkmark-outline" size={16} color={colors.mutedForeground} />
+                    <Text style={[styles.legalText, { color: colors.mutedForeground }]}>Privacy Policy</Text>
+                  </Pressable>
+                  <Text style={[styles.legalSeparator, { color: colors.border }]}>·</Text>
+                  <Pressable
+                    style={styles.legalBtn}
+                    onPress={() => WebBrowser.openBrowserAsync('https://clownin.app/terms')}
+                  >
+                    <Ionicons name="document-text-outline" size={16} color={colors.mutedForeground} />
+                    <Text style={[styles.legalText, { color: colors.mutedForeground }]}>Terms of Service</Text>
+                  </Pressable>
+                </View>
 
                 {/* Sign out */}
                 <Pressable style={styles.signOutBtn} onPress={handleLogout}>
@@ -299,15 +309,23 @@ const styles = StyleSheet.create({
     height: 1,
     marginVertical: 4,
   },
-  privacyBtn: {
+  legalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  legalBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingVertical: 4,
   },
-  privacyText: {
+  legalText: {
     fontSize: 13,
     fontFamily: 'Inter_400Regular',
+  },
+  legalSeparator: {
+    fontSize: 16,
   },
   signOutBtn: {
     flexDirection: 'row',
