@@ -6,6 +6,7 @@
  */
 
 import { Client as SshClient, type ConnectConfig } from "ssh2";
+import { createHash } from "crypto";
 import type { ProjectFile } from "@workspace/db";
 import { buildShellEnvPrefix, buildBase64EnvSetup } from "./envCrypto";
 
@@ -56,7 +57,7 @@ export async function testSshConnection(srv: SshServerConfig): Promise<void> {
   conn.end();
 }
 
-function getRemoteCommand(language: string, filePath: string): string | null {
+function getRemoteCommand(language: string, filePath: string, absDir?: string): string | null {
   switch (language) {
     case "javascript":
     case "js":
@@ -68,6 +69,11 @@ function getRemoteCommand(language: string, filePath: string): string | null {
     case "python":
     case "python3":
     case "py":
+      // Use the project-local venv interpreter if available so that packages
+      // installed by pip install -r requirements.txt are on sys.path.
+      if (absDir) {
+        return `{ [ -f "${absDir}/.venv/bin/python3" ] && "${absDir}/.venv/bin/python3" "${filePath}" || python3 "${filePath}"; }`;
+      }
       return `python3 "${filePath}"`;
     case "bash":
     case "sh":
@@ -75,6 +81,75 @@ function getRemoteCommand(language: string, filePath: string): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * Build a shell script that checks whether npm packages / pip packages need
+ * installing on the remote host, and runs the install tool if so.
+ *
+ * Uses a hash of the manifest content (computed locally) that is embedded in
+ * the script and compared to a stored hash file on the remote machine.
+ * Returns null when no dependency manifest was found.
+ */
+function buildRemoteInstallScript(absDir: string, files: ProjectFile[]): string | null {
+  const parts: string[] = [];
+
+  const pkgFile = files.find((f) => f.path === "package.json");
+  if (pkgFile) {
+    const hash = createHash("sha256").update(pkgFile.content, "utf8").digest("hex");
+    // hex chars are A-Za-z0-9 only — safe unquoted inside double-quoted shell strings
+    parts.push(
+      `stored_npm=$(cat "${absDir}/.clownin-npm-hash" 2>/dev/null || echo ''); ` +
+      `if [ "${hash}" != "$stored_npm" ] || [ ! -d "${absDir}/node_modules" ]; then ` +
+        `echo "[Installing npm packages...]"; ` +
+        `npm install --prefix "${absDir}" --prefer-offline 2>&1; ` +
+        `echo "${hash}" > "${absDir}/.clownin-npm-hash"; ` +
+      `fi`
+    );
+  }
+
+  const reqFile = files.find((f) => f.path === "requirements.txt");
+  if (reqFile) {
+    const hash = createHash("sha256").update(reqFile.content, "utf8").digest("hex");
+    parts.push(
+      `stored_pip=$(cat "${absDir}/.clownin-pip-hash" 2>/dev/null || echo ''); ` +
+      `if [ "${hash}" != "$stored_pip" ] || [ ! -d "${absDir}/.venv" ]; then ` +
+        `echo "[Creating Python virtual environment...]"; ` +
+        `python3 -m venv "${absDir}/.venv" 2>&1; ` +
+        `echo "[Installing pip packages...]"; ` +
+        `"${absDir}/.venv/bin/pip" install --quiet -r "${absDir}/requirements.txt" 2>&1; ` +
+        `echo "${hash}" > "${absDir}/.clownin-pip-hash"; ` +
+      `fi`
+    );
+  }
+
+  return parts.length > 0 ? parts.join(" && ") : null;
+}
+
+/** Run a shell install script over an existing SSH connection, streaming output line-by-line. */
+function runRemoteInstall(
+  conn: SshClient,
+  script: string,
+  onLine: (line: string) => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    conn.exec(script, (err, stream) => {
+      if (err) { onLine(`[Install skipped: ${err.message}]`); resolve(); return; }
+      let buf = "";
+      const emit = (d: Buffer) => {
+        buf += d.toString("utf8");
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) { if (line) onLine(line); }
+      };
+      stream.on("data", emit);
+      stream.stderr?.on("data", emit);
+      stream.on("close", () => {
+        if (buf) onLine(buf);
+        resolve();
+      });
+    });
+  });
 }
 
 /**
@@ -240,7 +315,7 @@ export async function startSshServerBackground(
           sftp.end();
 
           const remoteFile = `${absDir}/${targetPath}`;
-          const cmd = getRemoteCommand(language, remoteFile);
+          const cmd = getRemoteCommand(language, remoteFile, absDir);
           if (!cmd) { conn.end(); reject(new Error(`Unsupported language: ${language}`)); return; }
 
           const logFile = `/tmp/clownin-serve-${projectId}.log`;
@@ -422,6 +497,31 @@ export function startSshLogTail(
   });
 }
 
+/**
+ * Wipe node_modules, .venv, and cached install hashes from the remote project
+ * directory so the next run reinstalls packages from scratch. Best-effort.
+ */
+export async function cleanRemotePackages(
+  srv: SshServerConfig,
+  projectId: number,
+): Promise<void> {
+  let conn: SshClient;
+  try { conn = await openConnection(srv); }
+  catch { return; }
+  const absDir = `${REMOTE_BASE}/${projectId}`.replace("~", `/home/${srv.username}`);
+  return new Promise((resolve) => {
+    conn.exec(
+      `rm -rf "${absDir}/node_modules" "${absDir}/.venv" "${absDir}/.clownin-npm-hash" "${absDir}/.clownin-pip-hash"`,
+      (err, stream) => {
+        if (err) { conn.end(); resolve(); return; }
+        stream.resume();
+        stream.stderr?.resume();
+        stream.on("close", () => { conn.end(); resolve(); });
+      },
+    );
+  });
+}
+
 export async function stopSshServerBackground(
   srv: SshServerConfig,
   pid: number,
@@ -446,6 +546,8 @@ export function streamRemoteProcess(
   language: string,
   handlers: {
     onStreamReady?: (writeStdin: (data: string) => boolean) => void;
+    /** System-phase output (install logs). Falls back to onStdout if not provided. */
+    onSystem?: (chunk: string) => void;
     onStdout: (chunk: string) => void;
     onStderr: (chunk: string) => void;
     onExit: (code: number) => void;
@@ -506,7 +608,7 @@ export function streamRemoteProcess(
           }
 
           const remoteFile = `${absDir}/${targetPath}`;
-          const cmd = getRemoteCommand(language, remoteFile);
+          const cmd = getRemoteCommand(language, remoteFile, absDir);
           if (!cmd) {
             sftp.end();
             conn.end();
@@ -517,6 +619,16 @@ export function streamRemoteProcess(
           sftp.end();
 
           if (signal?.aborted) { conn.end(); return; }
+
+          // ── Remote install step (npm / pip) ───────────────────────────────
+          // Runs before the main exec so packages are available at runtime.
+          // Output streams as "system" events (grey in the terminal).
+          const installScript = buildRemoteInstallScript(absDir, files);
+          if (installScript) {
+            const onSystemLine = handlers.onSystem ?? handlers.onStdout;
+            await runRemoteInstall(conn, installScript, onSystemLine);
+            if (signal?.aborted) { conn.end(); return; }
+          }
 
           const envPrefix = buildShellEnvPrefix(envVars ?? {});
           conn.exec(`cd "${absDir}" && ${envPrefix}${cmd}`, (execErr, stream) => {

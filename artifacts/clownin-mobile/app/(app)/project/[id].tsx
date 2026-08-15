@@ -137,6 +137,12 @@ export default function ProjectEditorScreen() {
   const { data: servers = [] } = useListServers();
   const updateProjectMutation = useUpdateProject();
 
+  // Whether this project has a dependency manifest that triggers auto-install.
+  // Used to show/hide the "Clean install" long-press option on the Run button.
+  const hasDepFiles = (project?.files ?? []).some(
+    (f) => f.path === 'package.json' || f.path === 'requirements.txt',
+  );
+
   const handlePickServer = useCallback(() => {
     const activeServer = servers.find((s) => s.id === project?.serverId);
     const options = [
@@ -628,6 +634,9 @@ export default function ProjectEditorScreen() {
                 } else if (event.type === 'stderr') {
                   const stripped = event.payload.replace(/\n$/, '');
                   if (stripped) addLine('stderr', stripped);
+                } else if (event.type === 'system') {
+                  const stripped = event.payload.replace(/\n$/, '');
+                  if (stripped) addLine('system', stripped);
                 } else if (event.type === 'exit') {
                   const code = parseInt(event.payload, 10);
                   setExitCode(code);
@@ -658,6 +667,40 @@ export default function ProjectEditorScreen() {
     }
     return process.env.EXPO_PUBLIC_DOMAIN ?? '';
   }, []);
+
+  // ── Clean install ──────────────────────────────────────────────────────────
+  // Wipes node_modules / .venv so the next run reinstalls from scratch.
+  const handleCleanInstall = useCallback(async () => {
+    if (!token) return;
+    const apiHost = getApiHost();
+    try {
+      const response = await fetch(`https://${apiHost}/api/projects/${projectId}/clean`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.ok) {
+        addLine('system', '[Package cache cleared — packages will reinstall on next run]');
+      } else {
+        addLine('stderr', '[Failed to clear package cache]');
+      }
+    } catch {
+      addLine('stderr', '[Failed to clear package cache: network error]');
+    }
+    openTerminal();
+  }, [token, projectId, getApiHost, addLine, openTerminal]);
+
+  const handleRunLongPress = useCallback(async () => {
+    if (!hasDepFiles) return;
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert(
+      'Run options',
+      undefined,
+      [
+        { text: 'Clean install', onPress: handleCleanInstall },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  }, [hasDepFiles, handleCleanInstall]);
 
   // ── Serve: check whether a server is already running on mount ─────────────
   useEffect(() => {
@@ -980,6 +1023,8 @@ export default function ProjectEditorScreen() {
           <Pressable
             style={[styles.runBtn, { backgroundColor: isRunning ? colors.muted : colors.primary }]}
             onPress={handleRun}
+            onLongPress={hasDepFiles && !isRunning ? handleRunLongPress : undefined}
+            delayLongPress={600}
             disabled={isRunning || !selectedFileId}
           >
             {isRunning

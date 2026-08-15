@@ -1,13 +1,20 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
+import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { db, projectsTable, projectFilesTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
-import { syncProjectFiles } from "../lib/projectWorkspace";
-import { streamRemoteProcess } from "../lib/sshExecution";
+import {
+  syncProjectFiles,
+  runInstallIfNeeded,
+  cleanProjectPackages,
+  projectDir,
+  hasDepManifest,
+} from "../lib/projectWorkspace";
+import { streamRemoteProcess, cleanRemotePackages } from "../lib/sshExecution";
 import { decrypt, filterUserEnv } from "../lib/envCrypto";
 
 const router: IRouter = Router();
@@ -124,7 +131,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
-  function sendEvent(type: "token" | "stdout" | "stderr" | "exit", payload: string) {
+  function sendEvent(type: "token" | "stdout" | "stderr" | "exit" | "system", payload: string) {
     const data = JSON.stringify({ type, payload });
     res.write(`data: ${data}\n\n`);
   }
@@ -170,6 +177,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
           activeRuns.set(runToken, { projectId, userId, writeStdin });
           sendEvent("token", runToken);
         },
+        onSystem: (chunk) => sendEvent("system", chunk),
         onStdout: (chunk) => sendEvent("stdout", chunk),
         onStderr: (chunk) => sendEvent("stderr", chunk),
         onExit: (code) => {
@@ -191,17 +199,32 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   }
 
   // ── Local execution path ───────────────────────────────────────────────────
-  let projDir: string;
+  let localProjDir: string;
   try {
-    projDir = await syncProjectFiles(projectId, allFiles);
+    localProjDir = await syncProjectFiles(projectId, allFiles);
   } catch (err) {
     req.log.error({ err }, "Failed to sync project files");
     res.status(500).json({ error: "Failed to prepare execution" });
     return;
   }
 
-  const absFilePath = join(projDir, file.path);
-  const { cmd, args } = getExecutorCommand(file.language, absFilePath)!;
+  // Run npm install / pip install if the manifest has changed or packages are absent.
+  // Output streams as "system" events so the terminal shows it in grey/italic.
+  await runInstallIfNeeded(localProjDir, allFiles, (type, text) => sendEvent(type, text));
+
+  const absFilePath = join(localProjDir, file.path);
+  let { cmd, args } = getExecutorCommand(file.language, absFilePath)!;
+
+  // For Python projects: prefer the project-local venv interpreter so that
+  // packages installed by pip install -r requirements.txt are available.
+  const { hasPip } = hasDepManifest(allFiles);
+  if (hasPip && ["python", "python3", "py"].includes(file.language)) {
+    const venvPython = join(localProjDir, ".venv", "bin", "python3");
+    if (existsSync(venvPython)) {
+      cmd = venvPython;
+      args = [absFilePath];
+    }
+  }
 
   // Strict allowlist — never pass server secrets (DATABASE_URL, JWT_SECRET, etc.)
   // to untrusted user code. Only provide what the runtime needs to find binaries.
@@ -222,7 +245,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   // stdio: 'pipe' keeps stdin open so we can write to it after the process starts.
   const child = spawn(cmd, args, {
     env: safeEnv,
-    cwd: projDir,
+    cwd: localProjDir,
     stdio: "pipe",
   });
 
@@ -290,6 +313,37 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     activeRuns.delete(runToken);
     child.kill();
   });
+});
+
+// ── Clean install ──────────────────────────────────────────────────────────────
+// Wipe node_modules / .venv from the local workspace (and the remote SSH machine
+// for SSH-linked projects) so the next run reinstalls packages from scratch.
+router.post("/projects/:id/clean", requireAuth, async (req, res): Promise<void> => {
+  const { userId } = getUser(req);
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const projectId = parseInt(rawId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid project id" }); return; }
+
+  const [project] = await db.select().from(projectsTable)
+    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId))).limit(1);
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  // Always wipe local workspace (idempotent if workspace doesn't exist yet)
+  await cleanProjectPackages(projectDir(projectId));
+
+  // For SSH-linked projects, also clean on the remote machine (best-effort)
+  if (project.serverId) {
+    const [server] = await db.select().from(serversTable)
+      .where(and(eq(serversTable.id, project.serverId), eq(serversTable.userId, userId))).limit(1);
+    if (server) {
+      await cleanRemotePackages(
+        { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },
+        projectId,
+      ).catch(() => {}); // best-effort — don't fail if SSH is unreachable
+    }
+  }
+
+  res.json({ ok: true });
 });
 
 // ── Stdin ──────────────────────────────────────────────────────────────────────
