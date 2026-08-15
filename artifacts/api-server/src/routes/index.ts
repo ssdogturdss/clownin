@@ -10,6 +10,7 @@ import deployRouter from "./deploy";
 import privacyRouter from "./privacy";
 import termsRouter from "./terms";
 import serversRouter from "./servers";
+import serveRouter from "./serve";
 
 const router: IRouter = Router();
 
@@ -24,6 +25,7 @@ router.use(deployRouter);
 router.use(privacyRouter);
 router.use(termsRouter);
 router.use(serversRouter);
+router.use(serveRouter);
 
 export default router;
 

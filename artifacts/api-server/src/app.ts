@@ -6,6 +6,7 @@ import router, { previewRouter } from "./routes";
 import privacyRouter from "./routes/privacy";
 import termsRouter from "./routes/terms";
 import { logger } from "./lib/logger";
+import { serveProxyRouter } from "./routes/serve";
 
 const app: Express = express();
 
@@ -29,6 +30,12 @@ app.use(
   }),
 );
 app.use(cors());
+
+// ⚠️  The serve proxy MUST be mounted before express.json() / express.urlencoded().
+// Body parsers consume req as a stream; the proxy needs to pipe it raw to the
+// upstream port. Mounting here ensures no body parser runs first for proxy paths.
+app.use(serveProxyRouter);
+
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 

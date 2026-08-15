@@ -15,6 +15,7 @@ import {
   PanResponder,
   KeyboardAvoidingView,
   Keyboard,
+  Linking,
   useWindowDimensions,
   type LayoutChangeEvent,
 } from 'react-native';
@@ -355,6 +356,11 @@ export default function ProjectEditorScreen() {
   const runTokenRef = useRef<string | null>(null);
   const [stdinInput, setStdinInput] = useState('');
 
+  // Serve state — long-lived server preview
+  const [isServing, setIsServing] = useState(false);
+  const [serveUrl, setServeUrl] = useState<string | null>(null);
+  const [isServeLaunching, setIsServeLaunching] = useState(false);
+
   // Terminal height — derived from the measured workspace panel, not full screen dims.
   // The workspace panel gets (containerMain - chatSize - 5px divider) of the split container.
   const workspaceMain = Math.max(0, containerMain - chatSize - 5);
@@ -645,6 +651,136 @@ export default function ProjectEditorScreen() {
 
   useEffect(() => { handleRunRef.current = handleRun; }, [handleRun]);
 
+  // ── Serve: helper to get the API base URL ──────────────────────────────────
+  const getApiHost = useCallback((): string => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      return window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev');
+    }
+    return process.env.EXPO_PUBLIC_DOMAIN ?? '';
+  }, []);
+
+  // ── Serve: check whether a server is already running on mount ─────────────
+  useEffect(() => {
+    if (!token) return;
+    fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((data: { running: boolean; url?: string }) => {
+        if (data.running && data.url) {
+          setIsServing(true);
+          setServeUrl(data.url);
+          openTerminal();
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run once on mount
+
+  // ── Serve: stream server logs via SSE while a server is running ────────────
+  useEffect(() => {
+    if (!isServing || !token) return;
+    let aborted = false;
+
+    (async () => {
+      try {
+        const url = `https://${getApiHost()}/api/projects/${projectId}/serve/logs`;
+        const response = await expoFetch(url, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+          // @ts-ignore expo fetch streaming
+          reactNative: { textStreaming: true },
+        });
+        if (!response.ok || aborted) return;
+
+        const reader = response.body?.getReader();
+        if (!reader) return;
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+          for (const part of parts) {
+            for (const rawLine of part.split('\n')) {
+              if (!rawLine.startsWith('data: ')) continue;
+              try {
+                const event = JSON.parse(rawLine.slice(6)) as { type: string; payload: string };
+                if (event.type === 'url') {
+                  setServeUrl(event.payload);
+                } else if (event.type === 'stdout') {
+                  const s = event.payload.replace(/\n$/, '');
+                  if (s) addLine('stdout', s);
+                } else if (event.type === 'stderr') {
+                  const s = event.payload.replace(/\n$/, '');
+                  if (s) addLine('stderr', s);
+                } else if (event.type === 'system') {
+                  addLine('system', event.payload);
+                } else if (event.type === 'exit') {
+                  addLine('system', `[Server stopped (exit ${event.payload})]`);
+                  setIsServing(false);
+                  setServeUrl(null);
+                }
+              } catch { /* skip malformed */ }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (!aborted) {
+          addLine('stderr', err instanceof Error ? err.message : 'Serve log stream error');
+        }
+      }
+    })();
+
+    return () => { aborted = true; };
+  }, [isServing, token, projectId, getApiHost, addLine]);
+
+  // ── Start a long-lived server process ─────────────────────────────────────
+  const handleServe = useCallback(async () => {
+    if (!selectedFileId || !token || isServeLaunching || isServing) return;
+    setIsServeLaunching(true);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    openTerminal();
+    addLine('system', '$ Starting server…');
+    try {
+      const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fileId: selectedFileId }),
+      });
+      if (!response.ok) {
+        const err = (await response.json()) as { error?: string };
+        addLine('stderr', `[Serve failed: ${err.error ?? response.status}]`);
+        return;
+      }
+      const data = (await response.json()) as { url: string; port: number };
+      setIsServing(true);
+      setServeUrl(data.url);
+    } catch (err: unknown) {
+      addLine('stderr', `[Serve error: ${err instanceof Error ? err.message : String(err)}]`);
+    } finally {
+      setIsServeLaunching(false);
+    }
+  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine]);
+
+  // ── Stop the running server ────────────────────────────────────────────────
+  const handleStopServe = useCallback(async () => {
+    if (!token) return;
+    setIsServing(false);
+    setServeUrl(null);
+    addLine('system', '[Stopping server…]');
+    try {
+      await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch { /* best effort */ }
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  }, [token, projectId, getApiHost, addLine]);
+
   // ── Create file ───────────────────────────────────────────────────────────
   const handleCreateFile = async () => {
     if (!newFilePath.trim()) return;
@@ -705,7 +841,9 @@ export default function ProjectEditorScreen() {
 
   const selectedFile = project?.files.find((f) => f.id === selectedFileId);
   const RUNNABLE_LANGS = new Set(["javascript", "typescript", "python", "bash", "js", "ts", "py", "sh"]);
+  const SERVEABLE_LANGS = new Set(["javascript", "typescript", "python", "js", "ts", "py"]);
   const canRun = selectedFile ? RUNNABLE_LANGS.has(selectedFile.language) : false;
+  const canServe = selectedFile ? SERVEABLE_LANGS.has(selectedFile.language) : false;
   const canPreview = selectedFile?.language === "html" || selectedFile?.path.endsWith(".html");
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const sidebarWidth = sidebarAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 160] });
@@ -807,6 +945,28 @@ export default function ProjectEditorScreen() {
         >
           <MaterialCommunityIcons name="github" size={18} color={colors.foreground} />
         </Pressable>
+
+        {canServe && (
+          <Pressable
+            style={[
+              styles.headerIconBtn,
+              {
+                backgroundColor: isServing ? '#0d2417' : colors.card,
+                borderColor: isServing ? '#3fb950' : colors.border,
+              },
+            ]}
+            onPress={isServing ? handleStopServe : handleServe}
+            disabled={isServeLaunching || (!isServing && !selectedFileId)}
+            hitSlop={4}
+          >
+            {isServeLaunching
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : isServing
+                ? <Ionicons name="stop-circle-outline" size={18} color="#3fb950" />
+                : <Ionicons name="globe-outline" size={18} color={colors.foreground} />
+            }
+          </Pressable>
+        )}
 
         {canRun && (
           <Pressable
@@ -988,7 +1148,7 @@ export default function ProjectEditorScreen() {
                   <Text style={[styles.termTitle, { color: '#8b949e' }]}>Terminal</Text>
                 </View>
                 <View style={styles.termHeaderRight}>
-                  {exitCode !== null && (
+                  {exitCode !== null && !isServing && (
                     <View style={[styles.exitBadge, { backgroundColor: exitCode === 0 ? '#3fb95022' : '#f8514922', borderColor: exitCode === 0 ? '#3fb95055' : '#f8514955' }]}>
                       <Text style={[styles.exitText, { color: exitCode === 0 ? '#3fb950' : '#f85149' }]}>exit {exitCode}</Text>
                     </View>
@@ -1001,6 +1161,18 @@ export default function ProjectEditorScreen() {
                   </Pressable>
                 </View>
               </View>
+
+              {/* ── Serve URL banner — tappable link while server is live ── */}
+              {isServing && serveUrl && (
+                <Pressable
+                  style={styles.serveBanner}
+                  onPress={() => Linking.openURL(serveUrl)}
+                >
+                  <View style={[styles.serveLiveDot, { backgroundColor: '#3fb950' }]} />
+                  <Text style={styles.serveUrlText} numberOfLines={1}>{serveUrl}</Text>
+                  <Ionicons name="open-outline" size={12} color="#3fb950" />
+                </Pressable>
+              )}
 
               <ScrollView
                 ref={termScrollRef}
@@ -1302,6 +1474,18 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   stdinSendBtn: { padding: 6 },
+
+  // Serve URL banner (inside terminal panel)
+  serveBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 7,
+    backgroundColor: '#0d2417', borderBottomWidth: 1, borderBottomColor: '#1a4020',
+  },
+  serveLiveDot: { width: 7, height: 7, borderRadius: 4 },
+  serveUrlText: {
+    flex: 1, fontSize: 11, color: '#3fb950',
+    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
+  },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
