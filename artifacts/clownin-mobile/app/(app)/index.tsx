@@ -312,45 +312,51 @@ export default function ProjectsScreen() {
           }
           renderItem={({ item }) => (
             <View style={[styles.projectCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {/* Header row: folder + name + badge + delete — all siblings at the same level */}
+              <View style={styles.cardTop}>
+                <Pressable
+                  style={({ pressed }) => [styles.cardLeft, pressed && styles.cardPressed]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push(`/(app)/project/${item.id}`);
+                  }}
+                  onLongPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    setRenameProject(item);
+                    setRenameName(item.name);
+                  }}
+                >
+                  <MaterialCommunityIcons
+                    name="folder-outline"
+                    size={18}
+                    color={colors.primary}
+                    style={styles.folderIcon}
+                  />
+                  <Text style={[styles.projectName, { color: colors.foreground }]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </Pressable>
+                <LangBadge language={item.language} />
+                <Pressable
+                  style={styles.cardDeleteBtn}
+                  onPress={() => handleDelete(item)}
+                  hitSlop={8}
+                >
+                  <Ionicons name="trash-outline" size={16} color={colors.destructive} />
+                </Pressable>
+              </View>
+              {/* Tapping the date row also opens the project */}
               <Pressable
-                style={({ pressed }) => [pressed && styles.cardPressed]}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   router.push(`/(app)/project/${item.id}`);
                 }}
-                onLongPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  setRenameProject(item);
-                  setRenameName(item.name);
-                }}
               >
-                <View style={styles.cardTop}>
-                  <View style={styles.cardLeft}>
-                    <MaterialCommunityIcons
-                      name="folder-outline"
-                      size={18}
-                      color={colors.primary}
-                      style={styles.folderIcon}
-                    />
-                    <Text style={[styles.projectName, { color: colors.foreground }]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                  </View>
-                  <LangBadge language={item.language} />
-                </View>
                 <View style={styles.cardBottom}>
                   <Text style={[styles.dateText, { color: colors.mutedForeground }]}>
                     Updated {formatDate(item.updatedAt)}
                   </Text>
                 </View>
-              </Pressable>
-              {/* Delete button is a sibling — not nested — so touches are never swallowed by the card Pressable */}
-              <Pressable
-                style={styles.cardDeleteBtn}
-                onPress={() => handleDelete(item)}
-                hitSlop={8}
-              >
-                <Ionicons name="trash-outline" size={16} color={colors.destructive} />
               </Pressable>
             </View>
           )}
@@ -509,14 +515,13 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   cardPressed: { opacity: 0.8 },
-  cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   folderIcon: { marginRight: 8 },
   projectName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', flex: 1 },
   cardBottom: { flexDirection: 'row', alignItems: 'center' },
   dateText: { fontSize: 12, fontFamily: 'Inter_400Regular' },
-  // Absolutely-positioned so it is never nested inside the card Pressable
-  cardDeleteBtn: { position: 'absolute', bottom: 14, right: 14, padding: 6 },
+  cardDeleteBtn: { padding: 6 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalBox: { width: 320, borderRadius: 16, borderWidth: 1, padding: 24, gap: 12 },
   modalTitle: { fontSize: 20, fontFamily: 'Inter_700Bold', marginBottom: 4 },
