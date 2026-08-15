@@ -3,11 +3,12 @@ import { spawn } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { db, projectsTable, projectFilesTable, serversTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles } from "../lib/projectWorkspace";
 import { streamRemoteProcess } from "../lib/sshExecution";
+import { decrypt, filterUserEnv } from "../lib/envCrypto";
 
 const router: IRouter = Router();
 
@@ -104,6 +105,18 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     .from(projectFilesTable)
     .where(eq(projectFilesTable.projectId, projectId));
 
+  // Load and decrypt the project's env vars. We decrypt here (server-side only)
+  // and never return raw values to the client.
+  const envVarRows = await db
+    .select({ key: projectEnvVarsTable.key, encryptedValue: projectEnvVarsTable.encryptedValue })
+    .from(projectEnvVarsTable)
+    .where(eq(projectEnvVarsTable.projectId, projectId));
+
+  const userEnv: Record<string, string> = {};
+  for (const v of envVarRows) {
+    try { userEnv[v.key] = decrypt(v.encryptedValue); } catch { /* skip corrupted */ }
+  }
+
   // Set up SSE
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -171,7 +184,8 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
           res.end();
         },
       },
-      abortSignal
+      abortSignal,
+      filterUserEnv(userEnv)   // strip reserved keys (PATH, PORT, etc.) so remote shell is not broken
     );
     return;
   }
@@ -191,7 +205,11 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
 
   // Strict allowlist — never pass server secrets (DATABASE_URL, JWT_SECRET, etc.)
   // to untrusted user code. Only provide what the runtime needs to find binaries.
+  // User-defined env vars are merged first so that system vars always win.
   const safeEnv: NodeJS.ProcessEnv = {
+    // User-supplied env vars filtered of reserved keys, then system vars override
+    ...filterUserEnv(userEnv),
+    // System vars always override to prevent PATH hijacking etc.
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     TMPDIR: process.env.TMPDIR ?? tmpdir(),

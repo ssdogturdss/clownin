@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
-import { db, projectsTable, projectFilesTable, usersTable, serversTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
@@ -194,6 +194,10 @@ function runProcess(
   timeoutMs: number
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
+    // Do NOT inject project env vars here — the model controls what run_code
+    // executes, so giving it access to decrypted secrets would allow exfiltration
+    // through stdout/tool-result messages sent to OpenAI. Env var injection is
+    // reserved for user-initiated /execute and /serve endpoints only.
     const safeEnv: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
@@ -314,6 +318,18 @@ router.post(
       .from(projectFilesTable)
       .where(eq(projectFilesTable.projectId, projectId));
 
+    // Load env var key names only — injected into the system prompt so the agent
+    // knows which secrets are configured in this project.
+    // SECURITY: values are NEVER decrypted here. The agent controls run_code and
+    // could write code to print process.env, leaking secrets back to the model
+    // through tool output. Env var values are only decrypted for user-initiated
+    // runs (the /execute and /serve endpoints), never for agent-controlled runs.
+    const envVarRows = await db
+      .select({ key: projectEnvVarsTable.key })
+      .from(projectEnvVarsTable)
+      .where(eq(projectEnvVarsTable.projectId, projectId));
+    const envVarKeys = envVarRows.map((r) => r.key);
+
     // SSE setup
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -340,7 +356,7 @@ Preview & Deploy:
 - If the user asks to deploy or publish → call deploy. If they haven't provided a token, ask for it first, then call deploy once you have it.
 
 Current files:
-${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}`;
+${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}${envVarKeys.length > 0 ? `\n\nEnvironment variables set for this project (available in code via process.env / os.environ during user-initiated runs; NOT injected into agent-controlled executions):\n${envVarKeys.map((k) => `  ${k}`).join("\n")}` : ""}`;
 
     const conversationHistory: OpenAI.ChatCompletionMessageParam[] = Array.isArray(history)
       ? history
@@ -565,6 +581,8 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                       result = "Custom server not found — detach it from this project and try again.";
                       isError = true;
                     } else {
+                      // No project env vars injected here — model controls run_code
+                      // and could exfiltrate secrets through tool output.
                       const { stdout, stderr, exitCode } = await runRemoteProcess(
                         { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },
                         projectId, allFiles, row.path, row.language, EXEC_TIMEOUT_MS
@@ -588,6 +606,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                   if (!executor) {
                     result = `Cannot run ${row.path} — only JavaScript, TypeScript, Python, and Bash files can be executed. If you meant to run a different file, specify its path.`; isError = true;
                   } else {
+                    // No project env vars injected — see comment above on SSH path.
                     const { stdout, stderr, exitCode } = await runProcess(
                       executor.cmd, executor.args, dir, EXEC_TIMEOUT_MS
                     );

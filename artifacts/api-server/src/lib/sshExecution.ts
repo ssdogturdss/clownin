@@ -7,6 +7,7 @@
 
 import { Client as SshClient, type ConnectConfig } from "ssh2";
 import type { ProjectFile } from "@workspace/db";
+import { buildShellEnvPrefix, buildBase64EnvSetup } from "./envCrypto";
 
 export interface SshServerConfig {
   host: string;
@@ -87,7 +88,8 @@ export function runRemoteProcess(
   files: ProjectFile[],
   targetPath: string,
   language: string,
-  timeoutMs = EXEC_TIMEOUT_MS
+  timeoutMs = EXEC_TIMEOUT_MS,
+  envVars?: Record<string, string>
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise(async (resolve) => {
     let conn: SshClient;
@@ -149,8 +151,9 @@ export function runRemoteProcess(
 
           sftp.end();
 
-          // 2) Execute
-          conn.exec(`cd "${absDir}" && ${cmd}`, (execErr, stream) => {
+          // 2) Execute — env vars are injected as a shell prefix (KEY='val' ...)
+          const envPrefix = buildShellEnvPrefix(envVars ?? {});
+          conn.exec(`cd "${absDir}" && ${envPrefix}${cmd}`, (execErr, stream) => {
             if (execErr) {
               conn.end();
               resolve({ stdout: "", stderr: `Exec failed: ${execErr.message}`, exitCode: -1 });
@@ -202,6 +205,7 @@ export async function startSshServerBackground(
   targetPath: string,
   language: string,
   port: number,
+  envVars?: Record<string, string>,
 ): Promise<number> {
   const conn = await openConnection(srv);
   const remoteDir = `${REMOTE_BASE}/${projectId}`;
@@ -240,11 +244,15 @@ export async function startSshServerBackground(
           if (!cmd) { conn.end(); reject(new Error(`Unsupported language: ${language}`)); return; }
 
           const logFile = `/tmp/clownin-serve-${projectId}.log`;
-          // Use 'exec' inside the subshell so that $! (the sh PID) becomes
-          // the PID of the actual server process after exec(). This ensures
-          // SIGTERM/SIGKILL reach the server, not just a wrapper shell.
+          // Env vars are injected via base64 decoding inside the sh -c '...' argument.
+          // Base64 chars (A-Za-z0-9+/=) are safe inside single-quoted shell strings,
+          // avoiding all quoting conflicts while leaving no persistent file on the remote.
+          // Values are only in memory for the lifetime of the server process.
+          const envSetup = buildBase64EnvSetup(envVars ?? {});
+          // cd first so the server's cwd is the project dir (relative asset paths work);
+          // then decode env vars in-memory; then exec replaces sh with the server process.
           const shellCmd =
-            `nohup sh -c 'cd "${absDir}" && exec env PORT=${port} ${cmd}' </dev/null >"${logFile}" 2>&1 & echo $!`;
+            `nohup sh -c 'cd "${absDir}" && ${envSetup}exec env PORT=${port} ${cmd}' </dev/null >"${logFile}" 2>&1 & echo $!`;
 
           conn.exec(shellCmd, (execErr, stream) => {
             if (execErr) { conn.end(); reject(new Error(`Exec failed: ${execErr.message}`)); return; }
@@ -443,7 +451,8 @@ export function streamRemoteProcess(
     onExit: (code: number) => void;
     onError: (msg: string) => void;
   },
-  signal?: { aborted: boolean }
+  signal?: { aborted: boolean },
+  envVars?: Record<string, string>
 ): void {
   const { onStdout, onStderr, onExit, onError } = handlers;
 
@@ -509,7 +518,8 @@ export function streamRemoteProcess(
 
           if (signal?.aborted) { conn.end(); return; }
 
-          conn.exec(`cd "${absDir}" && ${cmd}`, (execErr, stream) => {
+          const envPrefix = buildShellEnvPrefix(envVars ?? {});
+          conn.exec(`cd "${absDir}" && ${envPrefix}${cmd}`, (execErr, stream) => {
             if (execErr) {
               conn.end();
               onError(`Exec failed: ${execErr.message}`);

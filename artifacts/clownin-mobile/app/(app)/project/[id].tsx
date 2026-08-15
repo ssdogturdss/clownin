@@ -928,6 +928,14 @@ export default function ProjectEditorScreen() {
 
         <Pressable
           style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => router.push({ pathname: '/project-env', params: { projectId: String(projectId) } })}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons name="key-outline" size={17} color={colors.mutedForeground} />
+        </Pressable>
+
+        <Pressable
+          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={handlePickServer}
           hitSlop={4}
         >

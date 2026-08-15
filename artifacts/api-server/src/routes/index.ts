@@ -11,6 +11,7 @@ import privacyRouter from "./privacy";
 import termsRouter from "./terms";
 import serversRouter from "./servers";
 import serveRouter from "./serve";
+import envRouter from "./env";
 
 const router: IRouter = Router();
 
@@ -26,6 +27,7 @@ router.use(privacyRouter);
 router.use(termsRouter);
 router.use(serversRouter);
 router.use(serveRouter);
+router.use(envRouter);
 
 export default router;
 

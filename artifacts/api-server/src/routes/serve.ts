@@ -13,10 +13,11 @@ import { createServer } from "net";
 import { request as httpRequest } from "http";
 import { join } from "path";
 import { tmpdir } from "os";
-import { db, projectsTable, projectFilesTable, serversTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles } from "../lib/projectWorkspace";
+import { decrypt, filterUserEnv } from "../lib/envCrypto";
 import {
   startSshServerBackground,
   startSshLogTail,
@@ -278,6 +279,18 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
   const allFiles = await db.select().from(projectFilesTable)
     .where(eq(projectFilesTable.projectId, projectId));
 
+  // Load and decrypt project env vars — injected into the server process so
+  // user code can read process.env / os.environ. Values are never returned to
+  // the client; decryption happens server-side only.
+  const envVarRows = await db
+    .select({ key: projectEnvVarsTable.key, encryptedValue: projectEnvVarsTable.encryptedValue })
+    .from(projectEnvVarsTable)
+    .where(eq(projectEnvVarsTable.projectId, projectId));
+  const userEnv: Record<string, string> = {};
+  for (const v of envVarRows) {
+    try { userEnv[v.key] = decrypt(v.encryptedValue); } catch { /* skip corrupted */ }
+  }
+
   const port = await findFreePort();
   const url = buildProxyUrl(req, projectId);
 
@@ -297,6 +310,7 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
     try {
       remotePid = await startSshServerBackground(
         srvConfig, projectId, allFiles, file.path, file.language, port,
+        filterUserEnv(userEnv),   // strip reserved keys before SSH injection
       );
     } catch (err: unknown) {
       res.status(502).json({ error: `SSH serve failed: ${err instanceof Error ? err.message : String(err)}` });
@@ -369,10 +383,13 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
   const { cmd, args } = getCmd(file.language, absFilePath)!;
 
   const safeEnv: NodeJS.ProcessEnv = {
+    // Reserved keys (PATH, IFS, LD_PRELOAD, etc.) stripped before merge
+    ...filterUserEnv(userEnv),
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     TMPDIR: process.env.TMPDIR ?? tmpdir(),
     LANG: process.env.LANG,
+    // PORT must always override any user-supplied PORT so the proxy works
     PORT: String(port),
     PYTHONPATH: undefined,
     PYTHONHOME: undefined,
