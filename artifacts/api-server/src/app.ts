@@ -29,8 +29,8 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
 // Serve static assets (og:image etc.) at /preview/...
 app.use("/preview", express.static(path.join(__dirname, "assets")));

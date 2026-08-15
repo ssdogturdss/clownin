@@ -252,6 +252,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         return;
       }
 
+      if (response.status === 413) {
+        throw new Error("That image is too large to send. Try a smaller one.");
+      }
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
