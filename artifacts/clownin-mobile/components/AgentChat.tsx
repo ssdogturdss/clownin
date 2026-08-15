@@ -5,7 +5,6 @@ import {
   TextInput,
   Pressable,
   FlatList,
-  Modal,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -96,14 +95,12 @@ function toolIcon(tool: string): string {
 // ── Main component ────────────────────────────────────────────────────────────
 interface AgentChatProps {
   projectId: number;
-  visible: boolean;
-  onClose: () => void;
   onFilesChanged?: () => void;
   /** When provided, automatically sent to the agent as the first message on mount. */
   initialMessage?: string;
 }
 
-export function AgentChat({ projectId, visible, onClose, onFilesChanged, initialMessage }: AgentChatProps) {
+export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentChatProps) {
   const colors = useColors();
   const { token } = useAuth();
 
@@ -175,15 +172,14 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
-  // Auto-send initialMessage once when the modal becomes visible
+  // Auto-send initialMessage once on mount
   React.useEffect(() => {
-    if (!initialMessage || autoSentRef.current || !visible) return;
+    if (!initialMessage || autoSentRef.current) return;
     autoSentRef.current = true;
-    // Small delay so the modal finishes its open animation before streaming starts
     const timer = setTimeout(() => send(initialMessage), 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, []);
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
@@ -249,8 +245,7 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
       });
 
       if (response.status === 402) {
-        let body: { code?: string } = {};
-        try { body = await response.json(); } catch { /* ignore */ }
+        try { await response.json(); } catch { /* ignore */ }
         setMessages((prev) => prev.filter((m) => m.id !== thinkId));
         setPaywallReason('daily_limit');
         setShowPaywall(true);
@@ -292,7 +287,6 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
 
           switch (event.type) {
             case "thinking":
-              // keep the spinner visible
               break;
 
             case "token": {
@@ -329,9 +323,7 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
                 setMessages((prev) => prev.map((m) =>
                   m.id === cardId ? { ...m, result, isError } as ToolCallMsg : m
                 ));
-                // If it's a file change, notify the editor
-                const card = toolCardIds.get(callId);
-                if (card) onFilesChanged?.();
+                onFilesChanged?.();
               }
               break;
             }
@@ -384,7 +376,6 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
     } finally {
       setBusy(false);
       streamingIdRef.current = null;
-      // Refresh profile so usage count stays current
       queryClient.invalidateQueries({ queryKey: PROFILE_QUERY_KEY });
     }
   }, [input, busy, projectId, token, upsertMsg, scrollToBottom, onFilesChanged, profile, queryClient]);
@@ -482,342 +473,242 @@ export function AgentChat({ projectId, visible, onClose, onFilesChanged, initial
   );
 
   // ── Render ───────────────────────────────────────────────────────────────────
-  const s = makeStyles(colors);
-
   return (
     <>
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={s.overlay}>
-        <KeyboardAvoidingView
-          style={s.sheet}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={0}
-        >
-          {/* Header */}
-          <View style={s.header}>
-            <View style={s.headerLeft}>
-              <Text style={s.headerEmoji}>🤡</Text>
-              <Text style={s.headerTitle}>Agent</Text>
-            </View>
-            <Pressable style={s.closeBtn} onPress={onClose} hitSlop={12}>
-              <MaterialCommunityIcons name="close" size={20} color={colors.mutedForeground} />
-            </Pressable>
-          </View>
+      <KeyboardAvoidingView
+        style={[styles.panel, { backgroundColor: colors.background }]}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={0}
+      >
+        {/* Panel header */}
+        <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+          <Text style={styles.panelEmoji}>🤡</Text>
+          <Text style={[styles.panelTitle, { color: colors.foreground }]}>Agent</Text>
+          {busy && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+        </View>
 
-          {/* Messages */}
-          {messages.length === 0 ? (
-            <View style={s.empty}>
-              <Text style={s.emptyEmoji}>🤡</Text>
-              <Text style={s.emptyTitle}>Build real apps from your phone</Text>
-              <Text style={s.emptySubtitle}>
-                Describe what you want. The agent writes the code, runs it, fixes errors — then you deploy live with one tap.
-              </Text>
-              <View style={s.hints}>
-                {[
-                  { icon: "🌐", text: "Build a REST API with Express and deploy it" },
-                  { icon: "🕷️", text: "Write a Python web scraper for Hacker News" },
-                  { icon: "📋", text: "Create a full-stack todo app with a database" },
-                  { icon: "📈", text: "Build a landing page with a waitlist form" },
-                ].map(({ icon, text }) => (
-                  <Pressable
-                    key={text}
-                    style={[s.hintChip, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    onPress={() => setInput(text)}
-                  >
-                    <Text style={s.hintIcon}>{icon}</Text>
-                    <Text style={[s.hintText, { color: colors.foreground }]}>{text}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          ) : (
-            <FlatList
-              ref={listRef}
-              data={messages}
-              keyExtractor={(m) => m.id}
-              renderItem={renderItem}
-              contentContainerStyle={s.listContent}
-              onContentSizeChange={scrollToBottom}
-              showsVerticalScrollIndicator={false}
-            />
-          )}
-
-          {/* Attachment chips */}
-          {attachments.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipScroll} contentContainerStyle={s.chipRow}>
-              {attachments.map((a, i) => (
-                <View key={i} style={[s.chip, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  {a.kind === "image"
-                    ? <Image source={{ uri: a.preview }} style={s.chipThumb} />
-                    : <MaterialCommunityIcons name="file-code-outline" size={14} color={colors.primary} />
-                  }
-                  <Text style={[s.chipName, { color: colors.foreground }]} numberOfLines={1}>{a.name}</Text>
-                  <Pressable onPress={() => removeAttachment(i)} hitSlop={8}>
-                    <MaterialCommunityIcons name="close-circle" size={14} color={colors.mutedForeground} />
-                  </Pressable>
-                </View>
+        {/* Messages / empty state */}
+        {messages.length === 0 ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.empty}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.emptyEmoji}>🤡</Text>
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Build real apps from your phone</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
+              Describe what you want. The agent writes the code, runs it, fixes errors — then you deploy live with one tap.
+            </Text>
+            <View style={styles.hints}>
+              {[
+                { icon: "🌐", text: "Build a REST API with Express and deploy it" },
+                { icon: "🕷️", text: "Write a Python web scraper for Hacker News" },
+                { icon: "📋", text: "Create a full-stack todo app with a database" },
+                { icon: "📈", text: "Build a landing page with a waitlist form" },
+              ].map(({ icon, text }) => (
+                <Pressable
+                  key={text}
+                  style={[styles.hintChip, { backgroundColor: colors.card, borderColor: colors.border }]}
+                  onPress={() => setInput(text)}
+                >
+                  <Text style={styles.hintIcon}>{icon}</Text>
+                  <Text style={[styles.hintText, { color: colors.foreground }]}>{text}</Text>
+                </Pressable>
               ))}
-            </ScrollView>
-          )}
-
-          {/* Picker menu */}
-          {pickerOpen && (
-            <View style={[s.pickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Pressable style={s.pickerRow} onPress={pickImage}>
-                <MaterialCommunityIcons name="image-outline" size={18} color={colors.primary} />
-                <Text style={[s.pickerLabel, { color: colors.foreground }]}>Photo / Image</Text>
-              </Pressable>
-              <View style={[s.pickerDivider, { backgroundColor: colors.border }]} />
-              <Pressable style={s.pickerRow} onPress={pickFile}>
-                <MaterialCommunityIcons name="file-outline" size={18} color={colors.primary} />
-                <Text style={[s.pickerLabel, { color: colors.foreground }]}>Text / Code File</Text>
-              </Pressable>
             </View>
-          )}
+          </ScrollView>
+        ) : (
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={(m) => m.id}
+            renderItem={renderItem}
+            contentContainerStyle={styles.listContent}
+            onContentSizeChange={scrollToBottom}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          />
+        )}
 
-          {/* Input */}
-          <View style={s.inputRow}>
-            <Pressable
-              style={[s.attachBtn, { borderColor: colors.border, backgroundColor: pickerOpen ? colors.card : "transparent" }]}
-              onPress={() => setPickerOpen((v) => !v)}
-              disabled={busy}
-              hitSlop={4}
-            >
-              <MaterialCommunityIcons name="paperclip" size={20} color={attachments.length > 0 ? colors.primary : colors.mutedForeground} />
+        {/* Attachment chips */}
+        {attachments.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.chipScroll, { borderTopColor: colors.border }]} contentContainerStyle={styles.chipRow}>
+            {attachments.map((a, i) => (
+              <View key={i} style={[styles.chip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {a.kind === "image"
+                  ? <Image source={{ uri: a.preview }} style={styles.chipThumb} />
+                  : <MaterialCommunityIcons name="file-code-outline" size={14} color={colors.primary} />
+                }
+                <Text style={[styles.chipName, { color: colors.foreground }]} numberOfLines={1}>{a.name}</Text>
+                <Pressable onPress={() => removeAttachment(i)} hitSlop={8}>
+                  <MaterialCommunityIcons name="close-circle" size={14} color={colors.mutedForeground} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+
+        {/* Picker menu */}
+        {pickerOpen && (
+          <View style={[styles.pickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Pressable style={styles.pickerRow} onPress={pickImage}>
+              <MaterialCommunityIcons name="image-outline" size={18} color={colors.primary} />
+              <Text style={[styles.pickerLabel, { color: colors.foreground }]}>Photo / Image</Text>
             </Pressable>
-            <TextInput
-              style={s.input}
-              placeholder={busy ? "Agent is working…" : "Describe what to build…"}
-              placeholderTextColor={colors.mutedForeground}
-              value={input}
-              onChangeText={setInput}
-              multiline
-              maxLength={2000}
-              editable={!busy}
-              returnKeyType="send"
-              onSubmitEditing={() => send()}
-              blurOnSubmit
-              onFocus={() => setPickerOpen(false)}
-            />
-            <Pressable
-              style={[s.sendBtn, { opacity: ((!input.trim() && attachments.length === 0) || busy) ? 0.4 : 1 }]}
-              onPress={() => send()}
-              disabled={(!input.trim() && attachments.length === 0) || busy}
-            >
-              {busy
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <MaterialCommunityIcons name="send" size={18} color="#fff" />
-              }
+            <View style={[styles.pickerDivider, { backgroundColor: colors.border }]} />
+            <Pressable style={styles.pickerRow} onPress={pickFile}>
+              <MaterialCommunityIcons name="file-outline" size={18} color={colors.primary} />
+              <Text style={[styles.pickerLabel, { color: colors.foreground }]}>Text / Code File</Text>
             </Pressable>
           </View>
-        </KeyboardAvoidingView>
-      </View>
-    </Modal>
-    <PaywallSheet visible={showPaywall} onClose={() => setShowPaywall(false)} reason={paywallReason} />
+        )}
+
+        {/* Input */}
+        <View style={[styles.inputRow, { borderTopColor: colors.border }]}>
+          <Pressable
+            style={[styles.attachBtn, { borderColor: colors.border, backgroundColor: pickerOpen ? colors.card : "transparent" }]}
+            onPress={() => setPickerOpen((v) => !v)}
+            disabled={busy}
+            hitSlop={4}
+          >
+            <MaterialCommunityIcons name="paperclip" size={20} color={attachments.length > 0 ? colors.primary : colors.mutedForeground} />
+          </Pressable>
+          <TextInput
+            style={[styles.input, { backgroundColor: colors.input, borderColor: colors.border, color: colors.foreground }]}
+            placeholder={busy ? "Agent is working…" : "Describe what to build…"}
+            placeholderTextColor={colors.mutedForeground}
+            value={input}
+            onChangeText={setInput}
+            multiline
+            maxLength={2000}
+            editable={!busy}
+            returnKeyType="send"
+            onSubmitEditing={() => send()}
+            blurOnSubmit
+            onFocus={() => setPickerOpen(false)}
+          />
+          <Pressable
+            style={[styles.sendBtn, { backgroundColor: colors.primary, opacity: ((!input.trim() && attachments.length === 0) || busy) ? 0.4 : 1 }]}
+            onPress={() => send()}
+            disabled={(!input.trim() && attachments.length === 0) || busy}
+          >
+            {busy
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <MaterialCommunityIcons name="send" size={18} color="#fff" />
+            }
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+
+      <PaywallSheet visible={showPaywall} onClose={() => setShowPaywall(false)} reason={paywallReason} />
     </>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-function makeStyles(colors: ReturnType<typeof useColors>) {
-  return StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      justifyContent: "flex-end",
-    },
-    sheet: {
-      height: "92%",
-      backgroundColor: colors.background,
-      borderTopLeftRadius: 16,
-      borderTopRightRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-      overflow: "hidden",
-    },
-    header: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-    headerEmoji: { fontSize: 20 },
-    headerTitle: { fontSize: 16, fontWeight: "600", color: colors.foreground, fontFamily: "monospace" },
-    closeBtn: {
-      width: 32, height: 32,
-      borderRadius: 16,
-      backgroundColor: colors.secondary,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    listContent: { padding: 12, gap: 8 },
-
-    // Thinking
-    thinkRow: { alignItems: "flex-start", paddingLeft: 4 },
-    thinkBubble: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: 12,
-      borderWidth: 1,
-    },
-    thinkText: { fontSize: 13 },
-
-    // User
-    userRow: { alignItems: "flex-end" },
-    userBubble: {
-      maxWidth: "80%",
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      borderRadius: 18,
-      borderBottomRightRadius: 4,
-    },
-
-    // Agent
-    agentRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, maxWidth: "88%" },
-    agentAvatar: {
-      width: 28, height: 28,
-      borderRadius: 14,
-      borderWidth: 1,
-      alignItems: "center",
-      justifyContent: "center",
-      marginTop: 2,
-    },
-    avatarEmoji: { fontSize: 16 },
-    agentBubble: {
-      flex: 1,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      borderRadius: 18,
-      borderBottomLeftRadius: 4,
-      borderWidth: 1,
-    },
-    cursor: { width: 2, height: 14, borderRadius: 1, marginTop: 2 },
-
-    // Tool
-    toolRow: { paddingLeft: 36 },
-    toolCard: {
-      borderWidth: 1,
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      gap: 4,
-    },
-    toolHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
-    toolLabel: { fontSize: 12, flex: 1 },
-    toolResult: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
-
-    bubbleText: { fontSize: 14, lineHeight: 20 },
-
-    // Empty
-    empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 12 },
-    emptyEmoji: { fontSize: 48 },
-    emptyTitle: { fontSize: 20, fontWeight: "700", color: colors.foreground, textAlign: "center" },
-    emptySubtitle: { fontSize: 14, color: colors.mutedForeground, textAlign: "center", lineHeight: 20 },
-    hints: { gap: 8, width: "100%", marginTop: 8 },
-    hintChip: {
-      flexDirection: "row", alignItems: "center", gap: 8,
-      paddingHorizontal: 14, paddingVertical: 10,
-      borderRadius: 10, borderWidth: 1,
-    },
-    hintIcon: { fontSize: 16 },
-    hintText: { fontSize: 13, flex: 1 },
-
-    // Input
-    inputRow: {
-      flexDirection: "row",
-      alignItems: "flex-end",
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingBottom: 12,
-      paddingTop: 8,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-    },
-    attachBtn: {
-      width: 36, height: 36,
-      borderRadius: 10,
-      borderWidth: 1,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    input: {
-      flex: 1,
-      backgroundColor: colors.input,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      color: colors.foreground,
-      fontSize: 14,
-      maxHeight: 120,
-    },
-    sendBtn: {
-      width: 40, height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.primary,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    // Attachment chips
-    chipScroll: { maxHeight: 52, borderTopWidth: 1, borderTopColor: colors.border },
-    chipRow: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingVertical: 8, alignItems: "center" },
-    chip: {
-      flexDirection: "row", alignItems: "center", gap: 6,
-      borderWidth: 1, borderRadius: 20,
-      paddingLeft: 4, paddingRight: 8, paddingVertical: 4,
-      maxWidth: 180,
-    },
-    chipThumb: { width: 24, height: 24, borderRadius: 4 },
-    chipName: { fontSize: 12, flex: 1 },
-    // Picker menu
-    pickerMenu: {
-      marginHorizontal: 12,
-      marginBottom: 4,
-      borderWidth: 1,
-      borderRadius: 12,
-      overflow: "hidden",
-    },
-    pickerRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
-    pickerLabel: { fontSize: 14 },
-    pickerDivider: { height: 1, marginHorizontal: 14 },
-  });
-}
-
 const styles = StyleSheet.create({
+  panel: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  panelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    gap: 6,
+  },
+  panelEmoji: { fontSize: 14 },
+  panelTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+
+  listContent: { padding: 10, gap: 8 },
+
+  // Thinking
   thinkRow: { alignItems: "flex-start", paddingLeft: 4 },
   thinkBubble: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1,
   },
   thinkText: { fontSize: 13 },
+
+  // User
   userRow: { alignItems: "flex-end" },
   userBubble: {
     maxWidth: "80%", paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: 18, borderBottomRightRadius: 4,
   },
+
+  // Agent
   agentRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, maxWidth: "88%" },
   agentAvatar: {
-    width: 28, height: 28, borderRadius: 14, borderWidth: 1,
+    width: 26, height: 26, borderRadius: 13, borderWidth: 1,
     alignItems: "center", justifyContent: "center", marginTop: 2,
   },
-  avatarEmoji: { fontSize: 16 },
+  avatarEmoji: { fontSize: 14 },
   agentBubble: {
-    flex: 1, paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1,
+    flex: 1, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 16, borderBottomLeftRadius: 4, borderWidth: 1,
   },
   cursor: { width: 2, height: 14, borderRadius: 1, marginTop: 2 },
-  toolRow: { paddingLeft: 36 },
-  toolCard: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 4 },
+
+  // Tool
+  toolRow: { paddingLeft: 34 },
+  toolCard: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, gap: 4 },
   toolHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
   toolLabel: { fontSize: 12, flex: 1 },
   toolResult: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
-  bubbleText: { fontSize: 14, lineHeight: 20 },
+
+  bubbleText: { fontSize: 13, lineHeight: 19 },
+
+  // Empty state
+  empty: { alignItems: "center", justifyContent: "center", padding: 20, gap: 10 },
+  emptyEmoji: { fontSize: 36 },
+  emptyTitle: { fontSize: 16, fontFamily: "Inter_700Bold", textAlign: "center" },
+  emptySubtitle: { fontSize: 12, textAlign: "center", lineHeight: 18 },
+  hints: { gap: 6, width: "100%", marginTop: 4 },
+  hintChip: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 12, paddingVertical: 9,
+    borderRadius: 10, borderWidth: 1,
+  },
+  hintIcon: { fontSize: 14 },
+  hintText: { fontSize: 12, flex: 1 },
+
+  // Input
+  inputRow: {
+    flexDirection: "row", alignItems: "flex-end", gap: 8,
+    paddingHorizontal: 10, paddingBottom: 10, paddingTop: 8,
+    borderTopWidth: 1,
+  },
+  attachBtn: {
+    width: 34, height: 34, borderRadius: 10, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
+  },
+  input: {
+    flex: 1, borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 9,
+    fontSize: 13, maxHeight: 100,
+  },
+  sendBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: "center", justifyContent: "center",
+  },
+
+  // Attachment chips
+  chipScroll: { maxHeight: 52, borderTopWidth: 1 },
+  chipRow: { flexDirection: "row", gap: 8, paddingHorizontal: 10, paddingVertical: 8, alignItems: "center" },
+  chip: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    borderWidth: 1, borderRadius: 20,
+    paddingLeft: 4, paddingRight: 8, paddingVertical: 4, maxWidth: 160,
+  },
+  chipThumb: { width: 22, height: 22, borderRadius: 4 },
+  chipName: { fontSize: 11, flex: 1 },
+
+  // Picker menu
+  pickerMenu: { marginHorizontal: 10, marginBottom: 4, borderWidth: 1, borderRadius: 12, overflow: "hidden" },
+  pickerRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 11 },
+  pickerLabel: { fontSize: 14 },
+  pickerDivider: { height: 1, marginHorizontal: 14 },
 });

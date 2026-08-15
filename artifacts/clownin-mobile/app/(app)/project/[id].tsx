@@ -12,9 +12,11 @@ import {
   Modal,
   Animated,
   Platform,
-  Dimensions,
+  PanResponder,
   KeyboardAvoidingView,
   Keyboard,
+  useWindowDimensions,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { SyntaxHighlighter, CODE_LINE_HEIGHT } from '@/components/SyntaxHighlighter';
 import { AgentChat } from '@/components/AgentChat';
@@ -68,46 +70,52 @@ function FileItem({
   colors: ReturnType<typeof useColors>;
 }) {
   return (
-    <Pressable
-      style={[
-        fileStyles.item,
-        selected && { backgroundColor: colors.primary + '22' },
-      ]}
-      onPress={onSelect}
-      onLongPress={onLongPress}
-    >
-      <MaterialCommunityIcons
-        name={langIcon(file.language) as React.ComponentProps<typeof MaterialCommunityIcons>['name']}
-        size={14}
-        color={selected ? colors.primary : colors.mutedForeground}
-        style={{ marginRight: 6 }}
-      />
-      <Text
-        style={[
-          fileStyles.name,
-          { color: selected ? colors.primary : colors.foreground },
-        ]}
-        numberOfLines={1}
+    <View style={[fileStyles.item, selected && { backgroundColor: colors.primary + '22' }]}>
+      <Pressable
+        style={fileStyles.itemMain}
+        onPress={onSelect}
+        onLongPress={onLongPress}
       >
-        {file.path}
-      </Text>
+        <MaterialCommunityIcons
+          name={langIcon(file.language) as React.ComponentProps<typeof MaterialCommunityIcons>['name']}
+          size={14}
+          color={selected ? colors.primary : colors.mutedForeground}
+          style={{ marginRight: 6 }}
+        />
+        <Text
+          style={[
+            fileStyles.name,
+            { color: selected ? colors.primary : colors.foreground },
+          ]}
+          numberOfLines={1}
+        >
+          {file.path}
+        </Text>
+      </Pressable>
       <Pressable onPress={onDelete} hitSlop={8} style={fileStyles.deleteBtn}>
         <Ionicons name="trash-outline" size={12} color={colors.destructive} />
       </Pressable>
-    </Pressable>
+    </View>
   );
 }
 
 const fileStyles = StyleSheet.create({
-  item: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6 },
+  item: { flexDirection: 'row', alignItems: 'center', borderRadius: 6 },
+  itemMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   name: { flex: 1, fontSize: 12, fontFamily: 'Inter_400Regular' },
-  deleteBtn: { padding: 2 },
+  deleteBtn: { padding: 6 },
 });
 
-// ─── Main screen ──────────────────────────────────────────────────────────────
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const TERMINAL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.4);
+// ─── Split ratio snaps ────────────────────────────────────────────────────────
+const RATIO_SNAPS = [0.3, 0.5, 0.7];
 
+// ─── Main screen ──────────────────────────────────────────────────────────────
 export default function ProjectEditorScreen() {
   const { id, initialMessage } = useLocalSearchParams<{ id: string; initialMessage?: string }>();
   const projectId = Number(id);
@@ -115,34 +123,114 @@ export default function ProjectEditorScreen() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const { width, height } = useWindowDimensions();
+  const isLandscape = width > height;
 
   const { data: project, isLoading } = useGetProject(projectId);
 
-  // Selected file state
+  // ── Split-screen state ────────────────────────────────────────────────────
+  const DEFAULT_SPLIT_RATIO = 0.45;
+  const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO);
+  const splitRatioRef = useRef(DEFAULT_SPLIT_RATIO);
+  const gestureStartRatioRef = useRef(DEFAULT_SPLIT_RATIO);
+
+  // Actual measured size of the split container (excludes header).
+  // Stored in state so that layout and rotation changes trigger a re-render.
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const containerSizeRef = useRef({ width: 0, height: 0 });
+  // Used only for orientation detection inside PanResponder (can't read state there)
+  const screenDimsRef = useRef({ width, height });
+  useEffect(() => { screenDimsRef.current = { width, height }; }, [width, height]);
+
+  const onSplitContainerLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width: w, height: h } = e.nativeEvent.layout;
+    // Only set state when dimensions actually change to avoid spurious re-renders
+    if (w !== containerSizeRef.current.width || h !== containerSizeRef.current.height) {
+      containerSizeRef.current = { width: w, height: h };
+      setContainerSize({ width: w, height: h });
+    }
+  }, []);
+
+  // Reset ratio to default immediately on projectId change, then load the persisted value
+  useEffect(() => {
+    setSplitRatio(DEFAULT_SPLIT_RATIO);
+    splitRatioRef.current = DEFAULT_SPLIT_RATIO;
+    let cancelled = false;
+    AsyncStorage.getItem(`split_ratio_${projectId}`)
+      .then((saved) => {
+        if (cancelled || saved === null) return;
+        const parsed = parseFloat(saved);
+        if (isFinite(parsed) && parsed >= 0.2 && parsed <= 0.8) {
+          setSplitRatio(parsed);
+          splitRatioRef.current = parsed;
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  // Stable save callback ref
+  const saveRatioRef = useRef<((r: number) => void) | null>(null);
+  useEffect(() => {
+    saveRatioRef.current = (r: number) =>
+      AsyncStorage.setItem(`split_ratio_${projectId}`, String(r)).catch(() => {});
+  }, [projectId]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        gestureStartRatioRef.current = splitRatioRef.current;
+      },
+      onPanResponderMove: (_, gs) => {
+        // Use measured container size so ratios are relative to the actual panel space
+        const { width: cw, height: ch } = containerSizeRef.current;
+        const landscape = screenDimsRef.current.width > screenDimsRef.current.height;
+        const total = landscape ? cw : ch;
+        if (total <= 0) return;
+        const delta = landscape ? gs.dx : gs.dy;
+        const newRatio = Math.max(0.2, Math.min(0.8, gestureStartRatioRef.current + delta / total));
+        splitRatioRef.current = newRatio;
+        setSplitRatio(newRatio);
+      },
+      onPanResponderRelease: () => {
+        const current = splitRatioRef.current;
+        const nearest = RATIO_SNAPS.reduce((a, b) =>
+          Math.abs(b - current) < Math.abs(a - current) ? b : a
+        );
+        splitRatioRef.current = nearest;
+        setSplitRatio(nearest);
+        saveRatioRef.current?.(nearest);
+      },
+    })
+  ).current;
+
+  // Chat panel size — derived from containerSize state so rotation and initial layout
+  // always trigger a re-render with the correct measured dimensions.
+  // Falls back to screen size (portrait) or screen width (landscape) before the first layout event.
+  const containerMain = isLandscape
+    ? (containerSize.width  || width)
+    : (containerSize.height || height);
+  const chatSize = Math.round(containerMain * splitRatio);
+
+  // ── Editor state ──────────────────────────────────────────────────────────
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
-  // Ref mirror so keyboard handlers always see the current file id without stale closures
   const selectedFileIdRef = useRef<number | null>(null);
   const [editorContent, setEditorContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Syntax-highlight editing mode
   const [isEditing, setIsEditing] = useState(false);
   const codeInputRef = useRef<TextInput>(null);
-  // Cursor position to apply when entering edit mode from a line tap
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number } | undefined>(undefined);
-  // Line index to scroll to when entering edit mode from a line tap (0-based)
   const pendingScrollLineRef = useRef<number | null>(null);
-  // Shared scroll offset (pixels) synced between view and edit modes
   const sharedScrollY = useRef(0);
   const viewScrollRef = useRef<ScrollView>(null);
-  // Pending scroll save: tracks the latest offset to be written for the current file
   const pendingScrollSaveRef = useRef<{ fileId: number; y: number } | null>(null);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Tracks the cursor line (0-based) while editing, used to re-scroll on keyboard show
   const cursorLineRef = useRef(0);
 
-  // Immediately flush any pending scroll save to AsyncStorage (fire-and-forget)
   const flushScrollSave = useCallback(() => {
     if (scrollSaveTimer.current) {
       clearTimeout(scrollSaveTimer.current);
@@ -154,7 +242,6 @@ export default function ProjectEditorScreen() {
     AsyncStorage.setItem(`scroll_${projectId}_${pending.fileId}`, String(pending.y)).catch(() => {});
   }, [projectId]);
 
-  // Debounce-save the scroll offset; flushed explicitly on file switch and unmount
   const saveScrollOffset = useCallback((fileId: number, y: number) => {
     pendingScrollSaveRef.current = { fileId, y };
     if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
@@ -167,27 +254,18 @@ export default function ProjectEditorScreen() {
     }, 300);
   }, [projectId]);
 
-  // Scroll the TextInput to show the cursor line when entering edit mode
   useEffect(() => {
     if (!isEditing) return;
-
-    // Line height and top padding must match the codeInput style (see CODE_LINE_HEIGHT, padding: 14)
     const LINE_HEIGHT = CODE_LINE_HEIGHT;
     const TOP_PADDING = 14;
-
     let targetY: number;
     if (pendingScrollLineRef.current !== null) {
-      // Position the tapped line ~2 lines from the top of the visible area
       targetY = Math.max(0, pendingScrollLineRef.current * LINE_HEIGHT + TOP_PADDING - LINE_HEIGHT * 2);
       pendingScrollLineRef.current = null;
     } else {
-      // Fallback: restore the previous shared scroll position
       targetY = sharedScrollY.current;
     }
-
     if (targetY <= 0) return;
-
-    // Wait for the TextInput to mount and receive focus before scrolling
     const timerId = setTimeout(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y: targetY } });
@@ -195,71 +273,47 @@ export default function ProjectEditorScreen() {
     return () => clearTimeout(timerId);
   }, [isEditing]);
 
-  // Keep selectedFileIdRef in sync so keyboard handlers always see the current value
   useEffect(() => { selectedFileIdRef.current = selectedFileId; }, [selectedFileId]);
 
-  // Re-scroll and sync shared scroll state when the keyboard slides in or out.
-  //
-  // keyboardDidShow: the visible area shrank — scroll to keep the cursor line
-  //   visible above the keyboard, then write the new offset into shared state
-  //   and storage so view/edit modes never diverge.
-  //
-  // keyboardDidHide: the visible area expanded back — re-apply the last known
-  //   shared offset so the TextInput doesn't drift from the highlighter's
-  //   position during the layout change.
   useEffect(() => {
     if (!isEditing) return;
-
     const LINE_HEIGHT = CODE_LINE_HEIGHT;
     const TOP_PADDING = 14;
-
     const scrollTo = (y: number) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (codeInputRef.current as any)?.setNativeProps?.({ contentOffset: { x: 0, y } });
-      // Explicitly sync shared state so view/edit modes stay in agreement
       sharedScrollY.current = y;
       const fileId = selectedFileIdRef.current;
       if (fileId !== null) saveScrollOffset(fileId, y);
     };
-
     const onKeyboardShow = () => {
       const line = cursorLineRef.current;
       const targetY = Math.max(0, line * LINE_HEIGHT + TOP_PADDING - LINE_HEIGHT * 2);
-      // Allow the KeyboardAvoidingView layout to settle before scrolling
       setTimeout(() => scrollTo(targetY), 150);
     };
-
     const onKeyboardHide = () => {
-      // Re-anchor the TextInput to sharedScrollY so the layout expansion
-      // after keyboard dismissal doesn't leave a stale offset.
       const y = sharedScrollY.current;
       setTimeout(() => scrollTo(y), 50);
     };
-
     const subShow = Keyboard.addListener('keyboardDidShow', onKeyboardShow);
     const subHide = Keyboard.addListener('keyboardDidHide', onKeyboardHide);
-    return () => {
-      subShow.remove();
-      subHide.remove();
-    };
+    return () => { subShow.remove(); subHide.remove(); };
   }, [isEditing, saveScrollOffset]);
 
-  // Refs for flushing pending saves before file switches
   const pendingContentRef = useRef<string | null>(null);
   const pendingFileIdRef = useRef<number | null>(null);
 
-  // Sidebar
+  // ── Sidebar ───────────────────────────────────────────────────────────────
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const sidebarAnim = useRef(new Animated.Value(1)).current;
 
-  // Auto-run on save
+  // ── Auto-run ──────────────────────────────────────────────────────────────
   const [autoRun, setAutoRun] = useState(false);
   const autoRunRef = useRef(false);
   useEffect(() => { autoRunRef.current = autoRun; }, [autoRun]);
-  // Stable ref to handleRun so debounce always calls the latest version
   const handleRunRef = useRef<(() => void) | null>(null);
 
-  // Terminal
+  // ── Terminal ──────────────────────────────────────────────────────────────
   const [terminalVisible, setTerminalVisible] = useState(false);
   const terminalVisibleRef = useRef(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -268,38 +322,32 @@ export default function ProjectEditorScreen() {
   const [exitCode, setExitCode] = useState<number | null>(null);
   const terminalAnim = useRef(new Animated.Value(0)).current;
   const termScrollRef = useRef<ScrollView>(null);
-  // Batch buffer: collect lines between animation frames to avoid per-chunk re-renders
   const pendingLinesRef = useRef<TerminalLine[]>([]);
   const rafScheduledRef = useRef(false);
 
-  // New file modal
+  // Terminal height — derived from the measured workspace panel, not full screen dims.
+  // The workspace panel gets (containerMain - chatSize - 5px divider) of the split container.
+  const workspaceMain = Math.max(0, containerMain - chatSize - 5);
+  const TERMINAL_HEIGHT = Math.max(160, Math.round(workspaceMain * 0.45));
+
+  // ── File modals ───────────────────────────────────────────────────────────
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
   const [newFileLang, setNewFileLang] = useState<'javascript' | 'typescript' | 'python' | 'bash' | 'plaintext'>('javascript');
-
-  // Rename file modal
   const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
   const [renameFilePath, setRenameFilePath] = useState('');
-  const [agentOpen, setAgentOpen] = useState(false);
-  const autoOpenedAgentRef = useRef(false);
+
+  // ── Other modals ──────────────────────────────────────────────────────────
   const [exportOpen, setExportOpen] = useState(false);
   const [deployOpen, setDeployOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
 
-  // Auto-open agent panel when arriving from the onboarding flow
-  useEffect(() => {
-    if (!initialMessage || autoOpenedAgentRef.current || !project) return;
-    autoOpenedAgentRef.current = true;
-    setAgentOpen(true);
-  }, [initialMessage, project]);
-
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
   const deleteFileMutation = useDeleteFile();
 
-  // Select file on load — restore last-selected file (or fall back to first),
-  // then restore its saved scroll offset before triggering render
+  // ── Restore file selection ────────────────────────────────────────────────
   useEffect(() => {
     if (project?.files && project.files.length > 0 && selectedFileId === null) {
       AsyncStorage.getItem(`selected_file_${projectId}`)
@@ -314,9 +362,7 @@ export default function ProjectEditorScreen() {
               const parsed = saved !== null ? parseFloat(saved) : NaN;
               sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
             })
-            .catch(() => {
-              sharedScrollY.current = 0;
-            })
+            .catch(() => { sharedScrollY.current = 0; })
             .finally(() => {
               setSelectedFileId(restoredFile.id);
               setEditorContent(restoredFile.content);
@@ -331,7 +377,7 @@ export default function ProjectEditorScreen() {
     }
   }, [project]);
 
-  // Restore terminal open/closed state from AsyncStorage per project
+  // ── Restore terminal visibility ───────────────────────────────────────────
   useEffect(() => {
     if (!projectId) return;
     AsyncStorage.getItem(`terminal_open_${projectId}`).then((val) => {
@@ -343,19 +389,15 @@ export default function ProjectEditorScreen() {
     }).catch(() => {});
   }, [projectId]);
 
-  // Persist terminal visibility to AsyncStorage whenever it changes
   useEffect(() => {
     if (!projectId) return;
     terminalVisibleRef.current = terminalVisible;
     AsyncStorage.setItem(`terminal_open_${projectId}`, terminalVisible ? 'true' : 'false').catch(() => {});
   }, [terminalVisible, projectId]);
 
-  // Flush any pending unsaved content immediately (fire-and-forget)
+  // ── Flush pending save ────────────────────────────────────────────────────
   const flushPendingSave = useCallback(async () => {
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
     const content = pendingContentRef.current;
     const fileId = pendingFileIdRef.current;
     if (content === null || fileId === null) return;
@@ -363,20 +405,12 @@ export default function ProjectEditorScreen() {
     pendingFileIdRef.current = null;
     setIsSaving(true);
     try {
-      await updateFileMutation.mutateAsync({
-        id: projectId,
-        fileId,
-        data: { content },
-      });
+      await updateFileMutation.mutateAsync({ id: projectId, fileId, data: { content } });
       queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
-    } catch {
-      // silent save fail — content is still in state for the user to retry
-    } finally {
-      setIsSaving(false);
-    }
+    } catch { /* silent */ } finally { setIsSaving(false); }
   }, [projectId]);
 
-  // Flush on unmount so navigation away doesn't lose edits or scroll position
+  // Flush on unmount
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -385,7 +419,6 @@ export default function ProjectEditorScreen() {
       if (content !== null && fileId !== null) {
         updateFileMutation.mutateAsync({ id: projectId, fileId, data: { content } }).catch(() => {});
       }
-      // Flush any pending scroll save immediately
       if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
       const pendingScroll = pendingScrollSaveRef.current;
       if (pendingScroll) {
@@ -394,12 +427,11 @@ export default function ProjectEditorScreen() {
     };
   }, [projectId]);
 
-  // When user selects a different file — flush first so no edits or scroll position are lost
+  // ── Select file ───────────────────────────────────────────────────────────
   const selectFile = useCallback(async (file: ProjectFile) => {
-    flushScrollSave(); // commit current file's pending scroll before switching
+    flushScrollSave();
     await flushPendingSave();
     setIsEditing(false);
-    // Restore persisted scroll position for this file before re-rendering
     const saved = await AsyncStorage.getItem(`scroll_${projectId}_${file.id}`).catch(() => null);
     const parsed = saved !== null ? parseFloat(saved) : NaN;
     sharedScrollY.current = isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -407,15 +439,12 @@ export default function ProjectEditorScreen() {
     setEditorContent(file.content);
     AsyncStorage.setItem(`selected_file_${projectId}`, String(file.id)).catch(() => {});
     Haptics.selectionAsync();
-    if (sidebarOpen && Platform.OS !== 'web') {
-      toggleSidebar();
-    }
+    if (sidebarOpen && Platform.OS !== 'web') toggleSidebar();
   }, [sidebarOpen, flushPendingSave, flushScrollSave, projectId]);
 
-  // Debounce-save editor content
+  // ── Editor change ─────────────────────────────────────────────────────────
   const handleEditorChange = useCallback((text: string) => {
     setEditorContent(text);
-    // Track latest unsaved state in refs so flushPendingSave always sees fresh values
     pendingContentRef.current = text;
     pendingFileIdRef.current = selectedFileId;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -425,53 +454,35 @@ export default function ProjectEditorScreen() {
       pendingFileIdRef.current = null;
       setIsSaving(true);
       try {
-        await updateFileMutation.mutateAsync({
-          id: projectId,
-          fileId: selectedFileId,
-          data: { content: text },
-        });
+        await updateFileMutation.mutateAsync({ id: projectId, fileId: selectedFileId, data: { content: text } });
         queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
-        // Auto-run after successful save if toggle is on
-        if (autoRunRef.current) {
-          handleRunRef.current?.();
-        }
-      } catch {
-        // silent save fail
-      } finally {
-        setIsSaving(false);
-      }
+        if (autoRunRef.current) handleRunRef.current?.();
+      } catch { /* silent */ } finally { setIsSaving(false); }
     }, 1500);
   }, [selectedFileId, projectId]);
 
-  // Sidebar toggle
+  // ── Sidebar toggle ────────────────────────────────────────────────────────
   const toggleSidebar = () => {
     const toValue = sidebarOpen ? 0 : 1;
-    Animated.timing(sidebarAnim, {
-      toValue,
-      duration: 220,
-      useNativeDriver: false,
-    }).start();
+    Animated.timing(sidebarAnim, { toValue, duration: 220, useNativeDriver: false }).start();
     setSidebarOpen(!sidebarOpen);
   };
 
-  // Terminal open/close
+  // ── Terminal ──────────────────────────────────────────────────────────────
   const openTerminal = useCallback(() => {
     setTerminalVisible(true);
     Animated.spring(terminalAnim, { toValue: 1, useNativeDriver: false, tension: 80, friction: 10 }).start();
   }, [terminalAnim]);
 
   const closeTerminal = useCallback(() => {
-    Animated.timing(terminalAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => {
-      setTerminalVisible(false);
-    });
+    Animated.timing(terminalAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setTerminalVisible(false));
   }, [terminalAnim]);
 
-  // Run code
+  // ── Run code ──────────────────────────────────────────────────────────────
   const handleRun = useCallback(async () => {
     if (!selectedFileId || !token) return;
     if (isRunningRef.current) return;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Append a separator if there are existing lines (preserve last output)
     setTerminalLines((prev) =>
       prev.length > 0
         ? [...prev, { id: `sep-${Date.now()}`, type: 'system', text: '──────────────────────────' }]
@@ -484,7 +495,6 @@ export default function ProjectEditorScreen() {
 
     const TERMINAL_MAX_LINES = 500;
 
-    // Flush the pending-lines buffer into state in one batch, then scroll once.
     const flushLines = () => {
       rafScheduledRef.current = false;
       const batch = pendingLinesRef.current;
@@ -494,64 +504,41 @@ export default function ProjectEditorScreen() {
         const next = [...prev, ...batch];
         if (next.length > TERMINAL_MAX_LINES) {
           const trimmed = next.slice(next.length - TERMINAL_MAX_LINES);
-          return [
-            { id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' },
-            ...trimmed,
-          ];
+          return [{ id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' }, ...trimmed];
         }
         return next;
       });
       setTimeout(() => termScrollRef.current?.scrollToEnd({ animated: true }), 50);
     };
 
-    // Buffer the line and schedule a single flush on the next animation frame.
     const addLine = (type: TerminalLine['type'], text: string) => {
       pendingLinesRef.current.push({ id: `${Date.now()}-${Math.random()}`, type, text });
-      if (!rafScheduledRef.current) {
-        rafScheduledRef.current = true;
-        requestAnimationFrame(flushLines);
-      }
+      if (!rafScheduledRef.current) { rafScheduledRef.current = true; requestAnimationFrame(flushLines); }
     };
 
     addLine('system', '$ Running...');
-
     const runStartTime = Date.now();
 
     try {
-      // Resolve API host the same way _layout.tsx does:
-      // on the expo web subdomain, strip ".expo" to reach the main proxy domain.
       const apiHost = Platform.OS === 'web' && typeof window !== 'undefined'
         ? window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')
         : process.env.EXPO_PUBLIC_DOMAIN ?? '';
       const url = `https://${apiHost}/api/projects/${projectId}/execute`;
       const response = await expoFetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fileId: selectedFileId }),
         // @ts-ignore expo fetch streaming
         reactNative: { textStreaming: true },
       });
 
-      if (!response.ok) {
-        const err = await response.text();
-        addLine('stderr', `Error: ${err}`);
-        setIsRunning(false);
-        return;
-      }
+      if (!response.ok) { addLine('stderr', `Error: ${await response.text()}`); setIsRunning(false); return; }
 
       const reader = response.body?.getReader();
-      if (!reader) {
-        addLine('stderr', 'Streaming not supported in this environment');
-        setIsRunning(false);
-        return;
-      }
+      if (!reader) { addLine('stderr', 'Streaming not supported'); setIsRunning(false); return; }
 
       const decoder = new TextDecoder();
       let buffer = '';
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -575,26 +562,22 @@ export default function ProjectEditorScreen() {
                   const elapsed = ((Date.now() - runStartTime) / 1000).toFixed(2);
                   addLine('system', `\nProcess exited with code ${code}  (${elapsed}s)`);
                 }
-              } catch {
-                // skip malformed events
-              }
+              } catch { /* skip */ }
             }
           }
         }
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Execution failed';
-      addLine('stderr', msg);
+      addLine('stderr', err instanceof Error ? err.message : 'Execution failed');
     } finally {
       isRunningRef.current = false;
       setIsRunning(false);
     }
   }, [selectedFileId, token, projectId, openTerminal]);
 
-  // Keep ref always pointing at the latest handleRun so debounce can call it safely
   useEffect(() => { handleRunRef.current = handleRun; }, [handleRun]);
 
-  // Create new file
+  // ── Create file ───────────────────────────────────────────────────────────
   const handleCreateFile = async () => {
     if (!newFilePath.trim()) return;
     try {
@@ -614,15 +597,11 @@ export default function ProjectEditorScreen() {
     }
   };
 
-  // Rename file
+  // ── Rename file ───────────────────────────────────────────────────────────
   const handleRenameFile = async () => {
     if (!renameFile || !renameFilePath.trim()) return;
     try {
-      await updateFileMutation.mutateAsync({
-        id: projectId,
-        fileId: renameFile.id,
-        data: { path: renameFilePath.trim() },
-      });
+      await updateFileMutation.mutateAsync({ id: projectId, fileId: renameFile.id, data: { path: renameFilePath.trim() } });
       queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
       setRenameFile(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -631,7 +610,7 @@ export default function ProjectEditorScreen() {
     }
   };
 
-  // Delete file
+  // ── Delete file ───────────────────────────────────────────────────────────
   const handleDeleteFile = (file: ProjectFile) => {
     Alert.alert('Delete File', `Delete "${file.path}"?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -642,10 +621,8 @@ export default function ProjectEditorScreen() {
           try {
             await deleteFileMutation.mutateAsync({ id: projectId, fileId: file.id });
             queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
-            // Clear persisted scroll offset for the deleted file
             AsyncStorage.removeItem(`scroll_${projectId}_${file.id}`).catch(() => {});
             if (selectedFileId === file.id) {
-              // Remove stale selected-file pointer so it doesn't persist across sessions
               AsyncStorage.removeItem(`selected_file_${projectId}`).catch(() => {});
               setSelectedFileId(null);
               setEditorContent('');
@@ -665,6 +642,10 @@ export default function ProjectEditorScreen() {
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
   const sidebarWidth = sidebarAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 160] });
 
+  const onFilesChanged = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) });
+  }, [queryClient, projectId]);
+
   if (isLoading) {
     return (
       <View style={[styles.root, { backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }]}>
@@ -675,6 +656,7 @@ export default function ProjectEditorScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
+
       {/* ── Header ────────────────────────────────────────────────── */}
       <View style={[styles.header, { paddingTop: topPad + 8, borderBottomColor: colors.border, backgroundColor: colors.card }]}>
         <Pressable style={styles.headerBtn} onPress={() => router.back()} hitSlop={8}>
@@ -698,10 +680,9 @@ export default function ProjectEditorScreen() {
 
         {isSaving && <ActivityIndicator size="small" color={colors.mutedForeground} style={styles.saveIndicator} />}
 
-        {/* Preview button — only for HTML files */}
         {canPreview && (
           <Pressable
-            style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
             onPress={() => setPreviewOpen(true)}
             hitSlop={4}
           >
@@ -709,32 +690,22 @@ export default function ProjectEditorScreen() {
           </Pressable>
         )}
 
-        {/* Auto-run toggle — only for executable files */}
         {canRun && (
           <Pressable
             style={[
               styles.autoRunBtn,
-              {
-                backgroundColor: autoRun ? colors.primary + '22' : 'transparent',
-                borderColor: autoRun ? colors.primary : colors.border,
-              },
+              { backgroundColor: autoRun ? colors.primary + '22' : 'transparent', borderColor: autoRun ? colors.primary : colors.border },
             ]}
-            onPress={() => {
-              setAutoRun((v) => !v);
-              Haptics.selectionAsync();
-            }}
+            onPress={() => { setAutoRun((v) => !v); Haptics.selectionAsync(); }}
             hitSlop={6}
           >
             <Feather name="zap" size={13} color={autoRun ? colors.primary : colors.mutedForeground} />
-            <Text style={[styles.autoRunLabel, { color: autoRun ? colors.primary : colors.mutedForeground }]}>
-              Auto
-            </Text>
+            <Text style={[styles.autoRunLabel, { color: autoRun ? colors.primary : colors.mutedForeground }]}>Auto</Text>
           </Pressable>
         )}
 
-        {/* Share button */}
         <Pressable
-          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setShareOpen(true)}
           hitSlop={4}
         >
@@ -742,7 +713,7 @@ export default function ProjectEditorScreen() {
         </Pressable>
 
         <Pressable
-          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setDeployOpen(true)}
           hitSlop={4}
         >
@@ -750,19 +721,11 @@ export default function ProjectEditorScreen() {
         </Pressable>
 
         <Pressable
-          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={() => setExportOpen(true)}
           hitSlop={4}
         >
           <MaterialCommunityIcons name="github" size={18} color={colors.foreground} />
-        </Pressable>
-
-        <Pressable
-          style={[styles.agentBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={() => setAgentOpen(true)}
-          hitSlop={4}
-        >
-          <Text style={styles.agentBtnEmoji}>🤡</Text>
         </Pressable>
 
         {canRun && (
@@ -771,223 +734,237 @@ export default function ProjectEditorScreen() {
             onPress={handleRun}
             disabled={isRunning || !selectedFileId}
           >
-            {isRunning ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <Ionicons name="play" size={16} color={colors.primaryForeground} />
-            )}
+            {isRunning
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Ionicons name="play" size={16} color={colors.primaryForeground} />
+            }
           </Pressable>
         )}
       </View>
 
-      {/* ── Body: sidebar + editor ────────────────────────────────── */}
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
+      {/* ── Split-screen body ─────────────────────────────────────── */}
+      <View
+        style={[styles.splitContainer, { flexDirection: isLandscape ? 'row' : 'column' }]}
+        onLayout={onSplitContainerLayout}
       >
-        <View style={styles.body}>
-          {/* Sidebar */}
-          <Animated.View
-            style={[
-              styles.sidebar,
-              { width: sidebarWidth, borderRightColor: colors.border, backgroundColor: colors.card },
-            ]}
-          >
-            <View style={[styles.sidebarHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[styles.sidebarTitle, { color: colors.mutedForeground }]}>FILES</Text>
-              <Pressable onPress={() => setShowNewFile(true)} hitSlop={8}>
-                <Ionicons name="add" size={18} color={colors.primary} />
-              </Pressable>
-            </View>
-            <FlatList
-              data={project?.files ?? []}
-              keyExtractor={(item) => String(item.id)}
-              style={styles.fileList}
-              contentContainerStyle={{ padding: 6, gap: 2 }}
-              scrollEnabled={!!(project?.files && project.files.length > 4)}
-              renderItem={({ item }) => (
-                <FileItem
-                  file={item}
-                  selected={item.id === selectedFileId}
-                  onSelect={() => selectFile(item)}
-                  onLongPress={() => { setRenameFile(item); setRenameFilePath(item.path); }}
-                  onDelete={() => handleDeleteFile(item)}
-                  colors={colors}
-                />
-              )}
-              ListEmptyComponent={
-                <Text style={[styles.noFiles, { color: colors.mutedForeground }]}>No files</Text>
-              }
-            />
-          </Animated.View>
 
-          {/* Code editor */}
-          <View style={[styles.editorPane, { backgroundColor: colors.background }]}>
-            {selectedFile ? (
-              isEditing ? (
-                <TextInput
-                  ref={codeInputRef}
-                  style={[
-                    styles.codeInput,
-                    {
-                      color: colors.foreground,
-                      backgroundColor: colors.background,
-                    },
-                  ]}
-                  value={editorContent}
-                  onChangeText={handleEditorChange}
-                  multiline
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  spellCheck={false}
-                  textAlignVertical="top"
-                  scrollEnabled
-                  onScroll={(e) => {
-                    const y = e.nativeEvent.contentOffset.y;
-                    sharedScrollY.current = y;
-                    if (selectedFileId) saveScrollOffset(selectedFileId, y);
-                  }}
-                  keyboardType="default"
-                  placeholder="// Start coding..."
-                  placeholderTextColor={colors.mutedForeground}
-                  autoFocus
-                  selection={pendingSelection}
-                  onSelectionChange={(e) => {
-                    setPendingSelection(undefined);
-                    // Track which line the cursor is on so the keyboard listener
-                    // can re-scroll to keep it visible after the keyboard opens.
-                    const start = e.nativeEvent.selection.start;
-                    cursorLineRef.current = editorContent.slice(0, start).split('\n').length - 1;
-                  }}
-                  onBlur={() => setIsEditing(false)}
-                />
-              ) : (
-                editorContent.length === 0 ? (
-                  <Pressable
-                    style={styles.editorPane}
-                    onPress={() => {
-                      setIsEditing(true);
-                      setTimeout(() => codeInputRef.current?.focus(), 50);
-                    }}
-                  >
-                    <Text style={[styles.codeInput, { color: colors.mutedForeground }]}>
-                      // Start coding...
-                    </Text>
-                  </Pressable>
-                ) : (
-                  <SyntaxHighlighter
-                    key={selectedFileId}
-                    code={editorContent}
-                    language={selectedFile.language}
-                    scrollRef={viewScrollRef}
-                    initialScrollY={sharedScrollY.current}
-                    onScrollY={(y) => { sharedScrollY.current = y; if (selectedFileId) saveScrollOffset(selectedFileId, y); }}
-                    onLinePress={(lineIndex) => {
-                      // Compute char offset of the start of the tapped line
-                      const codeLines = editorContent.split('\n');
-                      const charOffset = codeLines
-                        .slice(0, lineIndex)
-                        .reduce((sum, l) => sum + l.length + 1, 0);
-                      // Store line index so the useEffect can scroll the TextInput to it
-                      pendingScrollLineRef.current = lineIndex;
-                      setPendingSelection({ start: charOffset, end: charOffset });
-                      setIsEditing(true);
-                      setTimeout(() => codeInputRef.current?.focus(), 50);
-                    }}
-                  />
-                )
-              )
-            ) : (
-              <View style={styles.noFileSelected}>
-                <Feather name="file-text" size={40} color={colors.border} />
-                <Text style={[styles.noFileText, { color: colors.mutedForeground }]}>
-                  Select a file to edit
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-
-      {/* ── Terminal Panel ────────────────────────────────────────── */}
-      {terminalVisible && (
-        <Animated.View
+        {/* Chat panel */}
+        <View
           style={[
-            styles.terminal,
-            {
-              backgroundColor: '#0a0f14',
-              borderTopColor: colors.border,
-              height: terminalAnim.interpolate({ inputRange: [0, 1], outputRange: [0, TERMINAL_HEIGHT] }),
-            },
+            styles.chatPane,
+            isLandscape
+              ? { width: chatSize, borderRightWidth: 1, borderRightColor: colors.border }
+              : { height: chatSize, borderBottomWidth: 1, borderBottomColor: colors.border },
+            { backgroundColor: colors.background },
           ]}
         >
-          {/* Terminal header */}
-          <View style={[styles.termHeader, { borderBottomColor: colors.border }]}>
-            <View style={styles.termHeaderLeft}>
-              <View style={[styles.termDot, { backgroundColor: '#f85149' }]} />
-              <View style={[styles.termDot, { backgroundColor: '#d29922' }]} />
-              <View style={[styles.termDot, { backgroundColor: '#3fb950' }]} />
-              <Text style={[styles.termTitle, { color: '#8b949e' }]}>Terminal</Text>
-            </View>
-            <View style={styles.termHeaderRight}>
-              {exitCode !== null && (
-                <View style={[styles.exitBadge, { backgroundColor: exitCode === 0 ? '#3fb95022' : '#f8514922', borderColor: exitCode === 0 ? '#3fb95055' : '#f8514955' }]}>
-                  <Text style={[styles.exitText, { color: exitCode === 0 ? '#3fb950' : '#f85149' }]}>
-                    exit {exitCode}
-                  </Text>
+          <AgentChat
+            projectId={projectId}
+            onFilesChanged={onFilesChanged}
+            initialMessage={initialMessage}
+          />
+        </View>
+
+        {/* Draggable divider */}
+        <View
+          style={[
+            styles.divider,
+            isLandscape ? styles.dividerVertical : styles.dividerHorizontal,
+          ]}
+          {...panResponder.panHandlers}
+        >
+          {/* Grip dots */}
+          <View style={[styles.dividerGrip, isLandscape && styles.dividerGripV]}>
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={[styles.gripDot, { backgroundColor: colors.mutedForeground }]} />
+            ))}
+          </View>
+        </View>
+
+        {/* Workspace panel */}
+        <View style={[styles.workspacePane, { backgroundColor: colors.background }]}>
+          {/* Sidebar + editor */}
+          <View style={styles.body}>
+            {/* Sidebar */}
+            <Animated.View
+              style={[
+                styles.sidebar,
+                { width: sidebarWidth, borderRightColor: colors.border, backgroundColor: colors.card },
+              ]}
+            >
+              <View style={[styles.sidebarHeader, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.sidebarTitle, { color: colors.mutedForeground }]}>FILES</Text>
+                <Pressable onPress={() => setShowNewFile(true)} hitSlop={8}>
+                  <Ionicons name="add" size={18} color={colors.primary} />
+                </Pressable>
+              </View>
+              <FlatList
+                data={project?.files ?? []}
+                keyExtractor={(item) => String(item.id)}
+                style={styles.fileList}
+                contentContainerStyle={{ padding: 6, gap: 2 }}
+                scrollEnabled={!!(project?.files && project.files.length > 4)}
+                renderItem={({ item }) => (
+                  <FileItem
+                    file={item}
+                    selected={item.id === selectedFileId}
+                    onSelect={() => selectFile(item)}
+                    onLongPress={() => { setRenameFile(item); setRenameFilePath(item.path); }}
+                    onDelete={() => handleDeleteFile(item)}
+                    colors={colors}
+                  />
+                )}
+                ListEmptyComponent={
+                  <Text style={[styles.noFiles, { color: colors.mutedForeground }]}>No files</Text>
+                }
+              />
+            </Animated.View>
+
+            {/* Code editor */}
+            <View style={[styles.editorPane, { backgroundColor: colors.background }]}>
+              {selectedFile ? (
+                isEditing ? (
+                  <TextInput
+                    ref={codeInputRef}
+                    style={[styles.codeInput, { color: colors.foreground, backgroundColor: colors.background }]}
+                    value={editorContent}
+                    onChangeText={handleEditorChange}
+                    multiline
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    textAlignVertical="top"
+                    scrollEnabled
+                    onScroll={(e) => {
+                      const y = e.nativeEvent.contentOffset.y;
+                      sharedScrollY.current = y;
+                      if (selectedFileId) saveScrollOffset(selectedFileId, y);
+                    }}
+                    keyboardType="default"
+                    placeholder="// Start coding..."
+                    placeholderTextColor={colors.mutedForeground}
+                    autoFocus
+                    selection={pendingSelection}
+                    onSelectionChange={(e) => {
+                      setPendingSelection(undefined);
+                      const start = e.nativeEvent.selection.start;
+                      cursorLineRef.current = editorContent.slice(0, start).split('\n').length - 1;
+                    }}
+                    onBlur={() => setIsEditing(false)}
+                  />
+                ) : (
+                  editorContent.length === 0 ? (
+                    <Pressable
+                      style={styles.editorPane}
+                      onPress={() => { setIsEditing(true); setTimeout(() => codeInputRef.current?.focus(), 50); }}
+                    >
+                      <Text style={[styles.codeInput, { color: colors.mutedForeground }]}>// Start coding...</Text>
+                    </Pressable>
+                  ) : (
+                    <SyntaxHighlighter
+                      key={selectedFileId}
+                      code={editorContent}
+                      language={selectedFile.language}
+                      scrollRef={viewScrollRef}
+                      initialScrollY={sharedScrollY.current}
+                      onScrollY={(y) => { sharedScrollY.current = y; if (selectedFileId) saveScrollOffset(selectedFileId, y); }}
+                      onLinePress={(lineIndex) => {
+                        const codeLines = editorContent.split('\n');
+                        const charOffset = codeLines.slice(0, lineIndex).reduce((sum, l) => sum + l.length + 1, 0);
+                        pendingScrollLineRef.current = lineIndex;
+                        setPendingSelection({ start: charOffset, end: charOffset });
+                        setIsEditing(true);
+                        setTimeout(() => codeInputRef.current?.focus(), 50);
+                      }}
+                    />
+                  )
+                )
+              ) : (
+                <View style={styles.noFileSelected}>
+                  <Feather name="file-text" size={40} color={colors.border} />
+                  <Text style={[styles.noFileText, { color: colors.mutedForeground }]}>Select a file to edit</Text>
                 </View>
               )}
-              <Pressable onPress={() => setTerminalLines([])} style={styles.termBtn} hitSlop={8}>
-                <Feather name="trash-2" size={14} color="#8b949e" />
-              </Pressable>
-              <Pressable onPress={closeTerminal} style={styles.termBtn} hitSlop={8}>
-                <Ionicons name="chevron-down" size={18} color="#8b949e" />
-              </Pressable>
             </View>
           </View>
 
-          {/* Terminal output */}
-          <ScrollView
-            ref={termScrollRef}
-            style={styles.termOutput}
-            contentContainerStyle={{ padding: 12, paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 12 }}
-          >
-            {terminalLines.map((line) => (
-              <Text
-                key={line.id}
-                style={[
-                  styles.termLine,
-                  line.type === 'stdout' && { color: '#e6edf3' },
-                  line.type === 'stderr' && { color: '#f85149' },
-                  line.type === 'system' && { color: '#8b949e', fontStyle: 'italic' },
-                ]}
-              >
-                {line.text}
-              </Text>
-            ))}
-            {isRunning && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                <ActivityIndicator size="small" color="#3fb950" />
-                <Text style={{ color: '#3fb950', fontSize: 12, fontFamily: 'Inter_400Regular' }}>Running...</Text>
+          {/* Terminal panel — contained within workspace */}
+          {terminalVisible && (
+            <Animated.View
+              style={[
+                styles.terminal,
+                {
+                  backgroundColor: '#0a0f14',
+                  borderTopColor: colors.border,
+                  height: terminalAnim.interpolate({ inputRange: [0, 1], outputRange: [0, TERMINAL_HEIGHT] }),
+                },
+              ]}
+            >
+              <View style={[styles.termHeader, { borderBottomColor: colors.border }]}>
+                <View style={styles.termHeaderLeft}>
+                  <View style={[styles.termDot, { backgroundColor: '#f85149' }]} />
+                  <View style={[styles.termDot, { backgroundColor: '#d29922' }]} />
+                  <View style={[styles.termDot, { backgroundColor: '#3fb950' }]} />
+                  <Text style={[styles.termTitle, { color: '#8b949e' }]}>Terminal</Text>
+                </View>
+                <View style={styles.termHeaderRight}>
+                  {exitCode !== null && (
+                    <View style={[styles.exitBadge, { backgroundColor: exitCode === 0 ? '#3fb95022' : '#f8514922', borderColor: exitCode === 0 ? '#3fb95055' : '#f8514955' }]}>
+                      <Text style={[styles.exitText, { color: exitCode === 0 ? '#3fb950' : '#f85149' }]}>exit {exitCode}</Text>
+                    </View>
+                  )}
+                  <Pressable onPress={() => setTerminalLines([])} style={styles.termBtn} hitSlop={8}>
+                    <Feather name="trash-2" size={14} color="#8b949e" />
+                  </Pressable>
+                  <Pressable onPress={closeTerminal} style={styles.termBtn} hitSlop={8}>
+                    <Ionicons name="chevron-down" size={18} color="#8b949e" />
+                  </Pressable>
+                </View>
               </View>
-            )}
-          </ScrollView>
-        </Animated.View>
-      )}
 
-      {/* Show terminal button when hidden */}
-      {!terminalVisible && (
-        <Pressable
-          style={[styles.termToggle, { backgroundColor: colors.card, borderTopColor: colors.border }]}
-          onPress={openTerminal}
-        >
-          <Text style={[styles.termToggleText, { color: colors.mutedForeground }]}>Terminal</Text>
-          <Ionicons name="chevron-up" size={16} color={colors.mutedForeground} />
-        </Pressable>
-      )}
+              <ScrollView
+                ref={termScrollRef}
+                style={styles.termOutput}
+                contentContainerStyle={{ padding: 12, paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 12 }}
+              >
+                {terminalLines.map((line) => (
+                  <Text
+                    key={line.id}
+                    style={[
+                      styles.termLine,
+                      line.type === 'stdout' && { color: '#e6edf3' },
+                      line.type === 'stderr' && { color: '#f85149' },
+                      line.type === 'system' && { color: '#8b949e', fontStyle: 'italic' },
+                    ]}
+                  >
+                    {line.text}
+                  </Text>
+                ))}
+                {isRunning && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <ActivityIndicator size="small" color="#3fb950" />
+                    <Text style={{ color: '#3fb950', fontSize: 12, fontFamily: 'Inter_400Regular' }}>Running...</Text>
+                  </View>
+                )}
+              </ScrollView>
+            </Animated.View>
+          )}
 
-      {/* In-app HTML preview */}
+          {/* Show terminal button */}
+          {!terminalVisible && (
+            <Pressable
+              style={[styles.termToggle, { backgroundColor: colors.card, borderTopColor: colors.border }]}
+              onPress={openTerminal}
+            >
+              <Text style={[styles.termToggleText, { color: colors.mutedForeground }]}>Terminal</Text>
+              <Ionicons name="chevron-up" size={16} color={colors.mutedForeground} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      {/* ── Modals ────────────────────────────────────────────────── */}
+
       <InAppPreview
         visible={previewOpen}
         onClose={() => setPreviewOpen(false)}
@@ -995,7 +972,6 @@ export default function ProjectEditorScreen() {
         fileName={selectedFile?.path ?? ""}
       />
 
-      {/* Deploy */}
       <DeployModal
         visible={deployOpen}
         onClose={() => setDeployOpen(false)}
@@ -1003,7 +979,6 @@ export default function ProjectEditorScreen() {
         projectName={project?.name ?? 'my-project'}
       />
 
-      {/* GitHub export */}
       <GitHubExportModal
         visible={exportOpen}
         onClose={() => setExportOpen(false)}
@@ -1011,16 +986,6 @@ export default function ProjectEditorScreen() {
         projectName={project?.name ?? 'my-project'}
       />
 
-      {/* Agent chat */}
-      <AgentChat
-        projectId={projectId}
-        visible={agentOpen}
-        onClose={() => setAgentOpen(false)}
-        onFilesChanged={() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })}
-        initialMessage={initialMessage}
-      />
-
-      {/* Share preview */}
       <SharePreviewModal
         visible={shareOpen}
         onClose={() => setShareOpen(false)}
@@ -1133,122 +1098,90 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    gap: 8,
+    gap: 6,
   },
   headerBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
   headerTitle: { flex: 1, minWidth: 0 },
-  projectName: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
-  fileName: { fontSize: 11, fontFamily: 'Inter_400Regular' },
-  saveIndicator: { marginRight: 4 },
+  projectName: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+  fileName: { fontSize: 10, fontFamily: 'Inter_400Regular' },
+  saveIndicator: { marginRight: 2 },
   autoRunBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 5, borderRadius: 8, borderWidth: 1,
   },
   autoRunLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  agentBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
+  headerIconBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  runBtn: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+
+  // Split layout
+  splitContainer: { flex: 1, overflow: 'hidden' },
+  chatPane: { overflow: 'hidden' },
+  divider: {
     justifyContent: 'center',
-  },
-  agentBtnEmoji: { fontSize: 18, lineHeight: 22 },
-  runBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    zIndex: 10,
   },
+  dividerHorizontal: { height: 5, width: '100%', flexDirection: 'row' },
+  dividerVertical: { width: 5, height: '100%', flexDirection: 'column' },
+  dividerGrip: { flexDirection: 'row', gap: 3, alignItems: 'center' },
+  dividerGripV: { flexDirection: 'column' },
+  gripDot: { width: 3, height: 3, borderRadius: 1.5, opacity: 0.5 },
+
+  workspacePane: { flex: 1, overflow: 'hidden' },
+
+  // Sidebar + editor
   body: { flex: 1, flexDirection: 'row', overflow: 'hidden' },
-  sidebar: {
-    overflow: 'hidden',
-    borderRightWidth: 1,
-  },
+  sidebar: { overflow: 'hidden', borderRightWidth: 1 },
   sidebarHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 1,
   },
   sidebarTitle: { fontSize: 10, fontFamily: 'Inter_600SemiBold', letterSpacing: 1 },
   fileList: { flex: 1 },
   noFiles: { fontSize: 11, fontFamily: 'Inter_400Regular', textAlign: 'center', marginTop: 16 },
   editorPane: { flex: 1 },
   codeInput: {
-    flex: 1,
-    padding: 14,
-    fontSize: 13,
-    lineHeight: CODE_LINE_HEIGHT,
+    flex: 1, padding: 14, fontSize: 13, lineHeight: CODE_LINE_HEIGHT,
     fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   noFileSelected: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   noFileText: { fontSize: 14, fontFamily: 'Inter_400Regular' },
-  terminal: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    borderTopWidth: 1,
-    overflow: 'hidden',
-  },
+
+  // Terminal
+  terminal: { position: 'absolute', bottom: 0, left: 0, right: 0, borderTopWidth: 1, overflow: 'hidden' },
   termHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1,
   },
   termHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   termDot: { width: 10, height: 10, borderRadius: 5 },
   termTitle: { fontSize: 11, fontFamily: 'Inter_500Medium', marginLeft: 8, letterSpacing: 0.5 },
   termHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  exitBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-  },
+  exitBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, borderWidth: 1 },
   exitText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   termBtn: { padding: 2 },
   termOutput: { flex: 1 },
   termLine: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 12, lineHeight: 18,
     fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   termToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    gap: 6,
-    borderTopWidth: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 8, paddingHorizontal: 16, gap: 6, borderTopWidth: 1,
   },
   termToggleText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+
+  // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalBox: { width: 300, borderRadius: 16, borderWidth: 1, padding: 20, gap: 10 },
   modalTitle: { fontSize: 18, fontFamily: 'Inter_700Bold' },
   modalInput: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
+    borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 14, fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   langLabel: { fontSize: 12, fontFamily: 'Inter_500Medium' },
   langRow: { flexDirection: 'row', gap: 6 },

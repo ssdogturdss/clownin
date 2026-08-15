@@ -70,7 +70,7 @@ export function GitHubExportModal({
   // Load saved token and linked repo
   useEffect(() => {
     if (visible) {
-      AsyncStorage.getItem(TOKEN_KEY).then((t) => { if (t) setGhToken(t); });
+      AsyncStorage.getItem(TOKEN_KEY).then((t) => { if (t) setGhToken(t); }).catch(() => {});
       AsyncStorage.getItem(repoStorageKey(projectId)).then((raw) => {
         if (raw) {
           try {
@@ -81,7 +81,7 @@ export function GitHubExportModal({
         } else {
           setLinkedRepo(null);
         }
-      });
+      }).catch(() => {});
       setRepoName(slugify(projectName));
       setResult(null);
       setError("");
