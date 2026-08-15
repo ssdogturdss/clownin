@@ -31,6 +31,8 @@ import {
   useCreateFile,
   useUpdateFile,
   useDeleteFile,
+  useUpdateProject,
+  useListServers,
   getGetProjectQueryKey,
 } from '@workspace/api-client-react';
 import type { ProjectFile } from '@workspace/api-client-react';
@@ -131,6 +133,26 @@ export default function ProjectEditorScreen() {
   const isLandscape = width > height;
 
   const { data: project, isLoading } = useGetProject(projectId);
+  const { data: servers = [] } = useListServers();
+  const updateProjectMutation = useUpdateProject();
+
+  const handlePickServer = useCallback(() => {
+    const activeServer = servers.find((s) => s.id === project?.serverId);
+    const options = [
+      { text: 'Local (default)', onPress: () => updateProjectMutation.mutateAsync({ id: projectId, data: { serverId: null } }).then(() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })).catch(() => {}) },
+      ...servers.map((s) => ({
+        text: `${s.name} (${s.username}@${s.host})${project?.serverId === s.id ? ' ✓' : ''}`,
+        onPress: () => updateProjectMutation.mutateAsync({ id: projectId, data: { serverId: s.id } }).then(() => queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(projectId) })).catch(() => {}),
+      })),
+      { text: 'Manage servers', onPress: () => router.push('/(app)/servers') },
+      { text: 'Cancel', style: 'cancel' as const, onPress: () => {} },
+    ];
+    Alert.alert(
+      'Run on server',
+      activeServer ? `Currently: ${activeServer.name}` : 'Currently: Local',
+      options,
+    );
+  }, [servers, project, projectId, updateProjectMutation, queryClient]);
 
   // ── Split-screen state ────────────────────────────────────────────────────
   const DEFAULT_SPLIT_RATIO = 0.45;
@@ -722,6 +744,18 @@ export default function ProjectEditorScreen() {
           hitSlop={4}
         >
           <MaterialCommunityIcons name="rocket-launch-outline" size={17} color={colors.primary} />
+        </Pressable>
+
+        <Pressable
+          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={handlePickServer}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons
+            name="server-outline"
+            size={17}
+            color={project?.serverId ? colors.primary : colors.mutedForeground}
+          />
         </Pressable>
 
         <Pressable

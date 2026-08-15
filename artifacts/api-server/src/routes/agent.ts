@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
+import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
-import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
@@ -552,9 +553,34 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                   .limit(1);
                 if (!row) { result = `Not found: ${path}`; isError = true; }
                 else {
-                  // Sync all project files so multi-file imports and node_modules work
                   const allFiles = await db.select().from(projectFilesTable)
                     .where(eq(projectFilesTable.projectId, projectId));
+
+                  // ── SSH path ────────────────────────────────────────────────
+                  if (project.serverId) {
+                    const [server] = await db.select().from(serversTable)
+                      .where(and(eq(serversTable.id, project.serverId), eq(serversTable.userId, userId)))
+                      .limit(1);
+                    if (!server) {
+                      result = "Custom server not found — detach it from this project and try again.";
+                      isError = true;
+                    } else {
+                      const { stdout, stderr, exitCode } = await runRemoteProcess(
+                        { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },
+                        projectId, allFiles, row.path, row.language, EXEC_TIMEOUT_MS
+                      );
+                      const parts = [
+                        stdout && `stdout:\n${stdout.trimEnd()}`,
+                        stderr && `stderr:\n${stderr.trimEnd()}`,
+                        `exit: ${exitCode}`,
+                      ].filter(Boolean);
+                      result = parts.join("\n");
+                      if (exitCode !== 0) isError = true;
+                    }
+                    break;
+                  }
+
+                  // ── Local path ──────────────────────────────────────────────
                   const dir = await syncProjectFiles(projectId, allFiles);
                   const { join: pathJoin } = await import("path");
                   const absPath = pathJoin(dir, row.path);

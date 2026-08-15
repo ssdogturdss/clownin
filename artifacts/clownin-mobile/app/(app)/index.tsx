@@ -269,6 +269,13 @@ export default function ProjectsScreen() {
           </Pressable>
           <Pressable
             style={styles.iconBtn}
+            onPress={() => { router.push('/(app)/servers'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+            hitSlop={8}
+          >
+            <MaterialCommunityIcons name="server-outline" size={22} color={colors.mutedForeground} />
+          </Pressable>
+          <Pressable
+            style={styles.iconBtn}
             onPress={() => { setShowProfile(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
           >
             <Ionicons name="person-circle-outline" size={26} color={colors.mutedForeground} />

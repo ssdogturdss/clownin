@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
-import { db, projectsTable, projectFilesTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, serversTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles } from "../lib/projectWorkspace";
+import { streamRemoteProcess } from "../lib/sshExecution";
 
 const router: IRouter = Router();
 
@@ -78,23 +79,11 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     return;
   }
 
-  // Sync ALL project files to the per-project workspace so multi-file
-  // imports and installed node_modules work correctly.
+  // Get all project files (needed for both local sync and SSH upload)
   const allFiles = await db
     .select()
     .from(projectFilesTable)
     .where(eq(projectFilesTable.projectId, projectId));
-
-  let projDir: string;
-  try {
-    projDir = await syncProjectFiles(projectId, allFiles);
-  } catch (err) {
-    req.log.error({ err }, "Failed to sync project files");
-    res.status(500).json({ error: "Failed to prepare execution" });
-    return;
-  }
-
-  const absFilePath = join(projDir, file.path);
 
   // Set up SSE
   res.setHeader("Content-Type", "text/event-stream");
@@ -110,6 +99,52 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
 
   req.log.info({ projectId, fileId: file.id, language: file.language }, "Executing code");
 
+  // ── SSH execution path ─────────────────────────────────────────────────────
+  if (project.serverId) {
+    const [server] = await db
+      .select()
+      .from(serversTable)
+      .where(and(eq(serversTable.id, project.serverId), eq(serversTable.userId, userId)))
+      .limit(1);
+
+    if (!server) {
+      sendEvent("stderr", "[Custom server not found — run your project locally or reconfigure it]");
+      sendEvent("exit", "-1");
+      res.end();
+      return;
+    }
+
+    const abortSignal = { aborted: false };
+    req.on("close", () => { abortSignal.aborted = true; });
+
+    streamRemoteProcess(
+      { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },
+      projectId,
+      allFiles,
+      file.path,
+      file.language,
+      {
+        onStdout: (chunk) => sendEvent("stdout", chunk),
+        onStderr: (chunk) => sendEvent("stderr", chunk),
+        onExit: (code) => { sendEvent("exit", String(code)); res.end(); },
+        onError: (msg) => { sendEvent("stderr", `\n[SSH error: ${msg}]`); sendEvent("exit", "-1"); res.end(); },
+      },
+      abortSignal
+    );
+    return;
+  }
+
+  // ── Local execution path ───────────────────────────────────────────────────
+  let projDir: string;
+  try {
+    projDir = await syncProjectFiles(projectId, allFiles);
+  } catch (err) {
+    req.log.error({ err }, "Failed to sync project files");
+    res.status(500).json({ error: "Failed to prepare execution" });
+    return;
+  }
+
+  const absFilePath = join(projDir, file.path);
   const { cmd, args } = getExecutorCommand(file.language, absFilePath)!;
 
   // Strict allowlist — never pass server secrets (DATABASE_URL, JWT_SECRET, etc.)

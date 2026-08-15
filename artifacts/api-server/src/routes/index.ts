@@ -9,6 +9,7 @@ import githubRouter from "./github";
 import deployRouter from "./deploy";
 import privacyRouter from "./privacy";
 import termsRouter from "./terms";
+import serversRouter from "./servers";
 
 const router: IRouter = Router();
 
@@ -22,6 +23,7 @@ router.use(githubRouter);
 router.use(deployRouter);
 router.use(privacyRouter);
 router.use(termsRouter);
+router.use(serversRouter);
 
 export default router;
 

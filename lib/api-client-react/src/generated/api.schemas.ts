@@ -65,8 +65,45 @@ export interface Project {
   previewEnabled: boolean;
   /** Short ID used in the public preview URL (/preview/:shortId) */
   previewShortId?: string | null;
+  /** Optional SSH server used to execute code for this project */
+  serverId?: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A saved SSH server configuration (credentials are never returned) */
+export interface ServerConfig {
+  id: number;
+  userId: number;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateServerBody {
+  name: string;
+  host: string;
+  port?: number;
+  username: string;
+  password?: string;
+  privateKey?: string;
+}
+
+export interface UpdateServerBody {
+  name?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  privateKey?: string;
+}
+
+export interface TestConnectionResponse {
+  ok: boolean;
+  error?: string;
 }
 
 export interface EnablePreviewResponse {
@@ -98,6 +135,7 @@ export interface UpdateProjectBody {
   /** @minLength 1 */
   name?: string;
   description?: string;
+  serverId?: number | null;
 }
 
 export interface CreateFileBody {

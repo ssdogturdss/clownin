@@ -146,10 +146,12 @@ router.patch("/projects/:id", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const { name, description } = req.body ?? {};
-  const updates: Partial<{ name: string; description: string }> = {};
+  const { name, description, serverId } = req.body ?? {};
+  const updates: Partial<{ name: string; description: string; serverId: number | null }> = {};
   if (name != null) updates.name = name;
   if (description != null) updates.description = description;
+  // serverId: explicit null clears it, a number sets it, undefined leaves it unchanged
+  if (serverId !== undefined) updates.serverId = serverId === null ? null : Number(serverId);
 
   const [updated] = await db
     .update(projectsTable)

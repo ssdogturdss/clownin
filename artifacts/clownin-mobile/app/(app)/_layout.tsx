@@ -16,6 +16,10 @@ export default function AppLayout() {
         name="project/[id]"
         options={{ animation: 'slide_from_right', gestureEnabled: true }}
       />
+      <Stack.Screen
+        name="servers"
+        options={{ animation: 'slide_from_right', gestureEnabled: true }}
+      />
     </Stack>
   );
 }
