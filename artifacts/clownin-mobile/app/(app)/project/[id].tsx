@@ -92,7 +92,11 @@ function FileItem({
           {file.path}
         </Text>
       </Pressable>
-      <Pressable onPress={onDelete} hitSlop={8} style={fileStyles.deleteBtn}>
+      <Pressable
+        onPress={(e) => { (e as any).stopPropagation?.(); onDelete(); }}
+        hitSlop={8}
+        style={fileStyles.deleteBtn}
+      >
         <Ionicons name="trash-outline" size={12} color={colors.destructive} />
       </Pressable>
     </View>
