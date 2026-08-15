@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 import { db, projectsTable, projectFilesTable, serversTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
@@ -12,6 +13,23 @@ const router: IRouter = Router();
 
 const EXECUTION_TIMEOUT_MS = 10_000;
 
+// ── Active run registry ────────────────────────────────────────────────────────
+// Maps run token → registered run entry. The token is sent to the client only
+// AFTER the process is registered here, so there is no window where the client
+// holds a token but stdin would be dropped silently.
+//
+// NOTE: this map lives in process memory only. A server restart clears it.
+// In-flight runs during a restart will have their tokens rejected with 410.
+type ActiveRun = {
+  projectId: number;
+  userId: number;
+  /** Write data to the process stdin. Returns false when stdin is unavailable
+   *  (process closed fd 0, broken pipe, or stream errored). */
+  writeStdin: (data: string) => boolean;
+};
+const activeRuns = new Map<string, ActiveRun>();
+
+// ── Language → executor ────────────────────────────────────────────────────────
 function getExecutorCommand(language: string, filePath: string): { cmd: string; args: string[] } | null {
   switch (language) {
     case "javascript":
@@ -33,6 +51,7 @@ function getExecutorCommand(language: string, filePath: string): { cmd: string; 
   }
 }
 
+// ── Execute ────────────────────────────────────────────────────────────────────
 router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void> => {
   const { userId } = getUser(req);
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
@@ -92,12 +111,16 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
-  function sendEvent(type: "stdout" | "stderr" | "exit", payload: string) {
+  function sendEvent(type: "token" | "stdout" | "stderr" | "exit", payload: string) {
     const data = JSON.stringify({ type, payload });
     res.write(`data: ${data}\n\n`);
   }
 
   req.log.info({ projectId, fileId: file.id, language: file.language }, "Executing code");
+
+  // Stable token for this run — sent to the client only AFTER the process
+  // is registered in activeRuns (see each path below).
+  const runToken = randomUUID();
 
   // ── SSH execution path ─────────────────────────────────────────────────────
   if (project.serverId) {
@@ -115,7 +138,10 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     }
 
     const abortSignal = { aborted: false };
-    req.on("close", () => { abortSignal.aborted = true; });
+    req.on("close", () => {
+      abortSignal.aborted = true;
+      activeRuns.delete(runToken);
+    });
 
     streamRemoteProcess(
       { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },
@@ -124,10 +150,26 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
       file.path,
       file.language,
       {
+        // onStreamReady fires only after the SSH exec channel is open and
+        // ready to receive input — register THEN emit the token so the
+        // client cannot send stdin before the channel exists.
+        onStreamReady: (writeStdin) => {
+          activeRuns.set(runToken, { projectId, userId, writeStdin });
+          sendEvent("token", runToken);
+        },
         onStdout: (chunk) => sendEvent("stdout", chunk),
         onStderr: (chunk) => sendEvent("stderr", chunk),
-        onExit: (code) => { sendEvent("exit", String(code)); res.end(); },
-        onError: (msg) => { sendEvent("stderr", `\n[SSH error: ${msg}]`); sendEvent("exit", "-1"); res.end(); },
+        onExit: (code) => {
+          activeRuns.delete(runToken);
+          sendEvent("exit", String(code));
+          res.end();
+        },
+        onError: (msg) => {
+          activeRuns.delete(runToken);
+          sendEvent("stderr", `\n[SSH error: ${msg}]`);
+          sendEvent("exit", "-1");
+          res.end();
+        },
       },
       abortSignal
     );
@@ -159,11 +201,41 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     PYTHONHOME: undefined,
   };
 
+  // stdio: 'pipe' keeps stdin open so we can write to it after the process starts.
   const child = spawn(cmd, args, {
-    timeout: EXECUTION_TIMEOUT_MS,
     env: safeEnv,
     cwd: projDir,
+    stdio: "pipe",
   });
+
+  // Track whether stdin is still writable. The error listener MUST be attached
+  // before any write can happen (i.e. before the token is emitted) so there is
+  // no window where an EPIPE event could go unhandled and crash the process.
+  let stdinOpen = true;
+  child.stdin?.on("error", () => {
+    // EPIPE or other stdin errors — mark unavailable and evict from registry
+    // so subsequent /stdin requests receive 410 rather than 204.
+    stdinOpen = false;
+    activeRuns.delete(runToken);
+  });
+
+  // Register BEFORE emitting the token so the client can never reach /stdin
+  // before the entry exists.
+  activeRuns.set(runToken, {
+    projectId,
+    userId,
+    writeStdin: (data: string): boolean => {
+      if (!stdinOpen || !child.stdin?.writable) return false;
+      try {
+        child.stdin.write(data);
+        return true;
+      } catch {
+        stdinOpen = false;
+        return false;
+      }
+    },
+  });
+  sendEvent("token", runToken);
 
   const timeout = setTimeout(() => {
     child.kill("SIGKILL");
@@ -180,12 +252,14 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
 
   child.on("close", (code) => {
     clearTimeout(timeout);
+    activeRuns.delete(runToken);
     sendEvent("exit", String(code ?? -1));
     res.end();
   });
 
   child.on("error", (err) => {
     clearTimeout(timeout);
+    activeRuns.delete(runToken);
     req.log.error({ err }, "Execution process error");
     sendEvent("stderr", `\n[Execution error: ${err.message}]`);
     sendEvent("exit", "-1");
@@ -195,8 +269,50 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   // Handle client disconnect
   req.on("close", () => {
     clearTimeout(timeout);
+    activeRuns.delete(runToken);
     child.kill();
   });
+});
+
+// ── Stdin ──────────────────────────────────────────────────────────────────────
+// Write a line of input to an active run's stdin.
+// Body: { token: string, data: string }
+// Returns 204 on success, 410 Gone when the run has ended/never existed.
+router.post("/projects/:id/stdin", requireAuth, (req, res): void => {
+  const { userId } = getUser(req);
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const projectId = parseInt(rawId, 10);
+
+  const { token, data } = req.body ?? {};
+  if (!token || typeof data !== "string") {
+    res.status(400).json({ error: "token and data are required" });
+    return;
+  }
+
+  const run = activeRuns.get(token);
+  if (!run) {
+    // 410 Gone — run has ended or the token is from a server restart.
+    // Client should clear the token and disable the stdin input.
+    res.status(410).json({ error: "Run has ended" });
+    return;
+  }
+
+  // Ownership check: the token must belong to this project and this user.
+  if (run.projectId !== projectId || run.userId !== userId) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
+  // Append newline so programs that read line-by-line (input(), readline) get a full line.
+  // writeStdin returns false when stdin is unavailable (EPIPE, closed fd 0, SSH error).
+  const accepted = run.writeStdin(data.endsWith("\n") ? data : data + "\n");
+  if (!accepted) {
+    // Stdin is no longer available — evict and tell the client to stop sending.
+    activeRuns.delete(token);
+    res.status(410).json({ error: "Process stdin is no longer available" });
+    return;
+  }
+  res.status(204).end();
 });
 
 export default router;

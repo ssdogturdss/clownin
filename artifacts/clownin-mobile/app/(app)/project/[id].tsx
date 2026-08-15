@@ -45,7 +45,7 @@ import * as Haptics from 'expo-haptics';
 import { fetch as expoFetch } from 'expo/fetch';
 
 // ─── Terminal types ───────────────────────────────────────────────────────────
-type TerminalLine = { id: string; type: 'stdout' | 'stderr' | 'system'; text: string };
+type TerminalLine = { id: string; type: 'stdout' | 'stderr' | 'system' | 'input'; text: string };
 
 // ─── Language icon helper ─────────────────────────────────────────────────────
 function langIcon(language: string) {
@@ -350,6 +350,10 @@ export default function ProjectEditorScreen() {
   const termScrollRef = useRef<ScrollView>(null);
   const pendingLinesRef = useRef<TerminalLine[]>([]);
   const rafScheduledRef = useRef(false);
+  // Stdin state
+  const [runToken, setRunToken] = useState<string | null>(null);
+  const runTokenRef = useRef<string | null>(null);
+  const [stdinInput, setStdinInput] = useState('');
 
   // Terminal height — derived from the measured workspace panel, not full screen dims.
   // The workspace panel gets (containerMain - chatSize - 5px divider) of the split container.
@@ -494,6 +498,62 @@ export default function ProjectEditorScreen() {
     setSidebarOpen(!sidebarOpen);
   };
 
+  // Keep runTokenRef in sync so sendStdin can read it without stale closure
+  useEffect(() => { runTokenRef.current = runToken; }, [runToken]);
+
+  // ── Stable addLine — usable outside handleRun (e.g. sendStdin echo) ───────
+  const addLine = useCallback((type: TerminalLine['type'], text: string) => {
+    const TERMINAL_MAX_LINES = 500;
+    pendingLinesRef.current.push({ id: `${Date.now()}-${Math.random()}`, type, text });
+    if (!rafScheduledRef.current) {
+      rafScheduledRef.current = true;
+      requestAnimationFrame(() => {
+        rafScheduledRef.current = false;
+        const batch = pendingLinesRef.current;
+        if (batch.length === 0) return;
+        pendingLinesRef.current = [];
+        setTerminalLines((prev) => {
+          const next = [...prev, ...batch];
+          if (next.length > TERMINAL_MAX_LINES) {
+            const trimmed = next.slice(next.length - TERMINAL_MAX_LINES);
+            return [{ id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' }, ...trimmed];
+          }
+          return next;
+        });
+        setTimeout(() => termScrollRef.current?.scrollToEnd({ animated: true }), 50);
+      });
+    }
+  }, []);
+
+  // ── Send stdin to the running process ─────────────────────────────────────
+  // Echo happens only after the server confirms receipt (not optimistically),
+  // so the user sees dropped input rather than false confirmation.
+  // A 410 response means the run has ended — clear the token so the stdin
+  // row disappears immediately.
+  const sendStdin = useCallback(async (text: string) => {
+    const currentToken = runTokenRef.current;
+    if (!currentToken || !text) return;
+    try {
+      const apiHost = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')
+        : process.env.EXPO_PUBLIC_DOMAIN ?? '';
+      const response = await fetch(`https://${apiHost}/api/projects/${projectId}/stdin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ token: currentToken, data: text }),
+      });
+      if (response.status === 204) {
+        // Server accepted the input — now safe to echo
+        addLine('input', `> ${text}`);
+      } else if (response.status === 410) {
+        // Run has ended — hide the input row
+        setRunToken(null);
+        runTokenRef.current = null;
+      }
+      // Other errors (403, 400, network): silently ignore — don't echo
+    } catch { /* network error — don't echo */ }
+  }, [addLine, projectId, token]);
+
   // ── Terminal ──────────────────────────────────────────────────────────────
   const openTerminal = useCallback(() => {
     setTerminalVisible(true);
@@ -518,29 +578,6 @@ export default function ProjectEditorScreen() {
     isRunningRef.current = true;
     setIsRunning(true);
     openTerminal();
-
-    const TERMINAL_MAX_LINES = 500;
-
-    const flushLines = () => {
-      rafScheduledRef.current = false;
-      const batch = pendingLinesRef.current;
-      if (batch.length === 0) return;
-      pendingLinesRef.current = [];
-      setTerminalLines((prev) => {
-        const next = [...prev, ...batch];
-        if (next.length > TERMINAL_MAX_LINES) {
-          const trimmed = next.slice(next.length - TERMINAL_MAX_LINES);
-          return [{ id: `trim-${Date.now()}`, type: 'system' as const, text: '— Earlier output cleared —' }, ...trimmed];
-        }
-        return next;
-      });
-      setTimeout(() => termScrollRef.current?.scrollToEnd({ animated: true }), 50);
-    };
-
-    const addLine = (type: TerminalLine['type'], text: string) => {
-      pendingLinesRef.current.push({ id: `${Date.now()}-${Math.random()}`, type, text });
-      if (!rafScheduledRef.current) { rafScheduledRef.current = true; requestAnimationFrame(flushLines); }
-    };
 
     addLine('system', '$ Running...');
     const runStartTime = Date.now();
@@ -576,7 +613,10 @@ export default function ProjectEditorScreen() {
             if (line.startsWith('data: ')) {
               try {
                 const event = JSON.parse(line.slice(6)) as { type: string; payload: string };
-                if (event.type === 'stdout') {
+                if (event.type === 'token') {
+                  setRunToken(event.payload);
+                  runTokenRef.current = event.payload;
+                } else if (event.type === 'stdout') {
                   const stripped = event.payload.replace(/\n$/, '');
                   if (stripped) addLine('stdout', stripped);
                 } else if (event.type === 'stderr') {
@@ -598,8 +638,10 @@ export default function ProjectEditorScreen() {
     } finally {
       isRunningRef.current = false;
       setIsRunning(false);
+      setRunToken(null);
+      runTokenRef.current = null;
     }
-  }, [selectedFileId, token, projectId, openTerminal]);
+  }, [selectedFileId, token, projectId, openTerminal, addLine]);
 
   useEffect(() => { handleRunRef.current = handleRun; }, [handleRun]);
 
@@ -973,6 +1015,7 @@ export default function ProjectEditorScreen() {
                       line.type === 'stdout' && { color: '#e6edf3' },
                       line.type === 'stderr' && { color: '#f85149' },
                       line.type === 'system' && { color: '#8b949e', fontStyle: 'italic' },
+                      line.type === 'input' && { color: '#79c0ff' },
                     ]}
                   >
                     {line.text}
@@ -985,6 +1028,43 @@ export default function ProjectEditorScreen() {
                   </View>
                 )}
               </ScrollView>
+
+              {/* ── Stdin input row — only shown once the run token is
+                  received, guaranteeing the process is registered and
+                  ready for input before the user can submit anything. ── */}
+              {isRunning && !!runToken && (
+                <View style={[styles.stdinRow, { borderTopColor: '#21262d' }]}>
+                  <TextInput
+                    style={[styles.stdinInput, { color: '#e6edf3', backgroundColor: '#161b22' }]}
+                    value={stdinInput}
+                    onChangeText={setStdinInput}
+                    placeholder="Send input…"
+                    placeholderTextColor="#4d5566"
+                    returnKeyType="send"
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => {
+                      const text = stdinInput;
+                      if (text !== '') {
+                        sendStdin(text);
+                        setStdinInput('');
+                      }
+                    }}
+                  />
+                  <Pressable
+                    onPress={() => {
+                      const text = stdinInput;
+                      if (text !== '') {
+                        sendStdin(text);
+                        setStdinInput('');
+                      }
+                    }}
+                    style={styles.stdinSendBtn}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="send" size={16} color="#3fb950" />
+                  </Pressable>
+                </View>
+              )}
             </Animated.View>
           )}
 
@@ -1212,6 +1292,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8, paddingHorizontal: 16, gap: 6, borderTopWidth: 1,
   },
   termToggleText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  stdinRow: {
+    flexDirection: 'row', alignItems: 'center',
+    borderTopWidth: 1, paddingHorizontal: 10, paddingVertical: 6, gap: 8,
+  },
+  stdinInput: {
+    flex: 1, fontSize: 12, paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 6, borderWidth: 1, borderColor: '#30363d',
+    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
+  },
+  stdinSendBtn: { padding: 6 },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },

@@ -696,7 +696,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                     body: JSON.stringify({ name: cleanName }),
                   });
                   if (!siteRes.ok) {
-                    const err = (await siteRes.json().catch(() => ({}))).message || `Netlify error ${siteRes.status}`;
+                    const err = ((await siteRes.json().catch(() => ({}))) as { message?: string }).message || `Netlify error ${siteRes.status}`;
                     result = `Netlify error: ${err}`; isError = true; break;
                   }
                   const site = await siteRes.json() as { id: string; ssl_url?: string; url?: string };
@@ -719,7 +719,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                     body: JSON.stringify({ files: fileMap }),
                   });
                   if (!deployRes.ok) {
-                    const err = (await deployRes.json().catch(() => ({}))).message || `Netlify deploy error ${deployRes.status}`;
+                    const err = ((await deployRes.json().catch(() => ({}))) as { message?: string }).message || `Netlify deploy error ${deployRes.status}`;
                     result = `Netlify error: ${err}`; isError = true; break;
                   }
                   const deploy = await deployRes.json() as { id: string; required: string[] };

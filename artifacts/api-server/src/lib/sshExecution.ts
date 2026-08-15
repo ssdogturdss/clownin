@@ -187,6 +187,8 @@ export function runRemoteProcess(
 /**
  * Streaming variant for the execute SSE endpoint.
  * Calls onStdout / onStderr as data arrives, calls onExit when done.
+ * onStreamReady is called with a writeStdin function once the SSH exec channel
+ * is open — the caller can store it to forward stdin from the client.
  */
 export function streamRemoteProcess(
   srv: SshServerConfig,
@@ -195,6 +197,7 @@ export function streamRemoteProcess(
   targetPath: string,
   language: string,
   handlers: {
+    onStreamReady?: (writeStdin: (data: string) => boolean) => void;
     onStdout: (chunk: string) => void;
     onStderr: (chunk: string) => void;
     onExit: (code: number) => void;
@@ -272,6 +275,24 @@ export function streamRemoteProcess(
               onError(`Exec failed: ${execErr.message}`);
               return;
             }
+
+            // Track stream-level errors so writeStdin can report viability.
+            // Registering this listener prevents unhandled-error process crash.
+            let streamErrored = false;
+            stream.on("error", () => { streamErrored = true; });
+
+            // Expose stdin write — returns false when the channel has errored
+            // or the underlying write fails.
+            handlers.onStreamReady?.((data: string): boolean => {
+              if (streamErrored) return false;
+              try {
+                stream.write(data);
+                return true;
+              } catch {
+                streamErrored = true;
+                return false;
+              }
+            });
 
             const timer = setTimeout(() => {
               stream.close();
