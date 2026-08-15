@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useProfile } from '@/hooks/useProfile';
 import { PaywallSheet } from './PaywallSheet';
+import { resolveApiBaseUrl } from '@/app/_layout';
 
 interface ProfileModalProps {
   visible: boolean;
@@ -153,7 +154,10 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
                 <View style={styles.legalRow}>
                   <Pressable
                     style={styles.legalBtn}
-                    onPress={() => WebBrowser.openBrowserAsync('https://clownin.app/privacy')}
+                    onPress={() => {
+                      const base = resolveApiBaseUrl() ?? '';
+                      WebBrowser.openBrowserAsync(`${base}/api/privacy`);
+                    }}
                   >
                     <Ionicons name="shield-checkmark-outline" size={16} color={colors.mutedForeground} />
                     <Text style={[styles.legalText, { color: colors.mutedForeground }]}>Privacy Policy</Text>
@@ -161,7 +165,10 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
                   <Text style={[styles.legalSeparator, { color: colors.border }]}>·</Text>
                   <Pressable
                     style={styles.legalBtn}
-                    onPress={() => WebBrowser.openBrowserAsync('https://clownin.app/terms')}
+                    onPress={() => {
+                      const base = resolveApiBaseUrl() ?? '';
+                      WebBrowser.openBrowserAsync(`${base}/api/terms`);
+                    }}
                   >
                     <Ionicons name="document-text-outline" size={16} color={colors.mutedForeground} />
                     <Text style={[styles.legalText, { color: colors.mutedForeground }]}>Terms of Service</Text>

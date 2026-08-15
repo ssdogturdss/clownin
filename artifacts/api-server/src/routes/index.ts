@@ -7,6 +7,8 @@ import executionRouter from "./execution";
 import agentRouter from "./agent";
 import githubRouter from "./github";
 import deployRouter from "./deploy";
+import privacyRouter from "./privacy";
+import termsRouter from "./terms";
 
 const router: IRouter = Router();
 
@@ -18,6 +20,8 @@ router.use(executionRouter);
 router.use(agentRouter);
 router.use(githubRouter);
 router.use(deployRouter);
+router.use(privacyRouter);
+router.use(termsRouter);
 
 export default router;
 
