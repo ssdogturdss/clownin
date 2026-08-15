@@ -53,6 +53,10 @@ function langIcon(language: string) {
   if (language === 'python') return 'language-python';
   if (language === 'typescript') return 'language-typescript';
   if (language === 'bash') return 'bash';
+  if (language === 'go') return 'language-go';
+  if (language === 'rust') return 'language-rust';
+  if (language === 'ruby') return 'language-ruby';
+  if (language === 'java') return 'language-java';
   return 'language-javascript';
 }
 
@@ -375,7 +379,7 @@ export default function ProjectEditorScreen() {
   // ── File modals ───────────────────────────────────────────────────────────
   const [showNewFile, setShowNewFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
-  const [newFileLang, setNewFileLang] = useState<'javascript' | 'typescript' | 'python' | 'bash' | 'plaintext'>('javascript');
+  const [newFileLang, setNewFileLang] = useState<'javascript' | 'typescript' | 'python' | 'bash' | 'plaintext' | 'go' | 'rust' | 'ruby' | 'java'>('javascript');
   const [renameFile, setRenameFile] = useState<ProjectFile | null>(null);
   const [renameFilePath, setRenameFilePath] = useState('');
 
@@ -1398,6 +1402,10 @@ export default function ProjectEditorScreen() {
                 { id: 'typescript', label: 'TS' },
                 { id: 'python', label: 'PY' },
                 { id: 'bash', label: 'SH' },
+                { id: 'go', label: 'GO' },
+                { id: 'rust', label: 'RS' },
+                { id: 'ruby', label: 'RB' },
+                { id: 'java', label: 'JV' },
                 { id: 'plaintext', label: 'TXT' },
               ] as const).map(({ id: lang, label }) => (
                 <Pressable

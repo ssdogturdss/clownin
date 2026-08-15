@@ -66,7 +66,7 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
           content: { type: "string" },
           language: {
             type: "string",
-            enum: ["javascript", "typescript", "python", "bash", "plaintext"],
+            enum: ["javascript", "typescript", "python", "bash", "go", "rust", "ruby", "java", "plaintext"],
           },
         },
         required: ["path", "content", "language"],
@@ -182,6 +182,21 @@ function execCommand(
     case "bash":
     case "sh":
       return { cmd: "bash", args: [filePath] };
+    case "go":
+      return { cmd: "go", args: ["run", filePath] };
+    case "ruby":
+    case "rb":
+      return { cmd: "ruby", args: [filePath] };
+    case "rust":
+    case "rs": {
+      const outPath = `${filePath}.bin`;
+      return { cmd: "bash", args: ["-c", `rustc "${filePath}" -o "${outPath}" && "${outPath}"`] };
+    }
+    case "java": {
+      const dir = filePath.replace(/\/[^/]+$/, "");
+      const className = filePath.replace(/.*\/([^/]+)\.java$/, "$1");
+      return { cmd: "bash", args: ["-c", `javac "${filePath}" && java -cp "${dir}" "${className}"`] };
+    }
     default:
       return null;
   }
@@ -344,6 +359,12 @@ router.post(
 
     const systemPrompt = `You are an autonomous coding agent inside Clownin — a mobile code editor.
 Project: "${project.name}" | Primary language: ${project.language}
+
+Supported languages: JavaScript (.js), TypeScript (.ts), Python (.py), Bash (.sh), Go (.go), Rust (.rs), Ruby (.rb), Java (.java).
+- Go: use \`go run file.go\`. No module init needed for single-file programs; import standard library freely.
+- Rust: use single-file programs with \`rustc\`. All code in one file; no Cargo.toml.
+- Ruby: use \`ruby file.rb\`. Standard library available; no gem installs for built-ins.
+- Java: one public class per file; file name must match the class name (e.g. Main.java → public class Main).
 
 When the user asks you to build something:
 1. List existing files first (list_files), then read relevant ones (read_file).

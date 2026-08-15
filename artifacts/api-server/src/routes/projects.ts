@@ -259,6 +259,26 @@ function getDefaultFile(language: string): { path: string; content: string } {
       return { path: "index.ts", content: 'console.log("Hello, Clownin! 🤡");\n' };
     case "bash":
       return { path: "main.sh", content: '#!/usr/bin/env bash\necho "Hello, Clownin! 🤡"\n' };
+    case "go":
+      return {
+        path: "main.go",
+        content: 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello, Clownin! 🤡")\n}\n',
+      };
+    case "rust":
+      return {
+        path: "main.rs",
+        content: 'fn main() {\n    println!("Hello, Clownin! 🤡");\n}\n',
+      };
+    case "ruby":
+      return {
+        path: "main.rb",
+        content: 'puts "Hello, Clownin! 🤡"\n',
+      };
+    case "java":
+      return {
+        path: "Main.java",
+        content: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello, Clownin! 🤡");\n    }\n}\n',
+      };
     case "javascript":
     default:
       return { path: "index.js", content: 'console.log("Hello, Clownin! 🤡");\n' };

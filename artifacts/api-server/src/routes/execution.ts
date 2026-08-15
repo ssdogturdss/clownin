@@ -54,6 +54,21 @@ function getExecutorCommand(language: string, filePath: string): { cmd: string; 
     case "bash":
     case "sh":
       return { cmd: "bash", args: [filePath] };
+    case "go":
+      return { cmd: "go", args: ["run", filePath] };
+    case "ruby":
+    case "rb":
+      return { cmd: "ruby", args: [filePath] };
+    case "rust":
+    case "rs": {
+      const outPath = `${filePath}.bin`;
+      return { cmd: "bash", args: ["-c", `rustc "${filePath}" -o "${outPath}" && "${outPath}"`] };
+    }
+    case "java": {
+      const dir = filePath.replace(/\/[^/]+$/, "");
+      const className = filePath.replace(/.*\/([^/]+)\.java$/, "$1");
+      return { cmd: "bash", args: ["-c", `javac "${filePath}" && java -cp "${dir}" "${className}"`] };
+    }
     default:
       return null;
   }

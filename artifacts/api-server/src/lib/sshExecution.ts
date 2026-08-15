@@ -78,6 +78,19 @@ function getRemoteCommand(language: string, filePath: string, absDir?: string): 
     case "bash":
     case "sh":
       return `bash "${filePath}"`;
+    case "go":
+      return `go run "${filePath}"`;
+    case "ruby":
+    case "rb":
+      return `ruby "${filePath}"`;
+    case "rust":
+    case "rs":
+      return `rustc "${filePath}" -o "${filePath}.bin" && "${filePath}.bin"`;
+    case "java": {
+      const dir = absDir ?? filePath.replace(/\/[^/]+$/, "");
+      const className = filePath.replace(/.*\/([^/]+)\.java$/, "$1");
+      return `javac "${filePath}" && java -cp "${dir}" "${className}"`;
+    }
     default:
       return null;
   }

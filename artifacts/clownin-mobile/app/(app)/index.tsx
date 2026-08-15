@@ -34,12 +34,20 @@ import { ProfileModal } from '@/components/ProfileModal';
 import { useProfile, PROFILE_QUERY_KEY } from '@/hooks/useProfile';
 
 // ── Idea → language detection ─────────────────────────────────────────────────
-function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' {
+function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' | 'go' | 'rust' | 'ruby' | 'java' {
   const lower = idea.toLowerCase();
   const pythonKw = ['python', 'flask', 'django', 'fastapi', 'scraper', 'scraping', 'pandas', 'numpy', 'data science', 'machine learning', 'ml ', 'matplotlib', 'pip ', 'requests '];
   const tsKw = ['typescript', 'react', 'next.js', 'nextjs', 'angular', 'vue'];
+  const goKw = ['golang', ' go ', 'goroutine', 'gin framework', 'go http', 'go server'];
+  const rustKw = ['rust lang', 'rustlang', 'cargo.toml', 'rust programming', ' rust '];
+  const rubyKw = ['ruby on rails', 'ruby ', 'sinatra', 'rails app', 'rubygems'];
+  const javaKw = ['spring boot', 'spring mvc', 'java class', 'jvm', 'maven', 'gradle', ' java '];
   if (pythonKw.some((k) => lower.includes(k))) return 'python';
   if (tsKw.some((k) => lower.includes(k))) return 'typescript';
+  if (goKw.some((k) => lower.includes(k))) return 'go';
+  if (rustKw.some((k) => lower.includes(k))) return 'rust';
+  if (rubyKw.some((k) => lower.includes(k))) return 'ruby';
+  if (javaKw.some((k) => lower.includes(k))) return 'java';
   return 'javascript';
 }
 
@@ -62,6 +70,10 @@ const LANG_COLORS: Record<string, string> = {
   python: '#3572A5',
   bash: '#4eaa25',
   plaintext: '#8b949e',
+  go: '#00ADD8',
+  rust: '#CE422B',
+  ruby: '#CC342D',
+  java: '#ED8B00',
 };
 
 const LANG_LABELS: Record<string, string> = {
@@ -69,6 +81,10 @@ const LANG_LABELS: Record<string, string> = {
   typescript: 'TS',
   python: 'PY',
   bash: 'SH',
+  go: 'GO',
+  rust: 'RS',
+  ruby: 'RB',
+  java: 'JV',
 };
 
 function LangBadge({ language }: { language: string }) {
@@ -109,7 +125,7 @@ export default function ProjectsScreen() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newLang, setNewLang] = useState<'javascript' | 'typescript' | 'python' | 'bash'>('javascript');
+  const [newLang, setNewLang] = useState<'javascript' | 'typescript' | 'python' | 'bash' | 'go' | 'rust' | 'ruby' | 'java'>('javascript');
   const [refreshing, setRefreshing] = useState(false);
   const [renameProject, setRenameProject] = useState<Project | null>(null);
   const [renameName, setRenameName] = useState('');
@@ -443,6 +459,10 @@ export default function ProjectsScreen() {
                 { id: 'typescript', label: 'TS' },
                 { id: 'python', label: 'PY' },
                 { id: 'bash', label: 'SH' },
+                { id: 'go', label: 'GO' },
+                { id: 'rust', label: 'RS' },
+                { id: 'ruby', label: 'RB' },
+                { id: 'java', label: 'JV' },
               ] as const).map(({ id, label }) => (
                 <Pressable
                   key={id}
