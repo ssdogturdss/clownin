@@ -24,6 +24,10 @@ export default function AppLayout() {
         name="project-env"
         options={{ animation: 'slide_from_right', gestureEnabled: true }}
       />
+      <Stack.Screen
+        name="templates"
+        options={{ animation: 'slide_from_right', gestureEnabled: true }}
+      />
     </Stack>
   );
 }

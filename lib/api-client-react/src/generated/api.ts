@@ -23,6 +23,7 @@ import type {
   AuthResponse,
   CreateFileBody,
   CreateProjectBody,
+  CreateServerBody,
   EnablePreviewResponse,
   ErrorResponse,
   ExecuteBody,
@@ -32,8 +33,12 @@ import type {
   ProjectFile,
   ProjectWithFiles,
   RegisterBody,
+  ServerConfig,
+  Template,
+  TestConnectionResult,
   UpdateFileBody,
   UpdateProjectBody,
+  UpdateServerBody,
   UserProfile
 } from './api.schemas';
 
@@ -349,6 +354,523 @@ export function useGetMe<TData = Awaited<ReturnType<typeof getMe>>, TError = Err
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetMeQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListServersUrl = () => {
+
+
+
+
+  return `/api/servers`
+}
+
+/**
+ * @summary List SSH servers
+ */
+export const listServers = async ( options?: Parameters<typeof customFetch>[1]): Promise<ServerConfig[]> => {
+
+  return customFetch<ServerConfig[]>(getListServersUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListServersQueryKey = () => {
+    return [
+    `/api/servers`
+    ] as const;
+    }
+
+
+export const getListServersQueryOptions = <TData = Awaited<ReturnType<typeof listServers>>, TError = ErrorType<ErrorResponse>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listServers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListServersQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listServers>>> = ({ signal }) => listServers({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listServers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListServersQueryResult = NonNullable<Awaited<ReturnType<typeof listServers>>>
+export type ListServersQueryError = ErrorType<ErrorResponse>
+
+
+/**
+ * @summary List SSH servers
+ */
+
+export function useListServers<TData = Awaited<ReturnType<typeof listServers>>, TError = ErrorType<ErrorResponse>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listServers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListServersQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateServerUrl = () => {
+
+
+
+
+  return `/api/servers`
+}
+
+/**
+ * @summary Add a new SSH server
+ */
+export const createServer = async (createServerBody: CreateServerBody, options?: Parameters<typeof customFetch>[1]): Promise<ServerConfig> => {
+
+  return customFetch<ServerConfig>(getCreateServerUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(createServerBody)
+  }
+);}
+
+
+
+
+
+export const getCreateServerMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createServer>>, TError,{data: BodyType<CreateServerBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createServer>>, TError,{data: BodyType<CreateServerBody>}, TContext> => {
+
+const mutationKey = ['createServer'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createServer>>, {data: BodyType<CreateServerBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createServer(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateServerMutationResult = NonNullable<Awaited<ReturnType<typeof createServer>>>
+    export type CreateServerMutationBody = BodyType<CreateServerBody>
+    export type CreateServerMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Add a new SSH server
+ */
+export const useCreateServer = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createServer>>, TError,{data: BodyType<CreateServerBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createServer>>,
+        TError,
+        {data: BodyType<CreateServerBody>},
+        TContext
+      > => {
+      return useMutation(getCreateServerMutationOptions(options));
+    }
+
+export const getGetServerUrl = (id: number,) => {
+
+
+
+
+  return `/api/servers/${id}`
+}
+
+/**
+ * @summary Get a single SSH server
+ */
+export const getServer = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<ServerConfig> => {
+
+  return customFetch<ServerConfig>(getGetServerUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetServerQueryKey = (id: number,) => {
+    return [
+    `/api/servers/${id}`
+    ] as const;
+    }
+
+
+export const getGetServerQueryOptions = <TData = Awaited<ReturnType<typeof getServer>>, TError = ErrorType<ErrorResponse>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getServer>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetServerQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getServer>>> = ({ signal }) => getServer(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getServer>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetServerQueryResult = NonNullable<Awaited<ReturnType<typeof getServer>>>
+export type GetServerQueryError = ErrorType<ErrorResponse>
+
+
+/**
+ * @summary Get a single SSH server
+ */
+
+export function useGetServer<TData = Awaited<ReturnType<typeof getServer>>, TError = ErrorType<ErrorResponse>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getServer>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetServerQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpdateServerUrl = (id: number,) => {
+
+
+
+
+  return `/api/servers/${id}`
+}
+
+/**
+ * @summary Update an SSH server
+ */
+export const updateServer = async (id: number,
+    updateServerBody: UpdateServerBody, options?: Parameters<typeof customFetch>[1]): Promise<ServerConfig> => {
+
+  return customFetch<ServerConfig>(getUpdateServerUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(updateServerBody)
+  }
+);}
+
+
+
+
+
+export const getUpdateServerMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateServer>>, TError,{id: number;data: BodyType<UpdateServerBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateServer>>, TError,{id: number;data: BodyType<UpdateServerBody>}, TContext> => {
+
+const mutationKey = ['updateServer'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateServer>>, {id: number;data: BodyType<UpdateServerBody>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateServer(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateServerMutationResult = NonNullable<Awaited<ReturnType<typeof updateServer>>>
+    export type UpdateServerMutationBody = BodyType<UpdateServerBody>
+    export type UpdateServerMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Update an SSH server
+ */
+export const useUpdateServer = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateServer>>, TError,{id: number;data: BodyType<UpdateServerBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateServer>>,
+        TError,
+        {id: number;data: BodyType<UpdateServerBody>},
+        TContext
+      > => {
+      return useMutation(getUpdateServerMutationOptions(options));
+    }
+
+export const getDeleteServerUrl = (id: number,) => {
+
+
+
+
+  return `/api/servers/${id}`
+}
+
+/**
+ * @summary Delete an SSH server
+ */
+export const deleteServer = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getDeleteServerUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteServerMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteServer>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteServer>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteServer'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteServer>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteServer(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteServerMutationResult = NonNullable<Awaited<ReturnType<typeof deleteServer>>>
+
+    export type DeleteServerMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Delete an SSH server
+ */
+export const useDeleteServer = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteServer>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteServer>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteServerMutationOptions(options));
+    }
+
+export const getTestServerConnectionUrl = (id: number,) => {
+
+
+
+
+  return `/api/servers/${id}/test`
+}
+
+/**
+ * @summary Test SSH connectivity
+ */
+export const testServerConnection = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<TestConnectionResult> => {
+
+  return customFetch<TestConnectionResult>(getTestServerConnectionUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getTestServerConnectionMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof testServerConnection>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof testServerConnection>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['testServerConnection'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof testServerConnection>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  testServerConnection(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type TestServerConnectionMutationResult = NonNullable<Awaited<ReturnType<typeof testServerConnection>>>
+
+    export type TestServerConnectionMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Test SSH connectivity
+ */
+export const useTestServerConnection = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof testServerConnection>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof testServerConnection>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getTestServerConnectionMutationOptions(options));
+    }
+
+export const getListTemplatesUrl = () => {
+
+
+
+
+  return `/api/templates`
+}
+
+/**
+ * Returns all available starter templates (no auth required). File contents are not included; the server populates files when a project is created from a template.
+ * @summary List starter templates
+ */
+export const listTemplates = async ( options?: Parameters<typeof customFetch>[1]): Promise<Template[]> => {
+
+  return customFetch<Template[]>(getListTemplatesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListTemplatesQueryKey = () => {
+    return [
+    `/api/templates`
+    ] as const;
+    }
+
+
+export const getListTemplatesQueryOptions = <TData = Awaited<ReturnType<typeof listTemplates>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listTemplates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListTemplatesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listTemplates>>> = ({ signal }) => listTemplates({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listTemplates>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListTemplatesQueryResult = NonNullable<Awaited<ReturnType<typeof listTemplates>>>
+export type ListTemplatesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List starter templates
+ */
+
+export function useListTemplates<TData = Awaited<ReturnType<typeof listTemplates>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listTemplates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListTemplatesQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

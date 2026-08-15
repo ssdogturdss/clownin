@@ -61,55 +61,21 @@ export interface Project {
   name: string;
   language: string;
   description?: string | null;
+  /** SSH server to run code on (null means run locally) */
+  serverId?: number | null;
   /** Whether the public preview link is active */
   previewEnabled: boolean;
   /** Short ID used in the public preview URL (/preview/:shortId) */
   previewShortId?: string | null;
-  /** Optional SSH server used to execute code for this project */
-  serverId?: number | null;
   createdAt: string;
   updatedAt: string;
-}
-
-/** A saved SSH server configuration (credentials are never returned) */
-export interface ServerConfig {
-  id: number;
-  userId: number;
-  name: string;
-  host: string;
-  port: number;
-  username: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateServerBody {
-  name: string;
-  host: string;
-  port?: number;
-  username: string;
-  password?: string;
-  privateKey?: string;
-}
-
-export interface UpdateServerBody {
-  name?: string;
-  host?: string;
-  port?: number;
-  username?: string;
-  password?: string;
-  privateKey?: string;
-}
-
-export interface TestConnectionResponse {
-  ok: boolean;
-  error?: string;
 }
 
 export interface EnablePreviewResponse {
   shortId: string;
   previewEnabled: boolean;
 }
+
 export interface ProjectFile {
   id: number;
   projectId: number;
@@ -124,17 +90,30 @@ export type ProjectWithFiles = Project & {
   files: ProjectFile[];
 };
 
+export interface Template {
+  /** Unique slug identifier for the template */
+  id: string;
+  name: string;
+  description: string;
+  language: string;
+  /** MaterialCommunityIcons icon name shown in the gallery */
+  icon: string;
+}
+
 export interface CreateProjectBody {
   /** @minLength 1 */
   name: string;
   language?: string;
   description?: string;
+  /** When set, the project is populated with the template's files instead of the default blank file */
+  templateId?: string;
 }
 
 export interface UpdateProjectBody {
   /** @minLength 1 */
   name?: string;
   description?: string;
+  /** SSH server to run code on (null means run locally) */
   serverId?: number | null;
 }
 
@@ -154,3 +133,41 @@ export interface UpdateFileBody {
 export interface ExecuteBody {
   fileId: number;
 }
+
+export interface ServerConfig {
+  id: number;
+  userId: number;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateServerBody {
+  /** @minLength 1 */
+  name: string;
+  /** @minLength 1 */
+  host: string;
+  port?: number;
+  /** @minLength 1 */
+  username: string;
+  password?: string;
+  privateKey?: string;
+}
+
+export interface UpdateServerBody {
+  name?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+  privateKey?: string;
+}
+
+export interface TestConnectionResult {
+  ok: boolean;
+  error?: string;
+}
+

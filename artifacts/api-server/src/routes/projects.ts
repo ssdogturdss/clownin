@@ -3,6 +3,7 @@ import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db"
 import { eq, and, count, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
+import { findTemplate } from "../data/templates";
 
 const router: IRouter = Router();
 
@@ -19,7 +20,11 @@ router.get("/projects", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/projects", requireAuth, async (req, res): Promise<void> => {
   const { userId } = getUser(req);
-  const { name, language = "javascript", description } = req.body ?? {};
+  const { name, language: rawLanguage, description, templateId } = req.body ?? {};
+
+  // If a templateId is provided, use the template's language as the default
+  const template = templateId ? findTemplate(String(templateId)) : undefined;
+  const language = rawLanguage ?? template?.language ?? "javascript";
 
   if (!name) {
     res.status(400).json({ error: "name is required" });
@@ -82,16 +87,28 @@ router.post("/projects", requireAuth, async (req, res): Promise<void> => {
   }
   // ── End subscription enforcement ─────────────────────────────────────────
 
-  // Create a default main file based on language
-  const mainFile = getDefaultFile(language);
-  await db.insert(projectFilesTable).values({
-    projectId: project.id,
-    path: mainFile.path,
-    content: mainFile.content,
-    language,
-  });
+  // Populate files: from template if provided, otherwise from the default single file
+  if (template) {
+    await db.insert(projectFilesTable).values(
+      template.files.map((f) => ({
+        projectId: project.id,
+        path: f.path,
+        content: f.content,
+        // Infer per-file language from extension; fall back to the project language
+        language: inferLanguage(f.path) ?? language,
+      }))
+    );
+  } else {
+    const mainFile = getDefaultFile(language);
+    await db.insert(projectFilesTable).values({
+      projectId: project.id,
+      path: mainFile.path,
+      content: mainFile.content,
+      language,
+    });
+  }
 
-  req.log.info({ projectId: project.id }, "Project created");
+  req.log.info({ projectId: project.id, templateId: template?.id ?? null }, "Project created");
   res.status(201).json(project);
 });
 
@@ -250,6 +267,29 @@ router.post("/projects/:id/preview/enable", requireAuth, async (req, res): Promi
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Map a file extension to its language identifier. Returns undefined for unknown extensions. */
+function inferLanguage(filePath: string): string | undefined {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    py: "python",
+    sh: "bash",
+    go: "go",
+    rs: "rust",
+    rb: "ruby",
+    java: "java",
+    html: "plaintext",
+    css: "plaintext",
+    json: "plaintext",
+    md: "plaintext",
+    txt: "plaintext",
+  };
+  return ext ? map[ext] : undefined;
+}
 
 function getDefaultFile(language: string): { path: string; content: string } {
   switch (language) {

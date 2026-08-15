@@ -12,11 +12,13 @@ import termsRouter from "./terms";
 import serversRouter from "./servers";
 import serveRouter from "./serve";
 import envRouter from "./env";
+import templatesRouter from "./templates";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
+router.use(templatesRouter);
 router.use(projectsRouter);
 router.use(filesRouter);
 router.use(executionRouter);

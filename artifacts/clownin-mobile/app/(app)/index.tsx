@@ -258,6 +258,10 @@ export default function ProjectsScreen() {
         onSubmit={handleIdeaSubmit}
         onSkip={() => setOnboardingSkipped(true)}
         isLoading={createMutation.isPending}
+        onBrowseTemplates={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          router.push('/(app)/templates');
+        }}
       />
     );
   }
@@ -487,6 +491,21 @@ export default function ProjectsScreen() {
               ))}
             </View>
 
+            {/* Templates shortcut */}
+            <Pressable
+              style={styles.templateLink}
+              onPress={() => {
+                setShowCreate(false);
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push('/(app)/templates');
+              }}
+            >
+              <MaterialCommunityIcons name="view-grid-outline" size={15} color={colors.primary} />
+              <Text style={[styles.templateLinkText, { color: colors.primary }]}>
+                Start from a template →
+              </Text>
+            </Pressable>
+
             <View style={styles.modalActions}>
               <Pressable style={[styles.modalBtn, { borderColor: colors.border }]} onPress={() => setShowCreate(false)}>
                 <Text style={[styles.modalBtnText, { color: colors.foreground }]}>Cancel</Text>
@@ -574,4 +593,12 @@ const styles = StyleSheet.create({
   },
   modalBtnPrimary: { borderWidth: 0 },
   modalBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
+  templateLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'center',
+    paddingVertical: 4,
+  },
+  templateLinkText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
 });

@@ -18,6 +18,10 @@ tags:
     description: File management
   - name: execution
     description: Code execution
+  - name: templates
+    description: Starter templates
+  - name: servers
+    description: SSH server management
 
 paths:
   /healthz:
@@ -116,6 +120,206 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /servers:
+    get:
+      operationId: listServers
+      tags: [servers]
+      summary: List SSH servers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of servers (credentials omitted)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: createServer
+      tags: [servers]
+      summary: Add a new SSH server
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServerBody"
+      responses:
+        "201":
+          description: ServerConfig created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerConfig"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /servers/{id}:
+    get:
+      operationId: getServer
+      tags: [servers]
+      summary: Get a single SSH server
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ServerConfig details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateServer
+      tags: [servers]
+      summary: Update an SSH server
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServerBody"
+      responses:
+        "200":
+          description: ServerConfig updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerConfig"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteServer
+      tags: [servers]
+      summary: Delete an SSH server
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /servers/{id}/test:
+    post:
+      operationId: testServerConnection
+      tags: [servers]
+      summary: Test SSH connectivity
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestConnectionResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /templates:
+    get:
+      operationId: listTemplates
+      tags: [templates]
+      summary: List starter templates
+      description: Returns all available starter templates (no auth required). File contents are not included; the server populates files when a project is created from a template.
+      responses:
+        "200":
+          description: List of templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Template"
 
   /projects:
     get:
@@ -645,6 +849,10 @@ components:
         description:
           type: string
           nullable: true
+        serverId:
+          type: number
+          nullable: true
+          description: SSH server to run code on (null means run locally)
         previewEnabled:
           type: boolean
           description: Whether the public preview link is active
@@ -690,6 +898,28 @@ components:
           required:
             - files
 
+    Template:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique slug identifier for the template
+        name:
+          type: string
+        description:
+          type: string
+        language:
+          type: string
+        icon:
+          type: string
+          description: MaterialCommunityIcons icon name shown in the gallery
+      required:
+        - id
+        - name
+        - description
+        - language
+        - icon
+
     CreateProjectBody:
       type: object
       properties:
@@ -701,6 +931,9 @@ components:
           default: javascript
         description:
           type: string
+        templateId:
+          type: string
+          description: When set, the project is populated with the template's files instead of the default blank file
       required:
         - name
 
@@ -712,6 +945,10 @@ components:
           minLength: 1
         description:
           type: string
+        serverId:
+          type: number
+          nullable: true
+          description: SSH server to run code on (null means run locally)
 
     ProjectFile:
       type: object
@@ -773,3 +1010,84 @@ components:
           type: number
       required:
         - fileId
+
+    ServerConfig:
+      type: object
+      properties:
+        id:
+          type: number
+        userId:
+          type: number
+        name:
+          type: string
+        host:
+          type: string
+        port:
+          type: number
+        username:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - name
+        - host
+        - port
+        - username
+        - createdAt
+        - updatedAt
+
+    CreateServerBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        host:
+          type: string
+          minLength: 1
+        port:
+          type: number
+          default: 22
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+        privateKey:
+          type: string
+      required:
+        - name
+        - host
+        - username
+
+    UpdateServerBody:
+      type: object
+      properties:
+        name:
+          type: string
+        host:
+          type: string
+        port:
+          type: number
+        username:
+          type: string
+        password:
+          type: string
+        privateKey:
+          type: string
+
+    TestConnectionResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        error:
+          type: string
+      required:
+        - ok

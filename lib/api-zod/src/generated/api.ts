@@ -25,6 +25,7 @@ export const registerBodyUsernameMin = 3;
 export const registerBodyPasswordMin = 6;
 
 
+
 export const RegisterBody = zod.object({
   "username": zod.string().min(registerBodyUsernameMin),
   "email": zod.string(),
@@ -82,6 +83,135 @@ export const GetMeResponse = zod.object({
 
 
 /**
+ * @summary List SSH servers
+ */
+export const ListServersResponseItem = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "name": zod.string(),
+  "host": zod.string(),
+  "port": zod.number(),
+  "username": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+export const ListServersResponse = zod.array(ListServersResponseItem)
+
+
+/**
+ * @summary Add a new SSH server
+ */
+
+
+export const createServerBodyPortDefault = 22;
+
+
+export const CreateServerBody = zod.object({
+  "name": zod.string().min(1),
+  "host": zod.string().min(1),
+  "port": zod.number().default(createServerBodyPortDefault),
+  "username": zod.string().min(1),
+  "password": zod.string().optional(),
+  "privateKey": zod.string().optional()
+})
+
+export const CreateServerResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "name": zod.string(),
+  "host": zod.string(),
+  "port": zod.number(),
+  "username": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Get a single SSH server
+ */
+export const GetServerParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetServerResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "name": zod.string(),
+  "host": zod.string(),
+  "port": zod.number(),
+  "username": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Update an SSH server
+ */
+export const UpdateServerParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const UpdateServerBody = zod.object({
+  "name": zod.string().optional(),
+  "host": zod.string().optional(),
+  "port": zod.number().optional(),
+  "username": zod.string().optional(),
+  "password": zod.string().optional(),
+  "privateKey": zod.string().optional()
+})
+
+export const UpdateServerResponse = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "name": zod.string(),
+  "host": zod.string(),
+  "port": zod.number(),
+  "username": zod.string(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Delete an SSH server
+ */
+export const DeleteServerParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const DeleteServerResponse = zod.void()
+
+
+/**
+ * @summary Test SSH connectivity
+ */
+export const TestServerConnectionParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const TestServerConnectionResponse = zod.object({
+  "ok": zod.boolean(),
+  "error": zod.string().optional()
+})
+
+
+/**
+ * Returns all available starter templates (no auth required). File contents are not included; the server populates files when a project is created from a template.
+ * @summary List starter templates
+ */
+export const ListTemplatesResponseItem = zod.object({
+  "id": zod.string().describe('Unique slug identifier for the template'),
+  "name": zod.string(),
+  "description": zod.string(),
+  "language": zod.string(),
+  "icon": zod.string().describe('MaterialCommunityIcons icon name shown in the gallery')
+})
+export const ListTemplatesResponse = zod.array(ListTemplatesResponseItem)
+
+
+/**
  * @summary List user's projects
  */
 export const ListProjectsResponseItem = zod.object({
@@ -90,6 +220,7 @@ export const ListProjectsResponseItem = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "serverId": zod.number().nullish().describe('SSH server to run code on (null means run locally)'),
   "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
   "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
@@ -107,7 +238,8 @@ export const createProjectBodyLanguageDefault = `javascript`;
 export const CreateProjectBody = zod.object({
   "name": zod.string().min(1),
   "language": zod.string().default(createProjectBodyLanguageDefault),
-  "description": zod.string().optional()
+  "description": zod.string().optional(),
+  "templateId": zod.string().optional().describe('When set, the project is populated with the template\'s files instead of the default blank file')
 })
 
 export const CreateProjectResponse = zod.object({
@@ -116,6 +248,7 @@ export const CreateProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "serverId": zod.number().nullish().describe('SSH server to run code on (null means run locally)'),
   "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
   "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
@@ -136,6 +269,7 @@ export const GetProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "serverId": zod.number().nullish().describe('SSH server to run code on (null means run locally)'),
   "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
   "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
@@ -161,9 +295,12 @@ export const UpdateProjectParams = zod.object({
 })
 
 
+
+
 export const UpdateProjectBody = zod.object({
   "name": zod.string().min(1).optional(),
-  "description": zod.string().optional()
+  "description": zod.string().optional(),
+  "serverId": zod.number().nullish().describe('SSH server to run code on (null means run locally)')
 })
 
 export const UpdateProjectResponse = zod.object({
@@ -172,6 +309,7 @@ export const UpdateProjectResponse = zod.object({
   "name": zod.string(),
   "language": zod.string(),
   "description": zod.string().nullish(),
+  "serverId": zod.number().nullish().describe('SSH server to run code on (null means run locally)'),
   "previewEnabled": zod.boolean().describe('Whether the public preview link is active'),
   "previewShortId": zod.string().nullish().describe('Short ID used in the public preview URL (\/preview\/:shortId)'),
   "createdAt": zod.coerce.date(),
@@ -188,12 +326,20 @@ export const DeleteProjectParams = zod.object({
 
 export const DeleteProjectResponse = zod.void()
 
+
 /**
  * @summary Enable the public preview link for a project
  */
 export const EnablePreviewParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const EnablePreviewResponse = zod.object({
+  "shortId": zod.string(),
+  "previewEnabled": zod.boolean()
+})
+
+
 /**
  * @summary List files in a project
  */
@@ -310,7 +456,3 @@ export const ExecuteCodeBody = zod.object({
 export const ExecuteCodeResponse = zod.unknown()
 
 
-export const EnablePreviewResponse = zod.object({
-  "shortId": zod.string(),
-  "previewEnabled": zod.boolean()
-})

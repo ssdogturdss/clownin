@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   ScrollView,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import * as Haptics from "expo-haptics";
@@ -25,9 +26,10 @@ interface OnboardingScreenProps {
   onSubmit: (idea: string) => void;
   onSkip: () => void;
   isLoading: boolean;
+  onBrowseTemplates?: () => void;
 }
 
-export function OnboardingScreen({ onSubmit, onSkip, isLoading }: OnboardingScreenProps) {
+export function OnboardingScreen({ onSubmit, onSkip, isLoading, onBrowseTemplates }: OnboardingScreenProps) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [idea, setIdea] = useState("");
@@ -127,6 +129,19 @@ export function OnboardingScreen({ onSubmit, onSkip, isLoading }: OnboardingScre
             <Text style={styles.buildBtnText}>Build it →</Text>
           )}
         </Pressable>
+
+        {onBrowseTemplates && (
+          <Pressable
+            style={styles.templateBtn}
+            onPress={onBrowseTemplates}
+            disabled={isLoading}
+          >
+            <MaterialCommunityIcons name="view-grid-outline" size={15} color={colors.mutedForeground} />
+            <Text style={[styles.templateBtnText, { color: colors.mutedForeground }]}>
+              Or start from a template
+            </Text>
+          </Pressable>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -210,5 +225,17 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: "Inter_700Bold",
     letterSpacing: 0.2,
+  },
+  templateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 16,
+    paddingVertical: 8,
+  },
+  templateBtnText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
   },
 });
