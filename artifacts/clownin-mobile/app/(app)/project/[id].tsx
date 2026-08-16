@@ -1396,7 +1396,7 @@ export default function ProjectEditorScreen() {
               onSubmitEditing={handleCreateFile}
             />
             <Text style={[styles.langLabel, { color: colors.mutedForeground }]}>Language</Text>
-            <View style={styles.langRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.langRow}>
               {([
                 { id: 'javascript', label: 'JS' },
                 { id: 'typescript', label: 'TS' },
@@ -1424,7 +1424,7 @@ export default function ProjectEditorScreen() {
                   </Text>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
             <View style={styles.modalActions}>
               <Pressable style={[styles.modalBtn, { borderColor: colors.border }]} onPress={() => setShowNewFile(false)}>
                 <Text style={[styles.modalBtnText, { color: colors.foreground }]}>Cancel</Text>
@@ -1558,7 +1558,7 @@ const styles = StyleSheet.create({
   },
   langLabel: { fontSize: 12, fontFamily: 'Inter_500Medium' },
   langRow: { flexDirection: 'row', gap: 6 },
-  langChip: { flex: 1, paddingVertical: 7, borderRadius: 6, borderWidth: 1, alignItems: 'center' },
+  langChip: { minWidth: 44, paddingVertical: 7, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1, alignItems: 'center' },
   langChipText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   modalActions: { flexDirection: 'row', gap: 8 },
   modalBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, alignItems: 'center' },

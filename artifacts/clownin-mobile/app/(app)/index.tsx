@@ -11,6 +11,7 @@ import {
   TextInput,
   Platform,
   RefreshControl,
+  ScrollView,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
@@ -522,7 +523,7 @@ export default function ProjectsScreen() {
             />
 
             <Text style={[styles.langLabel, { color: colors.mutedForeground }]}>Language</Text>
-            <View style={styles.langRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.langRow}>
               {([
                 { id: 'javascript', label: 'JS' },
                 { id: 'typescript', label: 'TS' },
@@ -554,7 +555,7 @@ export default function ProjectsScreen() {
                   </Text>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
 
             {/* Templates shortcut */}
             <Pressable
@@ -646,7 +647,7 @@ const styles = StyleSheet.create({
   },
   langLabel: { fontSize: 12, fontFamily: 'Inter_500Medium', marginTop: 4 },
   langRow: { flexDirection: 'row', gap: 8 },
-  langChip: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
+  langChip: { minWidth: 44, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
   langChipText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
   modalBtn: {
