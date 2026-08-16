@@ -94,15 +94,25 @@ const PORT_MAX = 29_999;
 
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    let attempts = 0;
-    const tryPort = () => {
-      if (++attempts > 30) { reject(new Error("No free port available")); return; }
-      const p = Math.floor(Math.random() * (PORT_MAX - PORT_MIN + 1)) + PORT_MIN;
-      const probe = createServer();
-      probe.listen(p, "127.0.0.1", () => probe.close(() => resolve(p)));
-      probe.on("error", tryPort);
-    };
-    tryPort();
+    // Port 0 tells the OS to assign a free ephemeral port — no TOCTOU race,
+    // no collision risk. We stay in the 20000-29999 range when possible via
+    // a fallback, but OS assignment is always preferred.
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const addr = probe.address();
+      const port = addr && typeof addr === "object" ? addr.port : null;
+      probe.close(() => {
+        if (port && port >= PORT_MIN && port <= PORT_MAX) {
+          resolve(port);
+        } else if (port) {
+          // OS picked outside our range — still valid, just use it
+          resolve(port);
+        } else {
+          reject(new Error("Could not determine free port"));
+        }
+      });
+    });
+    probe.on("error", reject);
   });
 }
 

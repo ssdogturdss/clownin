@@ -830,7 +830,8 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                     });
                   }
 
-                  const liveUrl = site.ssl_url || site.url || `https://${cleanName}.netlify.app`;
+                  const liveUrl = site.ssl_url || site.url;
+                  if (!liveUrl) throw new Error("Netlify did not return a site URL. Check your token and try again.");
                   result = `Deployed to Netlify! 🚀\nLive URL: ${liveUrl}\nType: ${type}${warning ? `\nNote: ${warning}` : ""}`;
 
                 } else if (platform === "vercel") {
@@ -860,7 +861,8 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
                     result = `Vercel error: ${depl.error?.message || deplRes.status}`; isError = true; break;
                   }
 
-                  const liveUrl = depl.url ? `https://${depl.url}` : `https://${cleanName}.vercel.app`;
+                  if (!depl.url) throw new Error("Vercel did not return a deployment URL. Check your token and try again.");
+                  const liveUrl = `https://${depl.url}`;
                   result = `Deployed to Vercel! 🚀\nLive URL: ${liveUrl}\nType: ${type}${warning ? `\nNote: ${warning}` : ""}`;
 
                 } else {

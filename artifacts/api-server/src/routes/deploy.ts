@@ -61,7 +61,7 @@ router.post(
     const projectId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
     if (isNaN(projectId)) { res.status(400).json({ error: "Invalid project id" }); return; }
 
-    const { token, siteName } = req.body ?? {};
+    const { token, siteName, siteId: existingSiteId } = req.body ?? {};
     if (!token) { res.status(400).json({ error: "token required" }); return; }
 
     const [project] = await db.select().from(projectsTable)
@@ -80,10 +80,21 @@ router.post(
       const { files: deployFiles, type, warning } = prepareNetlifyFiles(
         files.map((f) => ({ path: f.path, content: f.content }))
       );
-      req.log.info({ projectId, type }, "Netlify deploy: detected project type");
+      req.log.info({ projectId, type, reusing: !!existingSiteId }, "Netlify deploy: detected project type");
 
-      // 1. Create site
-      const site = await netlifyFetch(token, "/sites", "POST", { name: cleanName }) as { id: string; ssl_url?: string; url?: string };
+      // 1. Create or reuse site
+      let siteId: string;
+      let liveUrl: string;
+      if (existingSiteId) {
+        // Re-deploy to the same site — preserves the URL users already shared
+        siteId = existingSiteId;
+        const siteInfo = await netlifyFetch(token, `/sites/${siteId}`, "GET") as { ssl_url?: string; url?: string };
+        liveUrl = siteInfo.ssl_url || siteInfo.url || `https://${cleanName}.netlify.app`;
+      } else {
+        const site = await netlifyFetch(token, "/sites", "POST", { name: cleanName }) as { id: string; ssl_url?: string; url?: string };
+        siteId = site.id;
+        liveUrl = site.ssl_url || site.url || `https://${cleanName}.netlify.app`;
+      }
 
       // 2. Build file digest map
       const fileMap: Record<string, string> = {};
@@ -97,7 +108,7 @@ router.post(
       }
 
       // 3. Create deploy — Netlify tells us which files it actually needs
-      const deploy = await netlifyFetch(token, `/sites/${site.id}/deploys`, "POST", {
+      const deploy = await netlifyFetch(token, `/sites/${siteId}/deploys`, "POST", {
         files: fileMap,
       }) as { id: string; required: string[]; ssl_url?: string };
 
@@ -110,9 +121,8 @@ router.post(
         await netlifyFetch(token, `/deploys/${deploy.id}/files${encodedPath}`, "PUT", buf, true);
       }
 
-      const liveUrl = site.ssl_url || site.url || `https://${cleanName}.netlify.app`;
-      req.log.info({ projectId, liveUrl }, "Deployed to Netlify");
-      res.json({ url: liveUrl, platform: "netlify", deployId: deploy.id, type, warning });
+      req.log.info({ projectId, liveUrl, siteId }, "Deployed to Netlify");
+      res.json({ url: liveUrl, platform: "netlify", deployId: deploy.id, siteId, type, warning });
     } catch (err: unknown) {
       req.log.error({ err }, "Netlify deploy failed");
       res.status(500).json({ error: err instanceof Error ? err.message : "Deploy failed" });
@@ -205,7 +215,10 @@ router.post(
         target: "production",
       }) as { url?: string; id?: string };
 
-      const liveUrl = deployment.url ? `https://${deployment.url}` : `https://${name}.vercel.app`;
+      if (!deployment.url) {
+        throw new Error("Vercel did not return a deployment URL. Check your token and try again.");
+      }
+      const liveUrl = `https://${deployment.url}`;
 
       req.log.info({ projectId, liveUrl }, "Deployed to Vercel");
       res.json({ url: liveUrl, platform: "vercel", deploymentId: deployment.id, type, warning });

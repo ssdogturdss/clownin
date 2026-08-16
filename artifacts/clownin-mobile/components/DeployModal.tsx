@@ -66,6 +66,8 @@ function slugify(s: string) {
 
 function tokenKey(p: Platform) { return `clownin_${p}_token`; }
 function deployedUrlKey(id: number) { return `clownin_deployed_url_${id}`; }
+/** Netlify siteId or Vercel deploymentId — lets us re-deploy to the same URL. */
+function siteIdKey(p: Platform, id: number) { return `clownin_${p}_site_${id}`; }
 
 export { deployedUrlKey };
 
@@ -78,6 +80,8 @@ export function DeployModal({
 
   const [platform, setPlatform] = useState<Platform>("netlify");
   const [tokens, setTokens] = useState<Record<Platform, string>>({ netlify: "", vercel: "" });
+  /** Saved site/project IDs — lets re-deploys hit the same URL instead of creating a new site. */
+  const [siteIds, setSiteIds] = useState<Record<Platform, string>>({ netlify: "", vercel: "" });
   const [name, setName] = useState(slugify(projectName));
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ url: string; platform: Platform; warning?: string } | null>(null);
@@ -86,7 +90,7 @@ export function DeployModal({
   const [quickMode, setQuickMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Reset and load saved tokens whenever the modal opens
+  // Reset and load saved tokens + site IDs whenever the modal opens
   useEffect(() => {
     if (!visible) return;
     setName(slugify(projectName));
@@ -97,15 +101,18 @@ export function DeployModal({
       AsyncStorage.getItem(tokenKey("netlify")),
       AsyncStorage.getItem(tokenKey("vercel")),
       AsyncStorage.getItem(`clownin_deploy_platform`),
-    ]).then(([nt, vt, savedPlatform]) => {
+      AsyncStorage.getItem(siteIdKey("netlify", projectId)),
+      AsyncStorage.getItem(siteIdKey("vercel", projectId)),
+    ]).then(([nt, vt, savedPlatform, nSiteId, vSiteId]) => {
       const savedTokens = { netlify: nt ?? "", vercel: vt ?? "" };
       setTokens(savedTokens);
+      setSiteIds({ netlify: nSiteId ?? "", vercel: vSiteId ?? "" });
       const activePlatform: Platform = savedPlatform === "vercel" ? "vercel" : "netlify";
       setPlatform(activePlatform);
       // Quick mode if a token already exists for the saved platform
       setQuickMode(!!savedTokens[activePlatform]);
     });
-  }, [visible, projectName]);
+  }, [visible, projectName, projectId]);
 
   // When platform changes in settings, check if quick mode applies
   useEffect(() => {
@@ -128,6 +135,7 @@ export function DeployModal({
 
     try {
       const baseUrl = resolveApiBaseUrl();
+      const existingSiteId = siteIds[platform]?.trim() || undefined;
       const res = await fetch(`${baseUrl}/api/projects/${projectId}/deploy/${platform}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -135,21 +143,29 @@ export function DeployModal({
           token: deployToken,
           siteName: name.trim(),
           projectName: name.trim(),
+          // Pass the saved siteId so the server reuses the same site instead of creating a new one
+          ...(existingSiteId ? { siteId: existingSiteId } : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Deploy failed");
       const deployResult = { url: data.url, platform, warning: data.warning };
       setResult(deployResult);
-      // Persist deployed URL so project list can show the Live badge
+      // Persist deployed URL so the project list can show the Live badge
       await AsyncStorage.setItem(deployedUrlKey(projectId), data.url);
+      // Persist siteId so future deploys hit the same site (same URL for users)
+      const returnedSiteId = data.siteId || data.deploymentId;
+      if (returnedSiteId) {
+        setSiteIds((prev) => ({ ...prev, [platform]: returnedSiteId }));
+        await AsyncStorage.setItem(siteIdKey(platform, projectId), returnedSiteId);
+      }
       onDeploySuccess?.(data.url, platform);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Deploy failed");
     } finally {
       setLoading(false);
     }
-  }, [currentToken, currentPlatform, platform, name, projectId, token, onDeploySuccess]);
+  }, [currentToken, currentPlatform, platform, name, projectId, token, siteIds, onDeploySuccess]);
 
   const handleShare = useCallback(async () => {
     if (!result) return;
