@@ -202,9 +202,18 @@ export default function ProjectsScreen() {
   const [showProfile, setShowProfile] = useState(false);
   const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [filterLang, setFilterLang] = useState<string | null>(null);
 
   const { data: profile } = useProfile();
   const { data: matchableTemplates = [] } = useTemplatesForMatching();
+
+  // Reset the filter if the selected language no longer exists in the project list
+  // (e.g. after deleting the last project of that language)
+  useEffect(() => {
+    if (filterLang && projects && !projects.some((p) => p.language === filterLang)) {
+      setFilterLang(null);
+    }
+  }, [projects, filterLang]);
 
   // Clear the auto-proceed timer when the pending submission is dismissed
   const clearPendingTimer = useCallback(() => {
@@ -429,8 +438,58 @@ export default function ProjectsScreen() {
           </Pressable>
         </View>
       ) : (
-        <FlatList
-          data={projects}
+        <>
+          {/* Language filter chips */}
+          {projects && projects.length > 0 && (() => {
+            const langs = Array.from(new Set(projects.map((p) => p.language))).sort();
+            if (langs.length < 2) return null;
+            return (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.filterRow}
+                style={[styles.filterScroll, { borderBottomColor: colors.border }]}
+              >
+                <Pressable
+                  style={[
+                    styles.filterChip,
+                    filterLang === null
+                      ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                      : { backgroundColor: colors.secondary, borderColor: colors.border },
+                  ]}
+                  onPress={() => { setFilterLang(null); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                >
+                  <Text style={[styles.filterChipText, { color: filterLang === null ? colors.primaryForeground : colors.foreground }]}>
+                    All
+                  </Text>
+                </Pressable>
+                {langs.map((lang) => {
+                  const active = filterLang === lang;
+                  const color = LANG_COLORS[lang] ?? '#8b949e';
+                  const label = LANG_LABELS[lang] ?? lang.slice(0, 2).toUpperCase();
+                  return (
+                    <Pressable
+                      key={lang}
+                      style={[
+                        styles.filterChip,
+                        active
+                          ? { backgroundColor: color + '33', borderColor: color }
+                          : { backgroundColor: colors.secondary, borderColor: colors.border },
+                      ]}
+                      onPress={() => { setFilterLang(active ? null : lang); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                    >
+                      <View style={[styles.filterDot, { backgroundColor: color }]} />
+                      <Text style={[styles.filterChipText, { color: active ? color : colors.foreground }]}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            );
+          })()}
+          <FlatList
+          data={filterLang ? (projects ?? []).filter((p) => p.language === filterLang) : projects}
           keyExtractor={(item) => String(item.id)}
           scrollEnabled={!!(projects && projects.length > 0)}
           refreshControl={
@@ -500,6 +559,7 @@ export default function ProjectsScreen() {
             </View>
           )}
         />
+        </>
       )}
 
       {/* Rename Project Modal */}
@@ -713,4 +773,17 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   templateLinkText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
+  filterScroll: { borderBottomWidth: StyleSheet.hairlineWidth },
+  filterRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  filterDot: { width: 7, height: 7, borderRadius: 4 },
+  filterChipText: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
 });
