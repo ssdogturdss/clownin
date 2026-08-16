@@ -1,0 +1,12 @@
+kind = "video"
+title = "Clownin Demo Video"
+version = "1.0.0"
+videoAspectRatio = "16:9"
+
+[[services]]
+localPort = 5173
+name = "Clownin Demo Video"
+paths = ["/demo-video"]
+
+[services.development]
+run = "BASE_PATH=/demo-video pnpm --filter demo-video run dev"

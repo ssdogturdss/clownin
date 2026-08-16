@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-brand-bg: #0d1117;
+  --color-brand-surface: #161b22;
+  --color-brand-border: #30363d;
+  --color-brand-primary: #FF6B35;
+  --color-brand-foreground: #e6edf3;
+  --color-brand-muted: #8b949e;
+  --color-brand-success: #3fb950;
+  --color-brand-info: #58a6ff;
+  --color-brand-destructive: #f85149;
+  
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-brand-bg);
+    color: var(--color-brand-foreground);
+    font-family: var(--font-display);
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+}
+
+.clip-reveal {
+  clip-path: circle(0% at 50% 50%);
+  animation: clipReveal 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes clipReveal {
+  to {
+    clip-path: circle(150% at 50% 50%);
+  }
+}
+
+.dot-grid {
+  background-image: radial-gradient(color-mix(in srgb, var(--color-brand-muted) 20%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -12px -12px;
+}
