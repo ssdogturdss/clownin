@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -37,8 +37,14 @@ import { useProfile, PROFILE_QUERY_KEY } from '@/hooks/useProfile';
 // ── Template catalogue (for idea→template matching) ──────────────────────────
 interface TemplateForMatching {
   id: string;
+  name: string;
   language: string;
   keywords: string[];
+}
+
+interface PendingSubmission {
+  idea: string;
+  template: TemplateForMatching;
 }
 
 function getApiBase(): string {
@@ -54,10 +60,10 @@ function useTemplatesForMatching() {
     queryFn: async () => {
       const res = await fetch(`${getApiBase()}/api/templates`);
       if (!res.ok) throw new Error('Failed to load templates');
-      const data: Array<{ id: string; language: string; keywords?: string[] }> = await res.json();
+      const data: Array<{ id: string; name: string; language: string; keywords?: string[] }> = await res.json();
       return data
         .filter((t) => Array.isArray(t.keywords) && t.keywords.length > 0)
-        .map((t) => ({ id: t.id, language: t.language, keywords: t.keywords! }));
+        .map((t) => ({ id: t.id, name: t.name, language: t.language, keywords: t.keywords! }));
     },
     staleTime: 10 * 60 * 1000, // templates rarely change
     retry: false,              // silently fall back to blank project if unavailable
@@ -194,9 +200,23 @@ export default function ProjectsScreen() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [paywallReason, setPaywallReason] = useState<PaywallReason>('project_limit');
   const [showProfile, setShowProfile] = useState(false);
+  const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: profile } = useProfile();
   const { data: matchableTemplates = [] } = useTemplatesForMatching();
+
+  // Clear the auto-proceed timer when the pending submission is dismissed
+  const clearPendingTimer = useCallback(() => {
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => clearPendingTimer();
+  }, [clearPendingTimer]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -284,19 +304,14 @@ export default function ProjectsScreen() {
     router.replace('/(auth)/login');
   }, [logout]);
 
-  const handleIdeaSubmit = useCallback(async (idea: string) => {
-    if (profile?.subscriptionTier === 'free' && (projects?.length ?? 0) >= 3) {
-      setPaywallReason('project_limit');
-      setShowPaywall(true);
-      return;
-    }
-    const matchedTemplate = detectTemplate(idea, matchableTemplates);
-    // Use the template's own language when matched; fall back to keyword detection
-    const language = matchedTemplate?.language ?? detectLanguage(idea);
+  const doCreateProject = useCallback(async (idea: string, template: TemplateForMatching | null) => {
+    clearPendingTimer();
+    setPendingSubmission(null);
+    const language = template?.language ?? detectLanguage(idea);
     const name = deriveProjectName(idea);
     try {
       const project = await createMutation.mutateAsync({
-        data: { name, language, ...(matchedTemplate ? { templateId: matchedTemplate.id } : {}) },
+        data: { name, language, ...(template ? { templateId: template.id } : {}) },
       });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
@@ -313,7 +328,26 @@ export default function ProjectsScreen() {
         Alert.alert('Error', 'Could not create project. Please try again.');
       }
     }
-  }, [createMutation, queryClient, profile, projects, matchableTemplates]);
+  }, [createMutation, queryClient, clearPendingTimer]);
+
+  const handleIdeaSubmit = useCallback(async (idea: string) => {
+    if (profile?.subscriptionTier === 'free' && (projects?.length ?? 0) >= 3) {
+      setPaywallReason('project_limit');
+      setShowPaywall(true);
+      return;
+    }
+    const matchedTemplate = detectTemplate(idea, matchableTemplates);
+    if (matchedTemplate) {
+      // Show a brief notice so the user can see and optionally change the template
+      clearPendingTimer();
+      setPendingSubmission({ idea, template: matchedTemplate });
+      pendingTimerRef.current = setTimeout(() => {
+        doCreateProject(idea, matchedTemplate);
+      }, 2000);
+    } else {
+      await doCreateProject(idea, null);
+    }
+  }, [doCreateProject, profile, projects, matchableTemplates, clearPendingTimer]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -327,6 +361,18 @@ export default function ProjectsScreen() {
         onBrowseTemplates={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           router.push('/(app)/templates');
+        }}
+        pendingTemplate={pendingSubmission ? { id: pendingSubmission.template.id, name: pendingSubmission.template.name } : null}
+        onChangeTemplate={() => {
+          clearPendingTimer();
+          setPendingSubmission(null);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          router.push('/(app)/templates');
+        }}
+        onProceedWithTemplate={() => {
+          if (pendingSubmission) {
+            doCreateProject(pendingSubmission.idea, pendingSubmission.template);
+          }
         }}
       />
     );

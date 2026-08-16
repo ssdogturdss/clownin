@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   ScrollView,
+  Animated,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,12 +28,70 @@ interface OnboardingScreenProps {
   onSkip: () => void;
   isLoading: boolean;
   onBrowseTemplates?: () => void;
+  pendingTemplate?: { id: string; name: string } | null;
+  onChangeTemplate?: () => void;
+  onProceedWithTemplate?: () => void;
 }
 
-export function OnboardingScreen({ onSubmit, onSkip, isLoading, onBrowseTemplates }: OnboardingScreenProps) {
+const COUNTDOWN_MS = 2000;
+
+export function OnboardingScreen({
+  onSubmit,
+  onSkip,
+  isLoading,
+  onBrowseTemplates,
+  pendingTemplate,
+  onChangeTemplate,
+  onProceedWithTemplate,
+}: OnboardingScreenProps) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [idea, setIdea] = useState("");
+  const [countdown, setCountdown] = useState(0);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bannerOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (pendingTemplate) {
+      // Fade in the banner
+      Animated.timing(bannerOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+      // Countdown from COUNTDOWN_MS to 0
+      const startTime = Date.now();
+      setCountdown(COUNTDOWN_MS);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(0, COUNTDOWN_MS - elapsed);
+        setCountdown(remaining);
+        if (remaining === 0 && countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+      }, 50);
+    } else {
+      // Fade out
+      Animated.timing(bannerOpacity, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }).start();
+      setCountdown(0);
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    }
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    };
+  }, [pendingTemplate]);
 
   const handleSubmit = (text: string) => {
     const trimmed = text.trim();
@@ -43,6 +102,7 @@ export function OnboardingScreen({ onSubmit, onSkip, isLoading, onBrowseTemplate
 
   const topPad = Platform.OS === "web" ? 24 : insets.top;
   const bottomPad = Platform.OS === "web" ? 24 : insets.bottom;
+  const progressWidth = COUNTDOWN_MS > 0 ? (countdown / COUNTDOWN_MS) * 100 : 0;
 
   return (
     <KeyboardAvoidingView
@@ -56,6 +116,31 @@ export function OnboardingScreen({ onSubmit, onSkip, isLoading, onBrowseTemplate
           <Text style={[styles.skipLink, { color: colors.mutedForeground }]}>Skip →</Text>
         </Pressable>
       </View>
+
+      {/* Template match notice banner */}
+      {pendingTemplate && (
+        <Animated.View style={[styles.templateBanner, { backgroundColor: colors.card, borderColor: colors.border, opacity: bannerOpacity }]}>
+          <View style={styles.templateBannerRow}>
+            <MaterialCommunityIcons name="layers-outline" size={15} color={colors.primary} style={{ marginTop: 1 }} />
+            <Text style={[styles.templateBannerText, { color: colors.foreground }]} numberOfLines={1}>
+              Starting from{" "}
+              <Text style={{ fontFamily: "Inter_600SemiBold" }}>{pendingTemplate.name}</Text>
+            </Text>
+            <Pressable onPress={onChangeTemplate} hitSlop={8}>
+              <Text style={[styles.templateBannerChange, { color: colors.primary }]}>Change</Text>
+            </Pressable>
+          </View>
+          {/* Progress bar showing countdown */}
+          <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
+            <View
+              style={[
+                styles.progressFill,
+                { backgroundColor: colors.primary, width: `${progressWidth}%` as any },
+              ]}
+            />
+          </View>
+        </Animated.View>
+      )}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: bottomPad + 32 }]}
@@ -237,5 +322,36 @@ const styles = StyleSheet.create({
   templateBtnText: {
     fontSize: 14,
     fontFamily: "Inter_400Regular",
+  },
+
+  templateBanner: {
+    marginHorizontal: 16,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  templateBannerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  templateBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+  },
+  templateBannerChange: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  progressTrack: {
+    height: 2,
+    width: "100%",
+  },
+  progressFill: {
+    height: 2,
   },
 });
