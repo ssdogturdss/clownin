@@ -393,6 +393,15 @@ export default function ProjectEditorScreen() {
   const [deployOpen, setDeployOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // Deployed URL — persisted in AsyncStorage so it survives restarts
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
+
+  // Load saved deployed URL on mount
+  useEffect(() => {
+    AsyncStorage.getItem(`clownin_deployed_url_${projectId}`).then((u) => {
+      if (u) setDeployedUrl(u);
+    }).catch(() => {});
+  }, [projectId]);
 
   const updateFileMutation = useUpdateFile();
   const createFileMutation = useCreateFile();
@@ -1012,6 +1021,25 @@ export default function ProjectEditorScreen() {
           <MaterialCommunityIcons name="github" size={18} color={colors.foreground} />
         </Pressable>
 
+        {/* Deploy button — shows live indicator dot when a deploy URL exists */}
+        <Pressable
+          style={[
+            styles.headerIconBtn,
+            {
+              backgroundColor: deployedUrl ? '#0d2417' : colors.card,
+              borderColor: deployedUrl ? '#3fb950' : colors.border,
+            },
+          ]}
+          onPress={() => setDeployOpen(true)}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons
+            name="rocket-launch-outline"
+            size={17}
+            color={deployedUrl ? '#3fb950' : colors.foreground}
+          />
+        </Pressable>
+
         {canServe && (
           <Pressable
             style={[
@@ -1389,6 +1417,7 @@ export default function ProjectEditorScreen() {
         onClose={() => setDeployOpen(false)}
         projectId={projectId}
         projectName={project?.name ?? 'my-project'}
+        onDeploySuccess={(url) => setDeployedUrl(url)}
       />
 
       <GitHubExportModal

@@ -12,6 +12,7 @@ import {
   Platform,
   RefreshControl,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { router } from 'expo-router';
 import {
@@ -221,9 +222,29 @@ export default function ProjectsScreen() {
   const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null);
   const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [filterLang, setFilterLang] = useState<string | null>(null);
+  // Map of projectId → deployed URL (loaded from AsyncStorage)
+  const [deployedUrls, setDeployedUrls] = useState<Record<number, string>>({});
 
   const { data: profile } = useProfile();
   const { data: matchableTemplates = [] } = useTemplatesForMatching();
+
+  // Load deployed URLs from AsyncStorage whenever projects list changes
+  useEffect(() => {
+    if (!projects || projects.length === 0) return;
+    Promise.all(
+      projects.map((p) =>
+        AsyncStorage.getItem(`clownin_deployed_url_${p.id}`)
+          .then((url) => ({ id: p.id, url }))
+          .catch(() => ({ id: p.id, url: null }))
+      )
+    ).then((results) => {
+      const map: Record<number, string> = {};
+      for (const r of results) {
+        if (r.url) map[r.id] = r.url;
+      }
+      setDeployedUrls(map);
+    });
+  }, [projects]);
 
   // Reset the filter if the selected language no longer exists in the project list
   // (e.g. after deleting the last project of that language)
@@ -572,6 +593,19 @@ export default function ProjectsScreen() {
                   <Text style={[styles.dateText, { color: colors.mutedForeground }]}>
                     Updated {formatDate(item.updatedAt)}
                   </Text>
+                  {deployedUrls[item.id] ? (
+                    <Pressable
+                      style={styles.liveBadge}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        Linking.openURL(deployedUrls[item.id]);
+                      }}
+                      hitSlop={8}
+                    >
+                      <View style={styles.liveDot} />
+                      <Text style={styles.liveText}>Live</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </Pressable>
             </View>
@@ -755,9 +789,12 @@ const styles = StyleSheet.create({
   cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   folderIcon: { marginRight: 8 },
   projectName: { fontSize: 16, fontFamily: 'Inter_600SemiBold', flex: 1 },
-  cardBottom: { flexDirection: 'row', alignItems: 'center' },
+  cardBottom: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dateText: { fontSize: 12, fontFamily: 'Inter_400Regular' },
   cardDeleteBtn: { padding: 6 },
+  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#3fb950' },
+  liveText: { fontSize: 11, fontFamily: 'Inter_600SemiBold', color: '#3fb950' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   modalBox: { width: 320, borderRadius: 16, borderWidth: 1, padding: 24, gap: 12 },
   modalTitle: { fontSize: 20, fontFamily: 'Inter_700Bold', marginBottom: 4 },

@@ -28,7 +28,8 @@ import { useProfile, PROFILE_QUERY_KEY } from "@/hooks/useProfile";
 
 type Attachment =
   | { kind: "image"; name: string; base64: string; mimeType: string; preview: string }
-  | { kind: "text"; name: string; content: string };
+  | { kind: "text"; name: string; content: string }
+  | { kind: "zip"; name: string; base64: string };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ToolCallMsg = {
@@ -161,10 +162,24 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       const result = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
-      const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'utf8' });
-      setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
+      const lowerName = asset.name.toLowerCase();
+      const isZip =
+        lowerName.endsWith(".zip") ||
+        asset.mimeType === "application/zip" ||
+        asset.mimeType === "application/x-zip-compressed";
+      if (isZip) {
+        // Read zip as base64 — the server will extract text files from it
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore — expo-file-system types omit 'encoding' in ReadingOptions for this version
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        setAttachments((prev) => [...prev, { kind: "zip", name: asset.name, base64 }]);
+      } else {
+        // Read as UTF-8 text (code/config files)
+        const content = await FileSystem.readAsStringAsync(asset.uri);
+        setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
+      }
     } catch {
-      Alert.alert("Could not read file", "Only plain text and code files are supported.");
+      Alert.alert("Could not read file", "Only text, code, and .zip files are supported.");
     }
   }, []);
 
@@ -237,6 +252,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           attachments: sentAttachments.map((a) =>
             a.kind === "image"
               ? { kind: "image", name: a.name, base64: a.base64, mimeType: a.mimeType }
+              : a.kind === "zip"
+              ? { kind: "zip", name: a.name, base64: a.base64 }
               : { kind: "text", name: a.name, content: a.content }
           ),
         }),
@@ -541,6 +558,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               <View key={i} style={[styles.chip, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 {a.kind === "image"
                   ? <Image source={{ uri: a.preview }} style={styles.chipThumb} />
+                  : a.kind === "zip"
+                  ? <MaterialCommunityIcons name="folder-zip-outline" size={14} color="#f59e0b" />
                   : <MaterialCommunityIcons name="file-code-outline" size={14} color={colors.primary} />
                 }
                 <Text style={[styles.chipName, { color: colors.foreground }]} numberOfLines={1}>{a.name}</Text>
@@ -562,7 +581,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             <View style={[styles.pickerDivider, { backgroundColor: colors.border }]} />
             <Pressable style={styles.pickerRow} onPress={pickFile}>
               <MaterialCommunityIcons name="file-outline" size={18} color={colors.primary} />
-              <Text style={[styles.pickerLabel, { color: colors.foreground }]}>Text / Code File</Text>
+              <Text style={[styles.pickerLabel, { color: colors.foreground }]}>File or Zip Archive</Text>
             </Pressable>
           </View>
         )}

@@ -3,6 +3,7 @@ import { spawn } from "child_process";
 import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
+import AdmZip from "adm-zip";
 import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
@@ -261,7 +262,8 @@ router.post(
 
     type InboundAttachment =
       | { kind: "image"; name: string; base64: string; mimeType: string }
-      | { kind: "text"; name: string; content: string };
+      | { kind: "text"; name: string; content: string }
+      | { kind: "zip"; name: string; base64: string };
 
     const { message, history, attachments } = req.body ?? {};
     if (!message || typeof message !== "string") {
@@ -386,6 +388,31 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
     // Build user content — plain string unless images are attached
     const textFiles = inboundAttachments.filter((a) => a.kind === "text") as { kind: "text"; name: string; content: string }[];
     const images    = inboundAttachments.filter((a) => a.kind === "image") as { kind: "image"; name: string; base64: string; mimeType: string }[];
+    const zipFiles  = inboundAttachments.filter((a) => a.kind === "zip")  as { kind: "zip"; name: string; base64: string }[];
+
+    // Extract text/code files from any zip attachments and fold them into textFiles
+    const TEXT_EXTENSIONS = new Set(["js","ts","jsx","tsx","py","rb","go","rs","java","sh","bash","txt","md","json","yaml","yml","toml","html","css","scss","sql","env","gitignore","dockerfile","makefile","ini","cfg","conf"]);
+    for (const zipAtt of zipFiles) {
+      try {
+        const buf = Buffer.from(zipAtt.base64, "base64");
+        const zip = new AdmZip(buf);
+        for (const entry of zip.getEntries()) {
+          if (entry.isDirectory) continue;
+          const entryName = entry.entryName;
+          // Skip hidden, binary, and build artifact paths
+          if (entryName.includes("/.") || entryName.startsWith(".")) continue;
+          if (entryName.includes("/node_modules/") || entryName.includes("/__pycache__/")) continue;
+          const ext = entryName.split(".").pop()?.toLowerCase() ?? "";
+          if (!TEXT_EXTENSIONS.has(ext)) continue;
+          try {
+            const content = entry.getData().toString("utf8");
+            textFiles.push({ kind: "text", name: `${zipAtt.name}/${entryName}`, content });
+          } catch { /* skip unreadable entries */ }
+        }
+      } catch (zipErr) {
+        req.log.warn({ zipErr, name: zipAtt.name }, "Failed to extract zip attachment");
+      }
+    }
 
     let userText = message;
     if (textFiles.length > 0) {
