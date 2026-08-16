@@ -120,21 +120,72 @@ function detectTemplate(
 }
 
 // ── Idea → language detection ─────────────────────────────────────────────────
-function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' | 'go' | 'rust' | 'ruby' | 'java' {
+
+/**
+ * Static language fallback used when the server-fetched template catalogue has
+ * not yet loaded (cold-start / offline).  Must cover every language that can
+ * appear as a project language so that a freshly-installed app still makes a
+ * sensible choice.
+ *
+ * IMPORTANT: keep this list consistent with the template catalogue in
+ * artifacts/api-server/src/data/templates.ts.  When a new template is added,
+ * verify that its language appears here with matching keywords.  The canonical
+ * source of truth is the server catalogue; this list is only a cold-start
+ * fallback.
+ *
+ * "react" is deliberately absent from tsKw: the react-esbuild template has
+ * language "javascript", so mapping "react" → typescript here would conflict.
+ */
+function detectLanguage(idea: string): string {
   const lower = idea.toLowerCase();
   const pythonKw = ['python', 'flask', 'django', 'fastapi', 'scraper', 'scraping', 'pandas', 'numpy', 'data science', 'machine learning', 'ml ', 'matplotlib', 'pip ', 'requests '];
-  const tsKw = ['typescript', 'react', 'next.js', 'nextjs', 'angular', 'vue'];
+  // "react" is omitted: react-esbuild template is javascript, not typescript
+  const tsKw = ['typescript', 'next.js', 'nextjs', 'angular', 'vue'];
   const goKw = ['golang', ' go ', 'goroutine', 'gin framework', 'go http', 'go server'];
+  const bashKw = ['bash', 'shell script', 'bash script', ' sh ', '.sh '];
   const rustKw = ['rust lang', 'rustlang', 'cargo.toml', 'rust programming', ' rust '];
   const rubyKw = ['ruby on rails', 'ruby ', 'sinatra', 'rails app', 'rubygems'];
   const javaKw = ['spring boot', 'spring mvc', 'java class', 'jvm', 'maven', 'gradle', ' java '];
   if (pythonKw.some((k) => lower.includes(k))) return 'python';
   if (tsKw.some((k) => lower.includes(k))) return 'typescript';
   if (goKw.some((k) => lower.includes(k))) return 'go';
+  if (bashKw.some((k) => lower.includes(k))) return 'bash';
   if (rustKw.some((k) => lower.includes(k))) return 'rust';
   if (rubyKw.some((k) => lower.includes(k))) return 'ruby';
   if (javaKw.some((k) => lower.includes(k))) return 'java';
   return 'javascript';
+}
+
+/**
+ * Infers the project language from the server-fetched template catalogue so
+ * the two are always consistent.  Uses the same keyword-scoring logic as
+ * detectTemplate() but with no threshold: even a single keyword match is enough
+ * to determine language (we're not suggesting a template here, just picking a
+ * language).  Falls back to the static detectLanguage() for ideas that don't
+ * match any template keyword (e.g. TypeScript, Rust, Ruby, Java).
+ */
+function detectLanguageFromTemplates(idea: string, templates: TemplateForMatching[]): string {
+  if (templates.length === 0) return detectLanguage(idea);
+  const lower = idea.toLowerCase();
+  let bestTemplate: TemplateForMatching | null = null;
+  let bestScore = 0;
+
+  for (const template of templates) {
+    let score = 0;
+    for (const kw of template.keywords) {
+      if (lower.includes(kw)) {
+        score += kw.split(' ').length;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestTemplate = template;
+    }
+  }
+
+  // Any keyword match (score ≥ 1) is enough to pin the language.
+  if (bestTemplate && bestScore >= 1) return bestTemplate.language;
+  return detectLanguage(idea);
 }
 
 // ── Idea → project name ───────────────────────────────────────────────────────
@@ -355,7 +406,10 @@ export default function ProjectsScreen() {
   const doCreateProject = useCallback(async (idea: string, template: TemplateForMatching | null) => {
     clearPendingTimer();
     setPendingSubmission(null);
-    const language = template?.language ?? detectLanguage(idea);
+    // When a template is matched, always use its declared language so the two
+    // sources agree.  When no template matched, derive language from the fetched
+    // template catalogue so keyword lists stay in sync with the server.
+    const language = template?.language ?? detectLanguageFromTemplates(idea, matchableTemplates);
     const name = deriveProjectName(idea);
     try {
       const project = await createMutation.mutateAsync({
@@ -376,7 +430,7 @@ export default function ProjectsScreen() {
         Alert.alert('Error', 'Could not create project. Please try again.');
       }
     }
-  }, [createMutation, queryClient, clearPendingTimer]);
+  }, [createMutation, queryClient, clearPendingTimer, matchableTemplates]);
 
   const handleIdeaSubmit = useCallback(async (idea: string) => {
     if (profile?.subscriptionTier === 'free' && (projects?.length ?? 0) >= 3) {

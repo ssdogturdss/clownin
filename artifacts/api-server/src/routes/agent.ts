@@ -390,23 +390,49 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
     const images    = inboundAttachments.filter((a) => a.kind === "image") as { kind: "image"; name: string; base64: string; mimeType: string }[];
     const zipFiles  = inboundAttachments.filter((a) => a.kind === "zip")  as { kind: "zip"; name: string; base64: string }[];
 
-    // Extract text/code files from any zip attachments and fold them into textFiles
+    // Extract text/code files from any zip attachments and fold them into textFiles.
+    // Safety limits prevent a malicious or oversized archive from exhausting memory
+    // or producing a prompt too large for the model.
     const TEXT_EXTENSIONS = new Set(["js","ts","jsx","tsx","py","rb","go","rs","java","sh","bash","txt","md","json","yaml","yml","toml","html","css","scss","sql","env","gitignore","dockerfile","makefile","ini","cfg","conf"]);
+    const ZIP_MAX_ENTRIES        = 50;          // max files extracted per archive
+    const ZIP_MAX_ENTRY_BYTES    = 256 * 1024;  // 256 KB per file
+    const ZIP_MAX_TOTAL_BYTES    = 1024 * 1024; // 1 MB total across all zip files
+    let zipTotalBytes = 0;
     for (const zipAtt of zipFiles) {
       try {
         const buf = Buffer.from(zipAtt.base64, "base64");
         const zip = new AdmZip(buf);
+        let entryCount = 0;
         for (const entry of zip.getEntries()) {
           if (entry.isDirectory) continue;
+          if (entryCount >= ZIP_MAX_ENTRIES) {
+            req.log.warn({ name: zipAtt.name }, "ZIP entry limit reached; skipping remaining entries");
+            break;
+          }
+          if (zipTotalBytes >= ZIP_MAX_TOTAL_BYTES) {
+            req.log.warn({ name: zipAtt.name }, "ZIP total size limit reached; skipping remaining entries");
+            break;
+          }
           const entryName = entry.entryName;
           // Skip hidden, binary, and build artifact paths
           if (entryName.includes("/.") || entryName.startsWith(".")) continue;
           if (entryName.includes("/node_modules/") || entryName.includes("/__pycache__/")) continue;
           const ext = entryName.split(".").pop()?.toLowerCase() ?? "";
           if (!TEXT_EXTENSIONS.has(ext)) continue;
+          // Check compressed size before decompressing to avoid zip-bomb expansion
+          if (entry.header.size > ZIP_MAX_ENTRY_BYTES) continue;
           try {
-            const content = entry.getData().toString("utf8");
+            const data = entry.getData();
+            if (data.length > ZIP_MAX_ENTRY_BYTES) continue;
+            const content = data.toString("utf8");
+            zipTotalBytes += content.length;
+            if (zipTotalBytes > ZIP_MAX_TOTAL_BYTES) {
+              req.log.warn({ name: zipAtt.name, entryName }, "ZIP total size limit reached mid-entry; skipping");
+              zipTotalBytes -= content.length; // roll back the overage
+              break;
+            }
             textFiles.push({ kind: "text", name: `${zipAtt.name}/${entryName}`, content });
+            entryCount++;
           } catch { /* skip unreadable entries */ }
         }
       } catch (zipErr) {
