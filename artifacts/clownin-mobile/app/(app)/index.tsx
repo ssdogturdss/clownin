@@ -54,19 +54,37 @@ function getApiBase(): string {
   return `https://${process.env.EXPO_PUBLIC_DOMAIN ?? ''}`;
 }
 
+const TEMPLATES_CACHE_KEY = '@clownin/templates-for-matching';
+
 function useTemplatesForMatching() {
   return useQuery<TemplateForMatching[]>({
     queryKey: ['templates-for-matching'],
     queryFn: async () => {
-      const res = await fetch(`${getApiBase()}/api/templates`);
-      if (!res.ok) throw new Error('Failed to load templates');
-      const data: Array<{ id: string; name: string; language: string; keywords?: string[] }> = await res.json();
-      return data
-        .filter((t) => Array.isArray(t.keywords) && t.keywords.length > 0)
-        .map((t) => ({ id: t.id, name: t.name, language: t.language, keywords: t.keywords! }));
+      try {
+        const res = await fetch(`${getApiBase()}/api/templates`);
+        if (!res.ok) throw new Error('Failed to load templates');
+        const data: Array<{ id: string; name: string; language: string; keywords?: string[] }> = await res.json();
+        const templates = data
+          .filter((t) => Array.isArray(t.keywords) && t.keywords.length > 0)
+          .map((t) => ({ id: t.id, name: t.name, language: t.language, keywords: t.keywords! }));
+        // Persist the fresh list so future cold-starts can use it as a fallback
+        AsyncStorage.setItem(TEMPLATES_CACHE_KEY, JSON.stringify(templates)).catch(() => {});
+        return templates;
+      } catch {
+        // Server unreachable – try the locally-cached copy instead
+        try {
+          const cached = await AsyncStorage.getItem(TEMPLATES_CACHE_KEY);
+          if (cached) {
+            return JSON.parse(cached) as TemplateForMatching[];
+          }
+        } catch {
+          // cache read failed; fall through to empty list
+        }
+        return [];
+      }
     },
-    staleTime: 10 * 60 * 1000, // templates rarely change
-    retry: false,              // silently fall back to blank project if unavailable
+    staleTime: 10 * 60 * 1000, // templates rarely change; background-refresh after 10 min
+    retry: false,              // fallback logic is handled inside queryFn
   });
 }
 
