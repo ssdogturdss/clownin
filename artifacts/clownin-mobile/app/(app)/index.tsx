@@ -21,7 +21,7 @@ import {
   getListProjectsQueryKey,
 } from '@workspace/api-client-react';
 import type { Project } from '@workspace/api-client-react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -32,6 +32,66 @@ import { OnboardingScreen } from '@/components/OnboardingScreen';
 import { PaywallSheet, type PaywallReason } from '@/components/PaywallSheet';
 import { ProfileModal } from '@/components/ProfileModal';
 import { useProfile, PROFILE_QUERY_KEY } from '@/hooks/useProfile';
+
+// ── Template catalogue (for idea→template matching) ──────────────────────────
+interface TemplateForMatching {
+  id: string;
+  language: string;
+  keywords: string[];
+}
+
+function getApiBase(): string {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `https://${window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')}`;
+  }
+  return `https://${process.env.EXPO_PUBLIC_DOMAIN ?? ''}`;
+}
+
+function useTemplatesForMatching() {
+  return useQuery<TemplateForMatching[]>({
+    queryKey: ['templates-for-matching'],
+    queryFn: async () => {
+      const res = await fetch(`${getApiBase()}/api/templates`);
+      if (!res.ok) throw new Error('Failed to load templates');
+      const data: Array<{ id: string; language: string; keywords?: string[] }> = await res.json();
+      return data
+        .filter((t) => Array.isArray(t.keywords) && t.keywords.length > 0)
+        .map((t) => ({ id: t.id, language: t.language, keywords: t.keywords! }));
+    },
+    staleTime: 10 * 60 * 1000, // templates rarely change
+    retry: false,              // silently fall back to blank project if unavailable
+  });
+}
+
+/**
+ * Returns the best-matching template for the idea, or null if nothing scores
+ * above the confidence threshold.  Longer/more-specific keyword phrases
+ * score higher than single words.
+ */
+function detectTemplate(
+  idea: string,
+  templates: TemplateForMatching[],
+): TemplateForMatching | null {
+  const lower = idea.toLowerCase();
+  let bestTemplate: TemplateForMatching | null = null;
+  let bestScore = 0;
+
+  for (const template of templates) {
+    let score = 0;
+    for (const kw of template.keywords) {
+      if (lower.includes(kw)) {
+        score += kw.split(' ').length;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestTemplate = template;
+    }
+  }
+
+  // Require at least 2 points so single generic words don't trigger a match
+  return bestScore >= 2 ? bestTemplate : null;
+}
 
 // ── Idea → language detection ─────────────────────────────────────────────────
 function detectLanguage(idea: string): 'javascript' | 'typescript' | 'python' | 'bash' | 'go' | 'rust' | 'ruby' | 'java' {
@@ -135,6 +195,7 @@ export default function ProjectsScreen() {
   const [showProfile, setShowProfile] = useState(false);
 
   const { data: profile } = useProfile();
+  const { data: matchableTemplates = [] } = useTemplatesForMatching();
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -228,10 +289,14 @@ export default function ProjectsScreen() {
       setShowPaywall(true);
       return;
     }
-    const language = detectLanguage(idea);
+    const matchedTemplate = detectTemplate(idea, matchableTemplates);
+    // Use the template's own language when matched; fall back to keyword detection
+    const language = matchedTemplate?.language ?? detectLanguage(idea);
     const name = deriveProjectName(idea);
     try {
-      const project = await createMutation.mutateAsync({ data: { name, language } });
+      const project = await createMutation.mutateAsync({
+        data: { name, language, ...(matchedTemplate ? { templateId: matchedTemplate.id } : {}) },
+      });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
       router.push({
@@ -247,7 +312,7 @@ export default function ProjectsScreen() {
         Alert.alert('Error', 'Could not create project. Please try again.');
       }
     }
-  }, [createMutation, queryClient, profile, projects]);
+  }, [createMutation, queryClient, profile, projects, matchableTemplates]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 

@@ -10,12 +10,13 @@ const router: IRouter = Router();
  * when the user creates a project from a template (POST /projects?templateId=…).
  */
 router.get("/templates", (_req, res): void => {
-  const list = TEMPLATES.map(({ id, name, description, language, icon }) => ({
+  const list = TEMPLATES.map(({ id, name, description, language, icon, keywords }) => ({
     id,
     name,
     description,
     language,
     icon,
+    keywords,
   }));
   res.json(list);
 });

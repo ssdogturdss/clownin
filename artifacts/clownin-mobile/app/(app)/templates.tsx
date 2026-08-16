@@ -31,6 +31,7 @@ interface Template {
   description: string;
   language: string;
   icon: string;
+  keywords?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ export interface Template {
   language: string;
   /** MaterialCommunityIcons name shown in the mobile gallery */
   icon: string;
+  /** Keywords used for client-side idea→template matching */
+  keywords: string[];
   files: TemplateFile[];
 }
 
@@ -26,6 +28,7 @@ export const TEMPLATES: Template[] = [
     description: "REST API with Express.js, JSON middleware, and a health endpoint",
     language: "javascript",
     icon: "lightning-bolt",
+    keywords: ["express", "rest api", "api server", "http server", "node api", "nodejs api", "express.js", "expressjs", "node server", "backend api"],
     files: [
       {
         path: "package.json",
@@ -77,6 +80,7 @@ app.listen(PORT, () => console.log(\`Server on http://localhost:\${PORT}\`));
     description: "Python REST API with Flask, JSON responses, and CORS",
     language: "python",
     icon: "language-python",
+    keywords: ["flask", "python api", "python rest", "python server", "python backend", "flask api", "python web"],
     files: [
       {
         path: "requirements.txt",
@@ -121,6 +125,7 @@ if __name__ == '__main__':
     description: "React SPA bundled with esbuild and served from Node.js",
     language: "javascript",
     icon: "react",
+    keywords: ["react", "react app", "react website", "react frontend", "react ui", "spa", "single page app", "react component", "jsx", "tsx"],
     files: [
       {
         path: "package.json",
@@ -233,6 +238,7 @@ export default function App() {
     description: "Command-line tool with argparse, flags, and colored output",
     language: "python",
     icon: "console-line",
+    keywords: ["python cli", "command line", "cli tool", "python script", "argparse", "python tool", "command line tool", "terminal tool"],
     files: [
       {
         path: "main.py",
@@ -267,6 +273,7 @@ if __name__ == '__main__':
     description: "Shell script with argument parsing, colors, and error handling",
     language: "bash",
     icon: "bash",
+    keywords: ["bash", "shell script", "bash script", "shell", "sh script", "bash tool", "shell automation", "bash automation"],
     files: [
       {
         path: "main.sh",
@@ -302,6 +309,7 @@ ls -la | head -10
     description: "HTTP server with routing, JSON responses, and middleware",
     language: "go",
     icon: "language-go",
+    keywords: ["go", "golang", "go server", "go http", "golang server", "go api", "golang api", "gin", "goroutine"],
     files: [
       {
         path: "main.go",
@@ -365,6 +373,7 @@ func main() {
     description: "Discord bot with slash commands and message handling via discord.js",
     language: "javascript",
     icon: "discord",
+    keywords: ["discord", "discord bot", "discord.js", "discordjs", "discord server", "discord slash", "discord commands"],
     files: [
       {
         path: "package.json",
@@ -426,6 +435,7 @@ client.login(token);
     description: "Telegram bot with command handlers using python-telegram-bot",
     language: "python",
     icon: "send",
+    keywords: ["telegram", "telegram bot", "telegrambot", "python telegram", "telegram chatbot", "telegram commands"],
     files: [
       {
         path: "requirements.txt",
@@ -477,6 +487,7 @@ if __name__ == '__main__':
     description: "Create, read, update, and delete records with Python's built-in SQLite",
     language: "python",
     icon: "database",
+    keywords: ["sqlite", "sqlite crud", "database", "python database", "sql", "crud", "python sql", "sqlite database", "db crud"],
     files: [
       {
         path: "main.py",
@@ -568,6 +579,7 @@ if __name__ == '__main__':
     description: "Real-time chat server that broadcasts messages to all connected clients",
     language: "javascript",
     icon: "chat-processing-outline",
+    keywords: ["websocket", "websocket chat", "chat server", "real-time chat", "live chat", "ws server", "realtime", "real time", "socket"],
     files: [
       {
         path: "package.json",
@@ -639,6 +651,7 @@ server.listen(PORT, () => console.log(\`WebSocket server on ws://localhost:\${PO
     description: "Scheduled task runner with node-cron — runs jobs on a timed schedule",
     language: "javascript",
     icon: "clock-outline",
+    keywords: ["cron", "cron job", "scheduled task", "scheduler", "node-cron", "job scheduler", "timed task", "periodic task", "schedule"],
     files: [
       {
         path: "package.json",
@@ -693,6 +706,7 @@ console.log('  0 0 * * *        daily at midnight UTC');
     description: "Responsive HTML/CSS/JS page — edit and preview in the browser",
     language: "javascript",
     icon: "language-html5",
+    keywords: ["html", "static html", "html page", "html website", "static website", "static page", "landing page", "html css", "html js", "web page", "webpage"],
     files: [
       {
         path: "index.html",
