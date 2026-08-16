@@ -168,10 +168,19 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         asset.mimeType === "application/zip" ||
         asset.mimeType === "application/x-zip-compressed";
       if (isZip) {
-        // Read zip as base64 — the server will extract text files from it
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore — expo-file-system types omit 'encoding' in ReadingOptions for this version
-        const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        // Use fetch + FileReader for reliable base64 on both native and web
+        const resp = await fetch(asset.uri);
+        const blob = await resp.blob();
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            // result is "data:<mime>;base64,<data>" — strip the prefix
+            const raw = (reader.result as string).split(",")[1] ?? "";
+            resolve(raw);
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
         setAttachments((prev) => [...prev, { kind: "zip", name: asset.name, base64 }]);
       } else {
         // Read as UTF-8 text (code/config files)
