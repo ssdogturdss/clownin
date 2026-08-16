@@ -24,6 +24,7 @@ import { AgentChat } from '@/components/AgentChat';
 import { GitHubExportModal } from '@/components/GitHubExportModal';
 import { DeployModal } from '@/components/DeployModal';
 import { InAppPreview } from '@/components/InAppPreview';
+import { ServePreview } from '@/components/ServePreview';
 import { SharePreviewModal } from '@/components/SharePreviewModal';
 import { router, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -370,6 +371,10 @@ export default function ProjectEditorScreen() {
   const [isServing, setIsServing] = useState(false);
   const [serveUrl, setServeUrl] = useState<string | null>(null);
   const [isServeLaunching, setIsServeLaunching] = useState(false);
+  // Which pane is active inside the terminal panel when a server is running
+  const [activePane, setActivePane] = useState<'terminal' | 'preview'>('terminal');
+  // Key for the embedded serve preview — increment to force a reload
+  const [previewReloadKey, setPreviewReloadKey] = useState(0);
 
   // Terminal height — derived from the measured workspace panel, not full screen dims.
   // The workspace panel gets (containerMain - chatSize - 5px divider) of the split container.
@@ -717,6 +722,7 @@ export default function ProjectEditorScreen() {
         if (data.running && data.url) {
           setIsServing(true);
           setServeUrl(data.url);
+          setActivePane('preview');
           openTerminal();
         }
       })
@@ -758,6 +764,8 @@ export default function ProjectEditorScreen() {
                 const event = JSON.parse(rawLine.slice(6)) as { type: string; payload: string };
                 if (event.type === 'url') {
                   setServeUrl(event.payload);
+                  setActivePane('preview');
+                  openTerminal();
                 } else if (event.type === 'stdout') {
                   const s = event.payload.replace(/\n$/, '');
                   if (s) addLine('stdout', s);
@@ -770,6 +778,7 @@ export default function ProjectEditorScreen() {
                   addLine('system', `[Server stopped (exit ${event.payload})]`);
                   setIsServing(false);
                   setServeUrl(null);
+                  setActivePane('terminal');
                 }
               } catch { /* skip malformed */ }
             }
@@ -806,6 +815,7 @@ export default function ProjectEditorScreen() {
       const data = (await response.json()) as { url: string; port: number };
       setIsServing(true);
       setServeUrl(data.url);
+      setActivePane('preview');
     } catch (err: unknown) {
       addLine('stderr', `[Serve error: ${err instanceof Error ? err.message : String(err)}]`);
     } finally {
@@ -818,6 +828,7 @@ export default function ProjectEditorScreen() {
     if (!token) return;
     setIsServing(false);
     setServeUrl(null);
+    setActivePane('terminal');
     addLine('system', '[Stopping server…]');
     try {
       await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
@@ -1198,13 +1209,59 @@ export default function ProjectEditorScreen() {
               ]}
             >
               <View style={[styles.termHeader, { borderBottomColor: colors.border }]}>
+                {/* Left: tab switcher when serving, macOS dots otherwise */}
                 <View style={styles.termHeaderLeft}>
-                  <View style={[styles.termDot, { backgroundColor: '#f85149' }]} />
-                  <View style={[styles.termDot, { backgroundColor: '#d29922' }]} />
-                  <View style={[styles.termDot, { backgroundColor: '#3fb950' }]} />
-                  <Text style={[styles.termTitle, { color: '#8b949e' }]}>Terminal</Text>
+                  {isServing && serveUrl ? (
+                    <View style={styles.termTabs}>
+                      <Pressable
+                        style={[styles.termTab, activePane === 'terminal' && styles.termTabActive]}
+                        onPress={() => setActivePane('terminal')}
+                        hitSlop={6}
+                      >
+                        <Text style={[styles.termTabText, { color: activePane === 'terminal' ? '#e6edf3' : '#8b949e' }]}>
+                          Terminal
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.termTab, activePane === 'preview' && styles.termTabActiveGreen]}
+                        onPress={() => setActivePane('preview')}
+                        hitSlop={6}
+                      >
+                        <View style={[styles.termLiveDot, { backgroundColor: '#3fb950' }]} />
+                        <Text style={[styles.termTabText, { color: activePane === 'preview' ? '#3fb950' : '#8b949e' }]}>
+                          Preview
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={[styles.termDot, { backgroundColor: '#f85149' }]} />
+                      <View style={[styles.termDot, { backgroundColor: '#d29922' }]} />
+                      <View style={[styles.termDot, { backgroundColor: '#3fb950' }]} />
+                      <Text style={[styles.termTitle, { color: '#8b949e' }]}>Terminal</Text>
+                    </>
+                  )}
                 </View>
                 <View style={styles.termHeaderRight}>
+                  {/* Reload + open-externally buttons in preview tab */}
+                  {isServing && serveUrl && activePane === 'preview' && (
+                    <>
+                      <Pressable
+                        onPress={() => setPreviewReloadKey((k) => k + 1)}
+                        style={styles.termBtn}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="refresh-outline" size={15} color="#8b949e" />
+                      </Pressable>
+                      <Pressable
+                        onPress={() => Linking.openURL(serveUrl)}
+                        style={styles.termBtn}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="open-outline" size={15} color="#8b949e" />
+                      </Pressable>
+                    </>
+                  )}
                   {exitCode !== null && !isServing && (
                     <View style={[styles.exitBadge, { backgroundColor: exitCode === 0 ? '#3fb95022' : '#f8514922', borderColor: exitCode === 0 ? '#3fb95055' : '#f8514955' }]}>
                       <Text style={[styles.exitText, { color: exitCode === 0 ? '#3fb950' : '#f85149' }]}>exit {exitCode}</Text>
@@ -1219,8 +1276,8 @@ export default function ProjectEditorScreen() {
                 </View>
               </View>
 
-              {/* ── Serve URL banner — tappable link while server is live ── */}
-              {isServing && serveUrl && (
+              {/* ── Compact URL strip — only in terminal tab so users can copy/open ── */}
+              {isServing && serveUrl && activePane === 'terminal' && (
                 <Pressable
                   style={styles.serveBanner}
                   onPress={() => Linking.openURL(serveUrl)}
@@ -1231,9 +1288,17 @@ export default function ProjectEditorScreen() {
                 </Pressable>
               )}
 
+              {/* ── Embedded preview WebView ── */}
+              {activePane === 'preview' && isServing && serveUrl && (
+                <ServePreview
+                  url={serveUrl}
+                  reloadKey={previewReloadKey}
+                />
+              )}
+
               <ScrollView
                 ref={termScrollRef}
-                style={styles.termOutput}
+                style={[styles.termOutput, activePane === 'preview' && { display: 'none' }]}
                 contentContainerStyle={{ padding: 12, paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 12 }}
               >
                 {terminalLines.map((line) => (
@@ -1535,6 +1600,17 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
   },
   stdinSendBtn: { padding: 6 },
+
+  // Terminal pane tab switcher
+  termTabs: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  termTab: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+  },
+  termTabActive: { backgroundColor: '#21262d' },
+  termTabActiveGreen: { backgroundColor: '#0d2417' },
+  termTabText: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.2 },
+  termLiveDot: { width: 6, height: 6, borderRadius: 3 },
 
   // Serve URL banner (inside terminal panel)
   serveBanner: {
