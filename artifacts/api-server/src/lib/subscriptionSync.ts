@@ -16,6 +16,11 @@
  * Concurrency is capped at REVENUECAT_SYNC_CONCURRENCY (default: 5) parallel
  * requests. 429 responses trigger exponential back-off with up to
  * REVENUECAT_SYNC_MAX_RETRIES (default: 4) retries.
+ *
+ * Transient 5xx failures are retried up to REVENUECAT_SYNC_ERROR_RETRIES
+ * (default: 2) times per user before counting as an error. After the full sync
+ * completes, a structured warning is emitted when any errors remain so that
+ * monitoring tools can detect a prolonged RevenueCat outage.
  */
 
 import cron from "node-cron";
@@ -131,6 +136,10 @@ export async function syncSubscriptions(): Promise<void> {
     process.env.REVENUECAT_SYNC_MAX_RETRIES ?? "4",
     10,
   );
+  const errorRetries = parseInt(
+    process.env.REVENUECAT_SYNC_ERROR_RETRIES ?? "2",
+    10,
+  );
 
   let proUsers: { id: number }[];
   try {
@@ -156,28 +165,47 @@ export async function syncSubscriptions(): Promise<void> {
   const tasks = proUsers.map((user) =>
     limit(async () => {
       const appUserId = String(user.id);
-      try {
-        const active = await hasActiveProEntitlement(
-          appUserId,
-          apiKey,
-          entitlementId,
-          maxRetries,
-        );
 
-        if (!active) {
-          await db
-            .update(usersTable)
-            .set({ subscriptionTier: "free" })
-            .where(eq(usersTable.id, user.id));
-          logger.info(
-            { userId: user.id },
-            "subscriptionSync: reverted lapsed user to free",
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= errorRetries; attempt++) {
+        try {
+          const active = await hasActiveProEntitlement(
+            appUserId,
+            apiKey,
+            entitlementId,
+            maxRetries,
           );
-          reverted++;
+
+          if (!active) {
+            await db
+              .update(usersTable)
+              .set({ subscriptionTier: "free" })
+              .where(eq(usersTable.id, user.id));
+            logger.info(
+              { userId: user.id },
+              "subscriptionSync: reverted lapsed user to free",
+            );
+            reverted++;
+          }
+          // Success — no more retries needed
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < errorRetries) {
+            const backoffMs = BACKOFF_BASE_MS * Math.pow(2, attempt);
+            logger.warn(
+              { err, userId: user.id, attempt, backoffMs },
+              "subscriptionSync: transient error checking user — retrying",
+            );
+            await sleep(backoffMs);
+          }
         }
-      } catch (err) {
+      }
+
+      if (lastErr !== undefined) {
         logger.error(
-          { err, userId: user.id },
+          { err: lastErr, userId: user.id },
           "subscriptionSync: error checking user — skipping",
         );
         errors++;
@@ -186,6 +214,17 @@ export async function syncSubscriptions(): Promise<void> {
   );
 
   await Promise.all(tasks);
+
+  if (errors > 0) {
+    logger.warn(
+      {
+        syncErrors: errors,
+        checked: proUsers.length,
+        reverted,
+      },
+      "subscriptionSync: completed with errors — RevenueCat may be degraded; manual review recommended",
+    );
+  }
 
   logger.info(
     { checked: proUsers.length, reverted, errors },

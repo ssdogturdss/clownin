@@ -7,7 +7,7 @@
  *   - `process.env`    → set/delete per test
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 
 // ─── Hoisted mock state ───────────────────────────────────────────────────────
 // vi.hoisted() runs before the module graph is resolved, so these are safe to
@@ -54,6 +54,7 @@ vi.mock("../logger", () => ({
 // ─── Import after mocks ───────────────────────────────────────────────────────
 
 import { syncSubscriptions } from "../subscriptionSync";
+import { logger } from "../logger";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,8 @@ function stubFetch(status: number, body: unknown): void {
 beforeEach(() => {
   process.env.REVENUECAT_API_KEY = "test-api-key";
   delete process.env.REVENUECAT_PRO_ENTITLEMENT_ID;
+  // Disable error retries by default so existing tests stay fast (no sleep)
+  process.env.REVENUECAT_SYNC_ERROR_RETRIES = "0";
 
   mockSelect.mockClear();
   mockFrom.mockClear();
@@ -100,6 +103,10 @@ beforeEach(() => {
   mockSet.mockClear();
   mockSetWhere.mockClear();
 
+  vi.mocked(logger.warn).mockClear();
+  vi.mocked(logger.error).mockClear();
+  vi.mocked(logger.info).mockClear();
+
   // Default: no pro users
   mockWhere.mockResolvedValue([]);
 });
@@ -107,6 +114,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.REVENUECAT_API_KEY;
+  delete process.env.REVENUECAT_SYNC_ERROR_RETRIES;
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -251,5 +259,145 @@ describe("syncSubscriptions — no pro users in DB", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Warning on non-zero error count ─────────────────────────────────────────
+
+describe("syncSubscriptions — structured warning on errors", () => {
+  it("emits a warn log with syncErrors field when RC returns 500", async () => {
+    mockWhere.mockResolvedValueOnce([{ id: 55 }]);
+    stubFetch(500, { message: "internal server error" });
+
+    await syncSubscriptions();
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ syncErrors: 1 }),
+      expect.stringContaining("RevenueCat may be degraded"),
+    );
+  });
+
+  it("does NOT emit a warn log when all users complete without errors", async () => {
+    mockWhere.mockResolvedValueOnce([{ id: 7 }]);
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    stubFetch(200, rcResponse("pro", future));
+
+    await syncSubscriptions();
+
+    const warnCalls = vi.mocked(logger.warn).mock.calls;
+    const degradedWarning = warnCalls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("RevenueCat may be degraded"),
+    );
+    expect(degradedWarning).toBeUndefined();
+  });
+
+  it("includes the correct error count in the syncErrors field", async () => {
+    // Two users, both returning 500
+    mockWhere.mockResolvedValueOnce([{ id: 10 }, { id: 11 }]);
+    stubFetch(500, { message: "server error" });
+
+    await syncSubscriptions();
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ syncErrors: 2 }),
+      expect.stringContaining("RevenueCat may be degraded"),
+    );
+  });
+});
+
+// ─── Retry loop for transient RC failures ────────────────────────────────────
+
+describe("syncSubscriptions — retry on transient 5xx errors", () => {
+  beforeEach(() => {
+    // Enable 2 error retries for retry-specific tests; use fake timers to avoid
+    // real sleep delays.
+    process.env.REVENUECAT_SYNC_ERROR_RETRIES = "2";
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("succeeds on the second attempt after a transient 500", async () => {
+    mockWhere.mockResolvedValueOnce([{ id: 20 }]);
+
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 500,
+          ok: false,
+          text: async () => "server error",
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          ok: true,
+          json: async () => rcResponse("pro", future),
+          text: async () => "",
+        }),
+    );
+
+    const syncPromise = syncSubscriptions();
+    // Advance fake timers to skip the backoff sleep
+    await vi.runAllTimersAsync();
+    await syncPromise;
+
+    // No errors — user had a valid entitlement on the second attempt
+    expect(vi.mocked(logger.warn)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ syncErrors: expect.anything() }),
+      expect.any(String),
+    );
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("counts as an error only after all retries are exhausted", async () => {
+    mockWhere.mockResolvedValueOnce([{ id: 21 }]);
+
+    // Always returns 500 — exhausts all 3 attempts (initial + 2 retries)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        status: 500,
+        ok: false,
+        text: async () => "server error",
+      }),
+    );
+
+    const syncPromise = syncSubscriptions();
+    await vi.runAllTimersAsync();
+    await syncPromise;
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ syncErrors: 1 }),
+      expect.stringContaining("RevenueCat may be degraded"),
+    );
+    // Three fetch calls: initial + 2 retries
+    expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3);
+  });
+
+  it("logs a transient-retry warning on each failed attempt before giving up", async () => {
+    mockWhere.mockResolvedValueOnce([{ id: 22 }]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        status: 500,
+        ok: false,
+        text: async () => "server error",
+      }),
+    );
+
+    const syncPromise = syncSubscriptions();
+    await vi.runAllTimersAsync();
+    await syncPromise;
+
+    const retryCalls = vi.mocked(logger.warn).mock.calls.filter(([, msg]) =>
+      typeof msg === "string" && msg.includes("transient error checking user"),
+    );
+    // 2 retry warnings (attempt 0 and attempt 1 before giving up on attempt 2)
+    expect(retryCalls).toHaveLength(2);
   });
 });
