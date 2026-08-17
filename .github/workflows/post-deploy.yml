@@ -1,0 +1,45 @@
+name: Post-Deploy Checks
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  session-name-coverage:
+    name: Session Name Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required secrets are configured
+        # Fail immediately with a clear message when either required value is
+        # missing, rather than letting the curl step fail with a confusing error.
+        env:
+          HAS_URL: ${{ vars.PRODUCTION_API_URL != '' }}
+          HAS_TOKEN: ${{ secrets.COVERAGE_CHECK_TOKEN != '' }}
+        run: |
+          if [[ "$HAS_URL" != "true" || "$HAS_TOKEN" != "true" ]]; then
+            echo "ERROR: Both PRODUCTION_API_URL (repo variable) and" >&2
+            echo "       COVERAGE_CHECK_TOKEN (repo secret) must be set to" >&2
+            echo "       run the session name coverage check." >&2
+            echo "" >&2
+            echo "  PRODUCTION_API_URL set:   $HAS_URL" >&2
+            echo "  COVERAGE_CHECK_TOKEN set:  $HAS_TOKEN" >&2
+            echo "" >&2
+            echo "See scripts/check-session-name-coverage.sh for instructions" >&2
+            echo "on generating a COVERAGE_CHECK_TOKEN admin JWT." >&2
+            exit 1
+          fi
+
+      - name: Check session name coverage
+        env:
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          COVERAGE_CHECK_TOKEN: ${{ secrets.COVERAGE_CHECK_TOKEN }}
+          # Seconds to wait for the production server after the push propagates.
+          # The Ubuntu update.sh script that deploys the service takes ~60–90s
+          # (git pull + build + migrate + systemctl restart); increase this value
+          # if your deployment pipeline takes longer.
+          WAIT_SECONDS: "90"
+          MAX_RETRIES: "5"
+        run: bash scripts/check-session-name-coverage.sh

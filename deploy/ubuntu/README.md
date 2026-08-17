@@ -150,6 +150,28 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## Updating to a new version
 
+Use the provided update script — it pulls, builds, migrates, restarts, and
+then automatically runs the session name coverage check so migration regressions
+are caught immediately rather than silently:
+
+```bash
+# With domain (checks via https://clownin.yourdomain.com)
+sudo COVERAGE_CHECK_TOKEN="<admin-jwt>" \
+  bash /opt/clownin/deploy/ubuntu/update.sh --domain clownin.yourdomain.com
+
+# Without domain (checks via http://localhost:8080)
+sudo COVERAGE_CHECK_TOKEN="<admin-jwt>" \
+  bash /opt/clownin/deploy/ubuntu/update.sh
+```
+
+`COVERAGE_CHECK_TOKEN` is a signed admin JWT — see
+`scripts/check-session-name-coverage.sh` for generation instructions.
+If you omit it the update still runs but the coverage check is skipped.
+
+### Manual update steps (alternative)
+
+If you prefer to run each step yourself:
+
 ```bash
 cd /opt/clownin
 sudo -u clownin git pull --ff-only
@@ -158,7 +180,17 @@ sudo -u clownin pnpm --filter @workspace/api-server run build
 sudo -u clownin PORT=8080 pnpm --filter @workspace/admin-panel run build
 cd lib/db && sudo -u clownin pnpm push   # run new migrations
 sudo systemctl restart clownin-api
+
+# After the service is up, verify session name coverage:
+PRODUCTION_API_URL=https://clownin.yourdomain.com \
+COVERAGE_CHECK_TOKEN="<admin-jwt>" \
+WAIT_SECONDS=20 \
+  bash /opt/clownin/scripts/check-session-name-coverage.sh
 ```
+
+The coverage check exits non-zero if any sessions are unnamed, pointing
+directly to `lib/db/migrations/0007_backfill_session_names.sql` as the
+migration to re-run.
 
 ## Service management
 

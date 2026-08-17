@@ -216,6 +216,35 @@ if [[ "$SETUP_TLS" == "true" && -n "$DOMAIN" ]]; then
     warn "certbot failed — check DNS and try: certbot --nginx -d $DOMAIN"
 fi
 
+# ── 13. Post-deploy session name coverage check ───────────────────────────────
+# Calls /api/admin/session-name-coverage and fails loudly if any sessions are
+# unnamed — which means 0007_backfill_session_names.sql did not run.
+#
+# The check requires two env vars:
+#   COVERAGE_CHECK_TOKEN — a signed admin JWT for this server
+#   PRODUCTION_API_URL   — base URL of the API (derived from DOMAIN when set)
+#
+# If either is absent we warn but do not fail the setup, since the JWT token
+# cannot be generated until the service has run at least once.
+if [[ -n "${COVERAGE_CHECK_TOKEN:-}" ]]; then
+  if [[ -n "$DOMAIN" ]]; then
+    COVERAGE_API_URL="https://$DOMAIN"
+  else
+    COVERAGE_API_URL="http://localhost:$API_PORT"
+  fi
+  info "Running session name coverage check against $COVERAGE_API_URL ..."
+  PRODUCTION_API_URL="$COVERAGE_API_URL" \
+  COVERAGE_CHECK_TOKEN="$COVERAGE_CHECK_TOKEN" \
+  WAIT_SECONDS="20" \
+    bash "$REPO_DIR/scripts/check-session-name-coverage.sh" \
+    && ok "Session name coverage check passed." \
+    || warn "Session name coverage check FAILED — see output above. Run the check manually once the issue is resolved."
+else
+  warn "Skipping session name coverage check (COVERAGE_CHECK_TOKEN not set)."
+  warn "To enable it on future deploys, set COVERAGE_CHECK_TOKEN to a signed admin JWT."
+  warn "See scripts/check-session-name-coverage.sh for instructions."
+fi
+
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""
 echo "=================================================================="
