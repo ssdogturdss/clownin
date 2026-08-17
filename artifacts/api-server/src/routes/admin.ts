@@ -7,7 +7,7 @@
  */
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, providerConfigsTable } from "@workspace/db";
+import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, promoCodeRedemptionsTable, providerConfigsTable } from "@workspace/db";
 import { eq, desc, count, sql, and } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
@@ -269,6 +269,27 @@ router.delete("/admin/promo-codes/:id", requireAuth, requireAdmin, async (req, r
   const [deleted] = await db.delete(promoCodesTable).where(eq(promoCodesTable.id, id)).returning();
   if (!deleted) { res.status(404).json({ error: "promo code not found" }); return; }
   res.json({ ok: true });
+});
+
+router.get("/admin/promo-codes/:id/redemptions", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const id = parseInt(req.params["id"] as string, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "invalid id" }); return; }
+
+  const redemptions = await db
+    .select({
+      id: promoCodeRedemptionsTable.id,
+      userId: promoCodeRedemptionsTable.userId,
+      username: usersTable.username,
+      email: usersTable.email,
+      tier: promoCodeRedemptionsTable.tier,
+      redeemedAt: promoCodeRedemptionsTable.redeemedAt,
+    })
+    .from(promoCodeRedemptionsTable)
+    .leftJoin(usersTable, eq(promoCodeRedemptionsTable.userId, usersTable.id))
+    .where(eq(promoCodeRedemptionsTable.promoCodeId, id))
+    .orderBy(desc(promoCodeRedemptionsTable.redeemedAt));
+
+  res.json(redemptions);
 });
 
 // ── AI Provider config ────────────────────────────────────────────────────────

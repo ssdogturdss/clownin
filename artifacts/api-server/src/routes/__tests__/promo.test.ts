@@ -1,5 +1,6 @@
 /**
- * Integration tests for POST /api/promo-codes/redeem.
+ * Integration tests for POST /api/promo-codes/redeem
+ * and GET /api/admin/promo-codes/:id/redemptions.
  *
  * All external I/O is mocked:
  *   - @workspace/db  → vi.mock so the real DB is never touched
@@ -8,6 +9,7 @@
  *   - node-cron      → prevent real cron jobs from starting
  *
  * Covers:
+ *   POST /api/promo-codes/redeem:
  *   - Auth guard (401 when no token)
  *   - Validation (400 when code missing)
  *   - Invalid code (404)
@@ -17,9 +19,16 @@
  *   - Successful redemption (200 with tier + message)
  *   - Concurrent single-use exhaustion (410 when atomic claim fails)
  *   - Code is uppercased before lookup
+ *   - Redemption audit row is inserted inside the transaction on success
+ *
+ *   GET /api/admin/promo-codes/:id/redemptions:
+ *   - Returns 401 when not authenticated
+ *   - Returns 403 when not an admin
+ *   - Returns 400 for a non-numeric id
+ *   - Returns redemption list joined with user info
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
@@ -32,14 +41,28 @@ const {
   mockDbSet,
   mockDbUpdateWhere,
   mockDbReturning,
+  mockDbInsert,
+  mockDbInsertValues,
   mockDbTransaction,
+  mockDbOrderBy,
+  mockDbLeftJoin,
   mockRequireAuth,
   mockGetUser,
 } = vi.hoisted(() => {
-  // ── DB: .select().from().where() ──────────────────────────────────────────
-  const mockDbWhere = vi.fn().mockResolvedValue([]);
-  const mockDbFrom = vi.fn(() => ({ where: mockDbWhere }));
+  // ── DB: .select().from().where() / .orderBy() / .leftJoin() ──────────────
+  const mockDbOrderBy = vi.fn().mockResolvedValue([]);
+  const mockDbLeftJoin = vi.fn(() => ({ where: mockDbWhereInner, orderBy: mockDbOrderBy }));
+  // forward-declare so the factory can reference it
+  const mockDbWhereInner: ReturnType<typeof vi.fn> = vi.fn(() => ({ orderBy: mockDbOrderBy }));
+  const mockDbFrom = vi.fn(() => ({
+    where: mockDbWhereInner,
+    leftJoin: mockDbLeftJoin,
+    orderBy: mockDbOrderBy,
+  }));
   const mockDbSelect = vi.fn(() => ({ from: mockDbFrom }));
+
+  // The plain .where() returned outside leftJoin context (used by promo + user lookups)
+  const mockDbWhere = mockDbWhereInner;
 
   // ── DB: .update().set().where().returning() ───────────────────────────────
   const mockDbReturning = vi.fn().mockResolvedValue([{ id: 42, tier: "pro" }]);
@@ -47,15 +70,17 @@ const {
   const mockDbSet = vi.fn(() => ({ where: mockDbUpdateWhere }));
   const mockDbUpdate = vi.fn(() => ({ set: mockDbSet }));
 
+  // ── DB: .insert().values() ────────────────────────────────────────────────
+  const mockDbInsertValues = vi.fn().mockResolvedValue([]);
+  const mockDbInsert = vi.fn(() => ({ values: mockDbInsertValues }));
+
   // ── DB: transaction ───────────────────────────────────────────────────────
   const mockDbTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
-    const tx = { update: mockDbUpdate };
+    const tx = { update: mockDbUpdate, insert: mockDbInsert };
     return cb(tx);
   });
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  // By default requireAuth calls next() (authenticated as userId=1).
-  // Tests that exercise the 401 path override this.
   const mockRequireAuth = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
   const mockGetUser = vi.fn(() => ({ userId: 1, email: "test@test.com", username: "testuser" }));
 
@@ -67,7 +92,11 @@ const {
     mockDbSet,
     mockDbUpdateWhere,
     mockDbReturning,
+    mockDbInsert,
+    mockDbInsertValues,
     mockDbTransaction,
+    mockDbOrderBy,
+    mockDbLeftJoin,
     mockRequireAuth,
     mockGetUser,
   };
@@ -79,10 +108,13 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: mockDbSelect,
     update: mockDbUpdate,
+    insert: mockDbInsert,
     transaction: mockDbTransaction,
   },
   usersTable: {
     id: "id",
+    username: "username",
+    email: "email",
     subscriptionTier: "subscriptionTier",
     subscriptionSource: "subscriptionSource",
   },
@@ -95,6 +127,18 @@ vi.mock("@workspace/db", () => ({
     usedCount: "usedCount",
     maxUses: "maxUses",
   },
+  promoCodeRedemptionsTable: {
+    id: "id",
+    promoCodeId: "promoCodeId",
+    userId: "userId",
+    redeemedAt: "redeemedAt",
+    tier: "tier",
+  },
+  providerConfigsTable: { provider: "provider" },
+  projectsTable: { id: "id", userId: "userId", updatedAt: "updatedAt" },
+  projectFilesTable: { projectId: "projectId" },
+  projectEnvVarsTable: { projectId: "projectId" },
+  conversationMessagesTable: { projectId: "projectId" },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -104,6 +148,8 @@ vi.mock("drizzle-orm", () => ({
   isNull: (_col: unknown) => ({ isNull: true }),
   gt: (_col: unknown, val: unknown) => ({ gt: val }),
   lt: (_col: unknown, val: unknown) => ({ lt: val }),
+  desc: (_col: unknown) => ({ desc: true }),
+  count: () => ({ count: true }),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
     sql: String(strings),
     values,
@@ -154,24 +200,27 @@ beforeEach(() => {
   mockRequireAuth.mockImplementation((_req: unknown, _res: unknown, next: () => void) => next());
   mockGetUser.mockReturnValue({ userId: 1, email: "test@test.com", username: "testuser" });
 
-  // Default select: no results
+  // Default select chain: no results
   mockDbWhere.mockResolvedValue([]);
+  mockDbOrderBy.mockResolvedValue([]);
 
-  // Default transaction: call callback with tx proxy
+  // Default transaction: call callback with tx proxy (includes insert)
   mockDbTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
-    const tx = { update: mockDbUpdate };
+    const tx = { update: mockDbUpdate, insert: mockDbInsert };
     return cb(tx);
   });
+
+  // Default insert: resolves empty (redemption audit insert)
+  mockDbInsertValues.mockResolvedValue([]);
 
   // Default claim: returns 1 row (success)
   mockDbReturning.mockResolvedValue([{ id: 42, tier: "pro" }]);
 });
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Tests: POST /api/promo-codes/redeem ──────────────────────────────────────
 
 describe("POST /api/promo-codes/redeem", () => {
   it("returns 401 when not authenticated", async () => {
-    // Override: requireAuth sends a 401 response directly
     mockRequireAuth.mockImplementation((_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
       res.status(401).json({ error: "Unauthorized" });
     });
@@ -251,6 +300,24 @@ describe("POST /api/promo-codes/redeem", () => {
     expect(res.body.message).toMatch(/pro/i);
   });
 
+  it("inserts a redemption audit row inside the transaction on success", async () => {
+    mockDbWhere
+      .mockResolvedValueOnce([promoRow()]) // promo lookup
+      .mockResolvedValueOnce([{ subscriptionTier: "free" }]); // user lookup
+    mockDbReturning.mockResolvedValue([{ id: 42, tier: "pro" }]);
+
+    await request(app)
+      .post("/api/promo-codes/redeem")
+      .set(AUTH)
+      .send({ code: "CLOWN-AAAAAA-BBBBBB" });
+
+    // The insert for the audit row must have been called
+    expect(mockDbInsert).toHaveBeenCalled();
+    expect(mockDbInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ promoCodeId: 42, userId: 1, tier: "pro" })
+    );
+  });
+
   it("returns 410 when the atomic claim returns 0 rows (concurrent exhaustion race)", async () => {
     mockDbWhere
       .mockResolvedValueOnce([promoRow({ usedCount: 0, maxUses: 1 })]) // promo
@@ -268,7 +335,6 @@ describe("POST /api/promo-codes/redeem", () => {
   });
 
   it("uppercases the submitted code before lookup", async () => {
-    // Code not found — we only care that the lookup was invoked
     mockDbWhere.mockResolvedValueOnce([]);
 
     await request(app)
@@ -276,7 +342,74 @@ describe("POST /api/promo-codes/redeem", () => {
       .set(AUTH)
       .send({ code: "clown-aaaaaa-bbbbbb" });
 
-    // The select chain should have been called (at minimum the promo lookup)
     expect(mockDbSelect).toHaveBeenCalled();
+  });
+});
+
+// ── Tests: GET /api/admin/promo-codes/:id/redemptions ────────────────────────
+
+describe("GET /api/admin/promo-codes/:id/redemptions", () => {
+  /** Make the admin check resolve this userId as admin */
+  const ADMIN_ENV_ID = "1";
+
+  beforeEach(() => {
+    process.env["ADMIN_USER_IDS"] = ADMIN_ENV_ID;
+    // Admin select: resolve userId=1 as admin (resolveAdminUserIds numeric path)
+    // No DB lookup needed for numeric tokens — they are parsed directly.
+  });
+
+  it("returns 401 when not authenticated", async () => {
+    mockRequireAuth.mockImplementation((_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      res.status(401).json({ error: "Unauthorized" });
+    });
+
+    const res = await request(app)
+      .get("/api/admin/promo-codes/42/redemptions");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 403 when user is not an admin", async () => {
+    mockGetUser.mockReturnValue({ userId: 999, email: "other@test.com", username: "other" });
+
+    const res = await request(app)
+      .get("/api/admin/promo-codes/42/redemptions")
+      .set(AUTH);
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 400 for a non-numeric id", async () => {
+    const res = await request(app)
+      .get("/api/admin/promo-codes/not-a-number/redemptions")
+      .set(AUTH);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid id/i);
+  });
+
+  it("returns an array of redemptions joined with user info", async () => {
+    const redemptionRows = [
+      {
+        id: 1,
+        userId: 1,
+        username: "testuser",
+        email: "test@test.com",
+        tier: "pro",
+        redeemedAt: new Date("2026-01-01T10:00:00Z"),
+      },
+    ];
+    // The admin redemptions endpoint uses: select().from().leftJoin().where().orderBy()
+    mockDbLeftJoin.mockReturnValueOnce({
+      where: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue(redemptionRows) })),
+      orderBy: vi.fn().mockResolvedValue(redemptionRows),
+    });
+
+    const res = await request(app)
+      .get("/api/admin/promo-codes/42/redemptions")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
 });

@@ -8,3 +8,4 @@ export * from "./promo-codes";
 export * from "./provider-configs";
 export * from "./conversation-sessions";
 export * from "./user-secrets";
+export * from "./promo-code-redemptions";

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, promoCodesTable } from "@workspace/db";
+import { db, usersTable, promoCodesTable, promoCodeRedemptionsTable } from "@workspace/db";
 import { eq, and, lt, gt, isNull, or, sql } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { z } from "zod";
@@ -105,6 +105,13 @@ router.post("/promo-codes/redeem", requireAuth, async (req, res): Promise<void> 
         .update(usersTable)
         .set({ subscriptionTier: claimed.tier, subscriptionSource: "promo" })
         .where(eq(usersTable.id, userId));
+
+      // Record redemption history for admin visibility.
+      await tx.insert(promoCodeRedemptionsTable).values({
+        promoCodeId: promo.id,
+        userId,
+        tier: claimed.tier,
+      });
     });
   } catch (err: unknown) {
     if (err instanceof Error && err.message === "PROMO_CLAIM_FAILED") {

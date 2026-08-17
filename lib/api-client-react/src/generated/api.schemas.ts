@@ -330,6 +330,17 @@ export interface UpsertSecretBody {
   description?: string | null;
 }
 
+export interface PromoCodeRedemption {
+  id: number;
+  userId: number;
+  /** @nullable */
+  username?: string | null;
+  /** @nullable */
+  email?: string | null;
+  tier: string;
+  redeemedAt: string;
+}
+
 export type ListAdminProjectsParams = {
 page?: number;
 };

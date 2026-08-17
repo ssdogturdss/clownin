@@ -41,6 +41,7 @@ import type {
   ProjectWithFiles,
   PromoCode,
   PromoCodeInput,
+  PromoCodeRedemption,
   PromoCodeUpdate,
   ProviderConfig,
   ProviderConfigUpdate,
@@ -2458,6 +2459,50 @@ export const useDeletePromoCode = <TError = ErrorType<ErrorResponse>,
       > => {
       return useMutation(getDeletePromoCodeMutationOptions(options));
     }
+
+export const getGetPromoCodeRedemptionsUrl = (id: number) => {
+  return `/api/admin/promo-codes/${id}/redemptions`
+}
+
+/**
+ * @summary Get redemption history for a promo code
+ */
+export const getPromoCodeRedemptions = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<PromoCodeRedemption[]> => {
+  return customFetch<PromoCodeRedemption[]>(getGetPromoCodeRedemptionsUrl(id), {
+    ...options,
+    method: 'GET',
+  });
+}
+
+export const getGetPromoCodeRedemptionsQueryKey = (id: number) => {
+  return [`/api/admin/promo-codes/${id}/redemptions`] as const;
+}
+
+export const getGetPromoCodeRedemptionsQueryOptions = <TData = Awaited<ReturnType<typeof getPromoCodeRedemptions>>, TError = ErrorType<ErrorResponse>>(
+  id: number,
+  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof getPromoCodeRedemptions>>, TError, TData>, request?: SecondParameter<typeof customFetch> }
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+  const queryKey = queryOptions?.queryKey ?? getGetPromoCodeRedemptionsQueryKey(id);
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPromoCodeRedemptions>>> = ({ signal }) =>
+    getPromoCodeRedemptions(id, { signal, ...requestOptions });
+  return { queryKey, queryFn, enabled: !!id, ...queryOptions } as UseQueryOptions<Awaited<ReturnType<typeof getPromoCodeRedemptions>>, TError, TData> & { queryKey: QueryKey };
+}
+
+export type GetPromoCodeRedemptionsQueryResult = NonNullable<Awaited<ReturnType<typeof getPromoCodeRedemptions>>>
+export type GetPromoCodeRedemptionsQueryError = ErrorType<ErrorResponse>
+
+/**
+ * @summary Get redemption history for a promo code
+ */
+export function useGetPromoCodeRedemptions<TData = Awaited<ReturnType<typeof getPromoCodeRedemptions>>, TError = ErrorType<ErrorResponse>>(
+  id: number,
+  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof getPromoCodeRedemptions>>, TError, TData>, request?: SecondParameter<typeof customFetch> }
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPromoCodeRedemptionsQueryOptions(id, options);
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getListProvidersUrl = () => {
 

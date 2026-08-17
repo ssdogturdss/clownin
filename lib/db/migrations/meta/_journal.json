@@ -64,6 +64,13 @@
       "when": 1755993600000,
       "tag": "0008_subscription_source",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1755993700000,
+      "tag": "0009_promo_code_redemptions",
+      "breakpoints": true
     }
   ]
 }
