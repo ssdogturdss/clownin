@@ -422,6 +422,13 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const currentSessionIdRef = useRef<string | null>(null);
   const [pastSessions, setPastSessions] = useState<SessionSummary[]>([]);
 
+  // ── Active session name (inline rename) ───────────────────────────────────
+  const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
+  const [editingSessionName, setEditingSessionName] = useState(false);
+  const [sessionNameInput, setSessionNameInput] = useState("");
+  const [savingSessionName, setSavingSessionName] = useState(false);
+  const sessionNameRef = useRef<TextInput>(null);
+
   const { data: profile } = useProfile();
   const queryClient = useQueryClient();
 
@@ -453,6 +460,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         if (latest.sessionId) {
           currentSessionIdRef.current = latest.sessionId;
           setCurrentSessionId(latest.sessionId);
+          if (latest.name) setCurrentSessionName(latest.name);
         }
         // (null sessionId → currentSessionId stays null → next send creates a new UUID session)
 
@@ -490,9 +498,39 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     const newId = generateUUID();
     currentSessionIdRef.current = newId;
     setCurrentSessionId(newId);
+    setCurrentSessionName(null);
     setMessages([]);
     historyRef.current = [];
   }, []);
+
+  // ── Rename the active session ─────────────────────────────────────────────
+  const commitSessionName = useCallback(async () => {
+    const trimmed = sessionNameInput.trim();
+    setEditingSessionName(false);
+    if (!trimmed || !currentSessionIdRef.current || !token) return;
+    setSavingSessionName(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      const r = await fetch(
+        `${baseUrl}/api/projects/${projectId}/conversations/${currentSessionIdRef.current}/name`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ name: trimmed }),
+        },
+      );
+      if (r.ok) {
+        setCurrentSessionName(trimmed);
+      } else {
+        // Revert input on failure
+        setSessionNameInput(currentSessionName ?? "");
+      }
+    } catch {
+      setSessionNameInput(currentSessionName ?? "");
+    } finally {
+      setSavingSessionName(false);
+    }
+  }, [sessionNameInput, projectId, token, currentSessionName]);
 
   // ── Clear current session (delete + reset) ─────────────────────────────────
   const clearConversation = useCallback(async () => {
@@ -945,6 +983,49 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           <Text style={styles.panelEmoji}>🤡</Text>
           <Text style={[styles.panelTitle, { color: colors.foreground }]}>Agent</Text>
           {busy && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+
+          {/* Inline rename for the active session */}
+          {messages.length > 0 && currentSessionId && !busy && (
+            editingSessionName ? (
+              <TextInput
+                ref={sessionNameRef}
+                style={[styles.sessionNameInput, { color: colors.foreground, borderColor: colors.primary }]}
+                value={sessionNameInput}
+                onChangeText={setSessionNameInput}
+                onSubmitEditing={commitSessionName}
+                onBlur={commitSessionName}
+                returnKeyType="done"
+                maxLength={80}
+                editable={!savingSessionName}
+                autoFocus
+              />
+            ) : (
+              <Pressable
+                onPress={() => {
+                  setSessionNameInput(currentSessionName ?? "");
+                  setEditingSessionName(true);
+                  setTimeout(() => sessionNameRef.current?.focus(), 50);
+                }}
+                hitSlop={4}
+                style={styles.sessionNameBtn}
+              >
+                {savingSessionName ? (
+                  <ActivityIndicator size="small" color={colors.mutedForeground} />
+                ) : (
+                  <>
+                    <Text
+                      style={[styles.sessionNameText, { color: currentSessionName ? colors.foreground : colors.mutedForeground }]}
+                      numberOfLines={1}
+                    >
+                      {currentSessionName ?? "Name this chat…"}
+                    </Text>
+                    <MaterialCommunityIcons name="pencil-outline" size={11} color={colors.mutedForeground} />
+                  </>
+                )}
+              </Pressable>
+            )
+          )}
+
           <View style={{ flex: 1 }} />
 
           {/* New conversation button */}
@@ -959,7 +1040,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                   setPastSessions((prev) => [
                     {
                       sessionId: currentSessionId,
-                      name: firstUserMsg ? autoNameFromMessage(firstUserMsg) : null,
+                      name: currentSessionName ?? (firstUserMsg ? autoNameFromMessage(firstUserMsg) : null),
                       preview: firstUserMsg.slice(0, 120),
                       messageCount: messages.filter((m) => m.kind === "user" || m.kind === "agent").length,
                       startedAt: new Date().toISOString(),
@@ -1195,6 +1276,9 @@ const styles = StyleSheet.create({
   },
   panelEmoji: { fontSize: 14 },
   panelTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  sessionNameBtn: { flexDirection: "row", alignItems: "center", gap: 3, maxWidth: 160, paddingHorizontal: 4, paddingVertical: 2 },
+  sessionNameText: { fontSize: 12, fontFamily: "Inter_400Regular", flexShrink: 1 },
+  sessionNameInput: { fontSize: 12, fontFamily: "Inter_400Regular", borderBottomWidth: 1, paddingVertical: 1, paddingHorizontal: 2, minWidth: 80, maxWidth: 180 },
 
   listContent: { padding: 10, gap: 8 },
 
