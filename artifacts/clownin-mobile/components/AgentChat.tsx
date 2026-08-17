@@ -55,6 +55,24 @@ type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg;
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
 
+// Summary of a past session returned by the sessions list endpoint
+type SessionSummary = {
+  sessionId: string | null;
+  preview: string;
+  messageCount: number;
+  startedAt: string;
+  lastAt: string;
+};
+
+// Simple UUID v4 generator — works on all Hermes / web environments
+function generateUUID(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 // ── Thinking bubble (animated) ────────────────────────────────────────────────
 const THINKING_PHRASES = [
   "Thinking through your request…",
@@ -96,6 +114,103 @@ const thinkStyles = StyleSheet.create({
   row:    { paddingHorizontal: 16, paddingVertical: 4, alignItems: "flex-start" },
   bubble: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1, maxWidth: "80%" },
   text:   { fontSize: 13, fontFamily: "Inter_400Regular" },
+});
+
+// ── Past session collapsed card ───────────────────────────────────────────────
+type PastSessionCardProps = {
+  projectId: number;
+  session: SessionSummary;
+  colors: ReturnType<typeof useColors>;
+  onDelete: () => void;
+};
+
+function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [messages, setMessages] = useState<Array<{ id: number; role: string; content: string }> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const { token } = useAuth();
+
+  const toggle = useCallback(async () => {
+    if (expanded) { setExpanded(false); return; }
+    setExpanded(true);
+    if (messages !== null) return; // already loaded
+    if (!session.sessionId || !token) return;
+    setLoading(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      const r = await fetch(
+        `${baseUrl}/api/projects/${projectId}/conversations/${session.sessionId}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (r.ok) setMessages(await r.json());
+    } catch { /* non-fatal */ }
+    finally { setLoading(false); }
+  }, [expanded, messages, session.sessionId, token, projectId]);
+
+  const label = new Date(session.lastAt).toLocaleDateString(undefined, {
+    month: "short", day: "numeric", year: "numeric",
+  });
+
+  return (
+    <View style={[pastStyles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Pressable style={pastStyles.header} onPress={toggle} hitSlop={4}>
+        <MaterialCommunityIcons
+          name={expanded ? "chevron-up" : "chevron-down"}
+          size={14}
+          color={colors.mutedForeground}
+        />
+        <View style={{ flex: 1 }}>
+          <Text style={[pastStyles.preview, { color: colors.foreground }]} numberOfLines={expanded ? undefined : 1}>
+            {session.preview || "(no preview)"}
+          </Text>
+          <Text style={[pastStyles.meta, { color: colors.mutedForeground }]}>
+            {label} · {session.messageCount} message{session.messageCount !== 1 ? "s" : ""}
+          </Text>
+        </View>
+        <Pressable
+          onPress={(e) => { e.stopPropagation?.(); onDelete(); }}
+          hitSlop={8}
+          style={{ padding: 2 }}
+        >
+          <MaterialCommunityIcons name="delete-outline" size={14} color={colors.mutedForeground} />
+        </Pressable>
+      </Pressable>
+
+      {expanded && (
+        loading ? (
+          <ActivityIndicator size="small" color={colors.primary} style={{ padding: 10 }} />
+        ) : (
+          <View style={pastStyles.body}>
+            {(messages ?? []).map((m) => (
+              <View
+                key={m.id}
+                style={[
+                  pastStyles.msgBubble,
+                  m.role === "user"
+                    ? { backgroundColor: colors.primary, alignSelf: "flex-end" }
+                    : { backgroundColor: colors.background, borderColor: colors.border, borderWidth: 1, alignSelf: "flex-start" },
+                ]}
+              >
+                <Text style={[pastStyles.msgText, { color: m.role === "user" ? "#fff" : colors.foreground }]} numberOfLines={6}>
+                  {m.content}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )
+      )}
+    </View>
+  );
+}
+
+const pastStyles = StyleSheet.create({
+  card:    { marginHorizontal: 10, marginBottom: 6, borderRadius: 12, borderWidth: 1, overflow: "hidden" },
+  header:  { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  preview: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  meta:    { fontSize: 10, marginTop: 1 },
+  body:    { paddingHorizontal: 10, paddingBottom: 10, gap: 6 },
+  msgBubble: { maxWidth: "80%", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12 },
+  msgText: { fontSize: 12, lineHeight: 17 },
 });
 
 // ── Tool label helpers ────────────────────────────────────────────────────────
@@ -189,6 +304,11 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   // True once the initial history fetch has completed (success or failure)
   const [historyLoaded, setHistoryLoaded] = useState(false);
 
+  // ── Session state ─────────────────────────────────────────────────────────
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
+  const [pastSessions, setPastSessions] = useState<SessionSummary[]>([]);
+
   const { data: profile } = useProfile();
   const queryClient = useQueryClient();
 
@@ -196,7 +316,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
 
-  // ── Load persisted history on mount ────────────────────────────────────────
+  // ── Load sessions and current session's messages on mount ─────────────────
   useEffect(() => {
     if (!token) { setHistoryLoaded(true); return; }
     const baseUrl = resolveApiBaseUrl();
@@ -205,37 +325,86 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: Array<{ id: number; role: string; content: string }>) => {
-        if (!data.length) return;
-        const displayMsgs: AgentMsg[] = data.map((m) => ({
-          id: `hist-${m.id}`,
-          kind: m.role === "user" ? "user" : "agent",
-          text: m.content,
-          streaming: false,
-        }));
-        setMessages(displayMsgs);
-        historyRef.current = data.map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        }));
+      .then(async (sessions: SessionSummary[]) => {
+        if (!sessions.length) return;
+
+        // Most recent session is the current one; all others are past
+        const [latest, ...older] = sessions;
+        setPastSessions(older);
+
+        if (!latest.sessionId) return; // legacy null-session, skip
+
+        // Set the current session id
+        currentSessionIdRef.current = latest.sessionId;
+        setCurrentSessionId(latest.sessionId);
+
+        // Load messages for the current session
+        try {
+          const r = await fetch(
+            `${baseUrl}/api/projects/${projectId}/conversations/${latest.sessionId}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          if (!r.ok) return;
+          const data: Array<{ id: number; role: string; content: string }> = await r.json();
+          if (!data.length) return;
+          const displayMsgs: AgentMsg[] = data.map((m) => ({
+            id: `hist-${m.id}`,
+            kind: m.role === "user" ? "user" : "agent",
+            text: m.content,
+            streaming: false,
+          }));
+          setMessages(displayMsgs);
+          historyRef.current = data.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }));
+        } catch { /* non-fatal */ }
       })
       .catch(() => {/* non-fatal */})
       .finally(() => setHistoryLoaded(true));
-  // Only run once per projectId mount — intentionally omitting token
+  // Only run once per projectId mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // ── Clear conversation ─────────────────────────────────────────────────────
+  // ── Start a new conversation ───────────────────────────────────────────────
+  const startNewConversation = useCallback(() => {
+    const newId = generateUUID();
+    currentSessionIdRef.current = newId;
+    setCurrentSessionId(newId);
+    setMessages([]);
+    historyRef.current = [];
+  }, []);
+
+  // ── Clear current session (delete + reset) ─────────────────────────────────
   const clearConversation = useCallback(async () => {
-    if (!token) return;
-    try {
-      const baseUrl = resolveApiBaseUrl();
-      await fetch(`${baseUrl}/api/projects/${projectId}/conversations`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+    if (!token || !currentSessionIdRef.current) {
       setMessages([]);
       historyRef.current = [];
+      return;
+    }
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      await fetch(
+        `${baseUrl}/api/projects/${projectId}/conversations/${currentSessionIdRef.current}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      setMessages([]);
+      historyRef.current = [];
+      currentSessionIdRef.current = null;
+      setCurrentSessionId(null);
+    } catch { /* non-fatal */ }
+  }, [projectId, token]);
+
+  // ── Delete a past session ─────────────────────────────────────────────────
+  const deletePastSession = useCallback(async (sessionId: string | null) => {
+    if (!token || !sessionId) return;
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      await fetch(
+        `${baseUrl}/api/projects/${projectId}/conversations/${sessionId}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      setPastSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
     } catch { /* non-fatal */ }
   }, [projectId, token]);
 
@@ -279,13 +448,11 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         asset.mimeType === "application/zip" ||
         asset.mimeType === "application/x-zip-compressed";
       if (isZip) {
-        // Use fetch + FileReader for reliable base64 on both native and web
         const resp = await fetch(asset.uri);
         const blob = await resp.blob();
         const base64 = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => {
-            // result is "data:<mime>;base64,<data>" — strip the prefix
             const raw = (reader.result as string).split(",")[1] ?? "";
             resolve(raw);
           };
@@ -294,7 +461,6 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         });
         setAttachments((prev) => [...prev, { kind: "zip", name: asset.name, base64 }]);
       } else {
-        // Read as UTF-8 text (code/config files)
         const content = await FileSystem.readAsStringAsync(asset.uri);
         setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
       }
@@ -308,7 +474,6 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   }, []);
 
   // Auto-send initialMessage once on mount — wait for history to load first
-  // so the auto-sent message doesn't race with the history population.
   React.useEffect(() => {
     if (!historyLoaded || !initialMessage || autoSentRef.current) return;
     autoSentRef.current = true;
@@ -359,6 +524,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     // Map callId → message id for tool cards
     const toolCardIds = new Map<string, string>();
 
+    // If starting fresh with a pre-generated sessionId but no messages yet,
+    // the server will confirm the same sessionId back; track it locally.
+    const outboundSessionId = currentSessionIdRef.current;
+
     try {
       const baseUrl = resolveApiBaseUrl();
       const response = await expoFetch(`${baseUrl}/api/projects/${projectId}/agent`, {
@@ -377,6 +546,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               ? { kind: "zip", name: a.name, base64: a.base64 }
               : { kind: "text", name: a.name, content: a.content }
           ),
+          // Explicit session — tells the server which thread to write into
+          ...(outboundSessionId ? { sessionId: outboundSessionId } : {}),
         }),
         // @ts-ignore
         reactNative: { textStreaming: true },
@@ -494,15 +665,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               break;
             }
 
-            case "error": {
-              removeThinking();
-              const { message: errMsg } = event.payload as { message: string };
-              upsertMsg({ id: `err-${Date.now()}`, kind: "agent", text: `⚠️ ${errMsg}` });
-              scrollToBottom();
-              break;
-            }
-
-            case "done":
+            case "done": {
               removeThinking();
               if (agentMsgCreated) {
                 upsertMsg({ id: agentMsgId, kind: "agent", text: agentText, streaming: false });
@@ -513,7 +676,22 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                   { role: "assistant", content: agentText },
                 ];
               }
+              // Capture the sessionId the server used for this turn
+              const { sessionId: serverSessionId } = (event.payload ?? {}) as { sessionId?: string };
+              if (serverSessionId && serverSessionId !== currentSessionIdRef.current) {
+                currentSessionIdRef.current = serverSessionId;
+                setCurrentSessionId(serverSessionId);
+              }
               break;
+            }
+
+            case "error": {
+              removeThinking();
+              const { message: errMsg } = event.payload as { message: string };
+              upsertMsg({ id: `err-${Date.now()}`, kind: "agent", text: `⚠️ ${errMsg}` });
+              scrollToBottom();
+              break;
+            }
           }
         }
       }
@@ -631,15 +809,51 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           <Text style={[styles.panelTitle, { color: colors.foreground }]}>Agent</Text>
           {busy && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
           <View style={{ flex: 1 }} />
+
+          {/* New conversation button */}
+          <Pressable
+            onPress={() => {
+              if (messages.length > 0 && !busy) {
+                // Archive current and start fresh
+                if (currentSessionId) {
+                  setPastSessions((prev) => [
+                    {
+                      sessionId: currentSessionId,
+                      preview: historyRef.current.find((m) => m.role === "user")?.content.slice(0, 120) ?? "",
+                      messageCount: messages.filter((m) => m.kind === "user" || m.kind === "agent").length,
+                      startedAt: new Date().toISOString(),
+                      lastAt: new Date().toISOString(),
+                    },
+                    ...prev,
+                  ]);
+                }
+                startNewConversation();
+              } else if (messages.length === 0) {
+                // nothing to archive — just ensure a fresh session id
+                startNewConversation();
+              }
+            }}
+            hitSlop={8}
+            style={{ padding: 4, marginRight: 2 }}
+            disabled={busy}
+          >
+            <MaterialCommunityIcons
+              name="chat-plus-outline"
+              size={18}
+              color={busy ? colors.mutedForeground + "88" : colors.mutedForeground}
+            />
+          </Pressable>
+
+          {/* Delete current conversation */}
           {messages.length > 0 && !busy && (
             <Pressable
               onPress={() => {
                 Alert.alert(
-                  "Clear conversation",
-                  "This will delete the full conversation history for this project. Your code files are not affected.",
+                  "Delete conversation",
+                  "This will delete the current conversation thread. Your code files are not affected.",
                   [
                     { text: "Cancel", style: "cancel" },
-                    { text: "Clear", style: "destructive", onPress: clearConversation },
+                    { text: "Delete", style: "destructive", onPress: clearConversation },
                   ],
                 );
               }}
@@ -651,8 +865,9 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           )}
         </View>
 
-        {/* Messages / empty state */}
-        {messages.length === 0 ? (
+        {/* Messages / empty state — single container for all cases */}
+        {messages.length === 0 && pastSessions.length === 0 ? (
+          /* Truly empty: no messages anywhere — show welcome hints */
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={styles.empty}
@@ -682,15 +897,64 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             </View>
           </ScrollView>
         ) : (
+          /* Active or archived sessions: single FlatList, past sessions in header */
           <FlatList
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
             renderItem={renderItem}
             contentContainerStyle={styles.listContent}
-            onContentSizeChange={scrollToBottom}
+            onContentSizeChange={messages.length > 0 ? scrollToBottom : undefined}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            ListHeaderComponent={
+              pastSessions.length > 0 ? (
+                <View style={{ paddingTop: 8, paddingBottom: 4 }}>
+                  <Text style={[styles.pastLabel, { color: colors.mutedForeground }]}>
+                    Past conversations
+                  </Text>
+                  {pastSessions.map((s) => (
+                    <PastSessionCard
+                      key={s.sessionId ?? "legacy"}
+                      projectId={projectId}
+                      session={s}
+                      colors={colors}
+                      onDelete={() => {
+                        Alert.alert(
+                          "Delete conversation",
+                          "This will permanently delete this conversation thread.",
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                              text: "Delete",
+                              style: "destructive",
+                              onPress: () => deletePastSession(s.sessionId),
+                            },
+                          ],
+                        );
+                      }}
+                    />
+                  ))}
+                  {messages.length > 0 && (
+                    <>
+                      <View style={[styles.sessionDivider, { backgroundColor: colors.border }]} />
+                      <Text style={[styles.currentLabel, { color: colors.mutedForeground }]}>
+                        Current conversation
+                      </Text>
+                    </>
+                  )}
+                </View>
+              ) : null
+            }
+            ListEmptyComponent={
+              pastSessions.length > 0 ? (
+                <View style={styles.newConvoHint}>
+                  <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
+                    Tap 💬+ to continue here or start typing below.
+                  </Text>
+                </View>
+              ) : null
+            }
           />
         )}
 
@@ -827,6 +1091,11 @@ const styles = StyleSheet.create({
 
   bubbleText: { fontSize: 13, lineHeight: 19 },
 
+  // Past sessions
+  pastLabel: { fontSize: 10, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.8, paddingHorizontal: 14, paddingBottom: 6 },
+  currentLabel: { fontSize: 10, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.8, paddingHorizontal: 14, paddingBottom: 4, paddingTop: 8 },
+  sessionDivider: { height: 1, marginHorizontal: 14, marginTop: 8 },
+
   // Empty state
   empty: { alignItems: "center", justifyContent: "center", padding: 20, gap: 10 },
   emptyEmoji: { fontSize: 36 },
@@ -871,6 +1140,9 @@ const styles = StyleSheet.create({
   },
   chipThumb: { width: 22, height: 22, borderRadius: 4 },
   chipName: { fontSize: 11, flex: 1 },
+
+  // New conversation hint (shown in FlatList empty state when past sessions exist)
+  newConvoHint: { alignItems: "center", paddingVertical: 20, paddingHorizontal: 24 },
 
   // Picker menu
   pickerMenu: { marginHorizontal: 10, marginBottom: 4, borderWidth: 1, borderRadius: 12, overflow: "hidden" },

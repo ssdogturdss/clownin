@@ -29,6 +29,20 @@
       "when": 1786797824807,
       "tag": "0003_chunky_robin_chapel",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786797900000,
+      "tag": "0004_session_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786797960000,
+      "tag": "0005_backfill_session_id",
+      "breakpoints": true
     }
   ]
 }

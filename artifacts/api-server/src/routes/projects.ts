@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, projectEnvVarsTable } from "@workspace/db";
-import { eq, and, count, sql, asc } from "drizzle-orm";
+import { eq, and, count, sql, asc, desc, isNotNull } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
 import { findTemplate } from "../data/templates";
@@ -329,6 +329,9 @@ function getDefaultFile(language: string): { path: string; content: string } {
 
 // ── Conversation history ─────────────────────────────────────────────────────
 
+// Returns a list of sessions (grouped by session_id) for a project.
+// Each entry has: sessionId, preview, messageCount, startedAt, lastAt.
+// Ordered by most-recent session first.
 router.get(
   "/projects/:id/conversations",
   requireAuth,
@@ -337,7 +340,80 @@ router.get(
     const projectId = parseInt(req.params["id"] as string, 10);
     if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
 
-    // Verify ownership
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    // Aggregate per session: count, earliest & latest timestamps, first user message preview
+    const sessions = await db.execute<{
+      session_id: string | null;
+      message_count: string;
+      started_at: Date;
+      last_at: Date;
+    }>(sql`
+      SELECT
+        session_id,
+        COUNT(*) AS message_count,
+        MIN(created_at) AS started_at,
+        MAX(created_at) AS last_at
+      FROM conversation_messages
+      WHERE project_id = ${projectId}
+      GROUP BY session_id
+      ORDER BY MAX(created_at) DESC
+    `);
+
+    // For each session, fetch the first user message as a preview (separate query,
+    // avoids correlated subquery complexities across drivers).
+    const result: Array<{
+      sessionId: string | null;
+      preview: string;
+      messageCount: number;
+      startedAt: string;
+      lastAt: string;
+    }> = [];
+
+    for (const row of sessions.rows) {
+      const [previewRow] = await db
+        .select({ content: conversationMessagesTable.content })
+        .from(conversationMessagesTable)
+        .where(
+          and(
+            eq(conversationMessagesTable.projectId, projectId),
+            row.session_id
+              ? eq(conversationMessagesTable.sessionId, row.session_id)
+              : sql`session_id IS NULL`,
+            eq(conversationMessagesTable.role, "user"),
+          )
+        )
+        .orderBy(asc(conversationMessagesTable.createdAt))
+        .limit(1);
+
+      result.push({
+        sessionId: row.session_id,
+        preview: previewRow ? previewRow.content.slice(0, 120) : "",
+        messageCount: Number(row.message_count),
+        startedAt: new Date(row.started_at).toISOString(),
+        lastAt: new Date(row.last_at).toISOString(),
+      });
+    }
+
+    res.json(result);
+  },
+);
+
+// Returns all messages for a specific session.
+router.get(
+  "/projects/:id/conversations/:sessionId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+    const sessionId = req.params["sessionId"] as string;
+
     const [project] = await db
       .select({ id: projectsTable.id })
       .from(projectsTable)
@@ -348,14 +424,50 @@ router.get(
     const messages = await db
       .select()
       .from(conversationMessagesTable)
-      .where(eq(conversationMessagesTable.projectId, projectId))
+      .where(
+        and(
+          eq(conversationMessagesTable.projectId, projectId),
+          eq(conversationMessagesTable.sessionId, sessionId),
+        )
+      )
       .orderBy(asc(conversationMessagesTable.createdAt))
-      .limit(100);
+      .limit(200);
 
     res.json(messages);
   },
 );
 
+// Deletes all messages for a specific session.
+router.delete(
+  "/projects/:id/conversations/:sessionId",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+    const sessionId = req.params["sessionId"] as string;
+
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    await db
+      .delete(conversationMessagesTable)
+      .where(
+        and(
+          eq(conversationMessagesTable.projectId, projectId),
+          eq(conversationMessagesTable.sessionId, sessionId),
+        )
+      );
+
+    res.json({ ok: true });
+  },
+);
+
+// Deletes ALL conversations for a project (across all sessions).
 router.delete(
   "/projects/:id/conversations",
   requireAuth,

@@ -5,7 +5,8 @@ import { join } from "path";
 import { randomBytes, createHash } from "crypto";
 import AdmZip from "adm-zip";
 import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable } from "@workspace/db";
-import { eq, and, or, ne, lt, isNull, sql, asc } from "drizzle-orm";
+import { eq, and, or, ne, lt, isNull, isNotNull, sql, asc, desc } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
@@ -428,7 +429,7 @@ router.post(
       | { kind: "text"; name: string; content: string }
       | { kind: "zip"; name: string; base64: string };
 
-    const { message, history, attachments } = req.body ?? {};
+    const { message, history, attachments, sessionId: clientSessionId } = req.body ?? {};
     if (!message || typeof message !== "string") {
       res.status(400).json({ error: "message is required" });
       return;
@@ -584,12 +585,39 @@ Write complete code — no TODOs, no placeholders, no "add your logic here".
 Files:
 ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}${envVarKeys.length > 0 ? `\n\nEnvironment variables (available via process.env / os.environ in user-initiated runs):\n${envVarKeys.map((k) => `  ${k}`).join("\n")}` : ""}`;
 
+    // ── Session resolution ────────────────────────────────────────────────────
+    // If the client sends a sessionId, use it. Otherwise find the latest
+    // session for this project (so the agent continues the active thread).
+    // If no sessions exist at all, generate a fresh UUID.
+    let activeSessionId: string;
+    if (clientSessionId && typeof clientSessionId === "string") {
+      activeSessionId = clientSessionId;
+    } else {
+      const [latestRow] = await db
+        .select({ sessionId: conversationMessagesTable.sessionId })
+        .from(conversationMessagesTable)
+        .where(
+          and(
+            eq(conversationMessagesTable.projectId, projectId),
+            isNotNull(conversationMessagesTable.sessionId),
+          )
+        )
+        .orderBy(desc(conversationMessagesTable.createdAt))
+        .limit(1);
+      activeSessionId = latestRow?.sessionId ?? randomUUID();
+    }
+
     // Load history from DB — server is the authoritative source so the
     // conversation survives app restarts and multi-device sessions.
     const dbMessages = await db
       .select()
       .from(conversationMessagesTable)
-      .where(eq(conversationMessagesTable.projectId, projectId))
+      .where(
+        and(
+          eq(conversationMessagesTable.projectId, projectId),
+          eq(conversationMessagesTable.sessionId, activeSessionId),
+        )
+      )
       .orderBy(asc(conversationMessagesTable.createdAt))
       .limit(40);
 
@@ -601,6 +629,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     // Persist the user's message immediately (survives connection drops)
     await db.insert(conversationMessagesTable).values({
       projectId,
+      sessionId: activeSessionId,
       role: "user",
       content: message || "(attachment)",
     });
@@ -763,7 +792,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
             finalAgentText = textContent;
             sse("message", { text: textContent });
           }
-          sse("done");
+          sse("done", { sessionId: activeSessionId });
           res.end();
           return;
         }
@@ -1289,7 +1318,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       }
 
       sse("message", { text: "Done! Refresh the file list to see the changes." });
-      sse("done");
+      sse("done", { sessionId: activeSessionId });
       res.end();
     } catch (err: unknown) {
       req.log.error({ err }, "Agent error");
@@ -1302,7 +1331,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       if (finalAgentText) {
         await db
           .insert(conversationMessagesTable)
-          .values({ projectId, role: "assistant", content: finalAgentText })
+          .values({ projectId, sessionId: activeSessionId, role: "assistant", content: finalAgentText })
           .catch((err) => req.log.warn({ err }, "Failed to persist assistant message"));
       }
     }
