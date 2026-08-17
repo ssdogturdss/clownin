@@ -456,3 +456,222 @@ export const ExecuteCodeBody = zod.object({
 export const ExecuteCodeResponse = zod.unknown()
 
 
+/**
+ * @summary Overall platform statistics
+ */
+export const GetAdminStatsResponse = zod.object({
+  "userCount": zod.number(),
+  "projectCount": zod.number(),
+  "promoCount": zod.number(),
+  "proCount": zod.number()
+})
+
+
+/**
+ * @summary List all users
+ */
+export const ListAdminUsersResponseItem = zod.object({
+  "id": zod.number(),
+  "username": zod.string(),
+  "email": zod.string(),
+  "subscriptionTier": zod.enum(['free', 'pro']),
+  "dailyMessageCount": zod.number(),
+  "lastMessageDate": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "projectCount": zod.number()
+})
+export const ListAdminUsersResponse = zod.array(ListAdminUsersResponseItem)
+
+
+/**
+ * @summary Edit a user's subscription or daily count
+ */
+export const UpdateAdminUserParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const updateAdminUserBodyDailyMessageCountMin = 0;
+
+
+
+export const UpdateAdminUserBody = zod.object({
+  "subscriptionTier": zod.enum(['free', 'pro']).optional(),
+  "dailyMessageCount": zod.number().min(updateAdminUserBodyDailyMessageCountMin).optional()
+})
+
+export const UpdateAdminUserResponse = zod.object({
+  "id": zod.number(),
+  "username": zod.string(),
+  "email": zod.string(),
+  "subscriptionTier": zod.enum(['free', 'pro']),
+  "dailyMessageCount": zod.number(),
+  "lastMessageDate": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "projectCount": zod.number()
+})
+
+
+/**
+ * @summary List all projects (paginated)
+ */
+export const listAdminProjectsQueryPageDefault = 1;
+
+export const ListAdminProjectsQueryParams = zod.object({
+  "page": zod.coerce.number().int().default(listAdminProjectsQueryPageDefault)
+})
+
+export const ListAdminProjectsResponse = zod.object({
+  "projects": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "language": zod.string(),
+  "userId": zod.number(),
+  "username": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "updatedAt": zod.coerce.date(),
+  "fileCount": zod.number()
+})),
+  "total": zod.number(),
+  "page": zod.number(),
+  "pages": zod.number()
+})
+
+
+/**
+ * @summary Delete any project
+ */
+export const DeleteAdminProjectParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const DeleteAdminProjectResponse = zod.unknown()
+
+
+/**
+ * @summary List all promo codes
+ */
+export const ListPromoCodesResponseItem = zod.object({
+  "id": zod.number(),
+  "code": zod.string(),
+  "tier": zod.string(),
+  "maxUses": zod.number(),
+  "usedCount": zod.number(),
+  "expiresAt": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "isActive": zod.boolean(),
+  "createdBy": zod.number(),
+  "createdAt": zod.coerce.date()
+})
+export const ListPromoCodesResponse = zod.array(ListPromoCodesResponseItem)
+
+
+/**
+ * @summary Generate a new promo code
+ */
+export const createPromoCodeBodyCodeMin = 4;
+export const createPromoCodeBodyCodeMax = 64;
+
+
+
+
+export const CreatePromoCodeBody = zod.object({
+  "code": zod.string().min(createPromoCodeBodyCodeMin).max(createPromoCodeBodyCodeMax).optional(),
+  "tier": zod.enum(['pro']).optional(),
+  "maxUses": zod.number().min(1).optional(),
+  "expiresAt": zod.string().nullish(),
+  "notes": zod.string().nullish()
+})
+
+export const CreatePromoCodeResponse = zod.object({
+  "id": zod.number(),
+  "code": zod.string(),
+  "tier": zod.string(),
+  "maxUses": zod.number(),
+  "usedCount": zod.number(),
+  "expiresAt": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "isActive": zod.boolean(),
+  "createdBy": zod.number(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Edit a promo code
+ */
+export const UpdatePromoCodeParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+
+export const updatePromoCodeBodyUsedCountMin = 0;
+
+
+
+export const UpdatePromoCodeBody = zod.object({
+  "maxUses": zod.number().min(1).optional(),
+  "usedCount": zod.number().min(updatePromoCodeBodyUsedCountMin).optional(),
+  "expiresAt": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "isActive": zod.boolean().optional()
+})
+
+export const UpdatePromoCodeResponse = zod.object({
+  "id": zod.number(),
+  "code": zod.string(),
+  "tier": zod.string(),
+  "maxUses": zod.number(),
+  "usedCount": zod.number(),
+  "expiresAt": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "isActive": zod.boolean(),
+  "createdBy": zod.number(),
+  "createdAt": zod.coerce.date()
+})
+
+
+/**
+ * @summary Delete a promo code
+ */
+export const DeletePromoCodeParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const DeletePromoCodeResponse = zod.unknown()
+
+
+/**
+ * @summary List AI provider configs
+ */
+export const ListProvidersResponseItem = zod.object({
+  "provider": zod.string(),
+  "displayName": zod.string(),
+  "isActive": zod.boolean(),
+  "hasApiKey": zod.boolean(),
+  "updatedAt": zod.string().nullish()
+})
+export const ListProvidersResponse = zod.array(ListProvidersResponseItem)
+
+
+/**
+ * @summary Update an AI provider (set key, toggle active)
+ */
+export const UpdateProviderParams = zod.object({
+  "provider": zod.coerce.string()
+})
+
+export const UpdateProviderBody = zod.object({
+  "apiKey": zod.string().optional(),
+  "isActive": zod.boolean().optional(),
+  "clearKey": zod.boolean().optional()
+})
+
+export const UpdateProviderResponse = zod.object({
+  "provider": zod.string(),
+  "displayName": zod.string(),
+  "isActive": zod.boolean(),
+  "hasApiKey": zod.boolean(),
+  "updatedAt": zod.string().nullish()
+})
+
+

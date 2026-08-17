@@ -22,6 +22,8 @@ tags:
     description: Starter templates
   - name: servers
     description: SSH server management
+  - name: admin
+    description: Admin-only operations (requires ADMIN_USER_IDS)
 
 paths:
   /healthz:
@@ -740,6 +742,225 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Overall platform statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      summary: List all users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/users/{id}:
+    patch:
+      operationId: updateAdminUser
+      tags: [admin]
+      summary: Edit a user's subscription or daily count
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUserUpdate"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/projects:
+    get:
+      operationId: listAdminProjects
+      tags: [admin]
+      summary: List all projects (paginated)
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+      responses:
+        "200":
+          description: Projects page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminProjectsPage"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/projects/{id}:
+    delete:
+      operationId: deleteAdminProject
+      tags: [admin]
+      summary: Delete any project
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Deleted }
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/promo-codes:
+    get:
+      operationId: listPromoCodes
+      tags: [admin]
+      summary: List all promo codes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Promo codes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PromoCode"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    post:
+      operationId: createPromoCode
+      tags: [admin]
+      summary: Generate a new promo code
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromoCodeInput"
+      responses:
+        "201":
+          description: Created promo code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoCode"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/promo-codes/{id}:
+    patch:
+      operationId: updatePromoCode
+      tags: [admin]
+      summary: Edit a promo code
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromoCodeUpdate"
+      responses:
+        "200":
+          description: Updated promo code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoCode"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    delete:
+      operationId: deletePromoCode
+      tags: [admin]
+      summary: Delete a promo code
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Deleted }
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/providers:
+    get:
+      operationId: listProviders
+      tags: [admin]
+      summary: List AI provider configs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Provider configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProviderConfig"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /admin/providers/{provider}:
+    patch:
+      operationId: updateProvider
+      tags: [admin]
+      summary: Update an AI provider (set key, toggle active)
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConfigUpdate"
+      responses:
+        "200":
+          description: Updated provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConfig"
+        "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1091,3 +1312,105 @@ components:
           type: string
       required:
         - ok
+
+    AdminStats:
+      type: object
+      properties:
+        userCount: { type: number }
+        projectCount: { type: number }
+        promoCount: { type: number }
+        proCount: { type: number }
+      required: [userCount, projectCount, promoCount, proCount]
+
+    AdminUser:
+      type: object
+      properties:
+        id: { type: number }
+        username: { type: string }
+        email: { type: string }
+        subscriptionTier: { type: string, enum: [free, pro] }
+        dailyMessageCount: { type: number }
+        lastMessageDate: { type: ["string", "null"] }
+        createdAt: { type: string, format: date-time }
+        projectCount: { type: number }
+      required: [id, username, email, subscriptionTier, dailyMessageCount, projectCount, createdAt]
+
+    AdminUserUpdate:
+      type: object
+      properties:
+        subscriptionTier: { type: string, enum: [free, pro] }
+        dailyMessageCount: { type: number, minimum: 0 }
+
+    AdminProject:
+      type: object
+      properties:
+        id: { type: number }
+        name: { type: string }
+        language: { type: string }
+        userId: { type: number }
+        username: { type: ["string", "null"] }
+        email: { type: ["string", "null"] }
+        updatedAt: { type: string, format: date-time }
+        fileCount: { type: number }
+      required: [id, name, language, userId, updatedAt, fileCount]
+
+    AdminProjectsPage:
+      type: object
+      properties:
+        projects:
+          type: array
+          items: { $ref: "#/components/schemas/AdminProject" }
+        total: { type: number }
+        page: { type: number }
+        pages: { type: number }
+      required: [projects, total, page, pages]
+
+    PromoCode:
+      type: object
+      properties:
+        id: { type: number }
+        code: { type: string }
+        tier: { type: string }
+        maxUses: { type: number }
+        usedCount: { type: number }
+        expiresAt: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        isActive: { type: boolean }
+        createdBy: { type: number }
+        createdAt: { type: string, format: date-time }
+      required: [id, code, tier, maxUses, usedCount, isActive, createdBy, createdAt]
+
+    PromoCodeInput:
+      type: object
+      properties:
+        code: { type: string, minLength: 4, maxLength: 64 }
+        tier: { type: string, enum: [pro] }
+        maxUses: { type: number, minimum: 1 }
+        expiresAt: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+
+    PromoCodeUpdate:
+      type: object
+      properties:
+        maxUses: { type: number, minimum: 1 }
+        usedCount: { type: number, minimum: 0 }
+        expiresAt: { type: ["string", "null"] }
+        notes: { type: ["string", "null"] }
+        isActive: { type: boolean }
+
+    ProviderConfig:
+      type: object
+      properties:
+        provider: { type: string }
+        displayName: { type: string }
+        isActive: { type: boolean }
+        hasApiKey: { type: boolean }
+        updatedAt: { type: ["string", "null"] }
+      required: [provider, displayName, isActive, hasApiKey]
+
+    ProviderConfigUpdate:
+      type: object
+      properties:
+        apiKey: { type: string }
+        isActive: { type: boolean }
+        clearKey: { type: boolean }

@@ -171,3 +171,132 @@ export interface TestConnectionResult {
   error?: string;
 }
 
+export interface AdminStats {
+  userCount: number;
+  projectCount: number;
+  promoCount: number;
+  proCount: number;
+}
+
+export type AdminUserSubscriptionTier = typeof AdminUserSubscriptionTier[keyof typeof AdminUserSubscriptionTier];
+
+
+export const AdminUserSubscriptionTier = {
+  free: 'free',
+  pro: 'pro',
+} as const;
+
+export interface AdminUser {
+  id: number;
+  username: string;
+  email: string;
+  subscriptionTier: AdminUserSubscriptionTier;
+  dailyMessageCount: number;
+  /** @nullable */
+  lastMessageDate?: string | null;
+  createdAt: string;
+  projectCount: number;
+}
+
+export type AdminUserUpdateSubscriptionTier = typeof AdminUserUpdateSubscriptionTier[keyof typeof AdminUserUpdateSubscriptionTier];
+
+
+export const AdminUserUpdateSubscriptionTier = {
+  free: 'free',
+  pro: 'pro',
+} as const;
+
+export interface AdminUserUpdate {
+  subscriptionTier?: AdminUserUpdateSubscriptionTier;
+  /** @minimum 0 */
+  dailyMessageCount?: number;
+}
+
+export interface AdminProject {
+  id: number;
+  name: string;
+  language: string;
+  userId: number;
+  /** @nullable */
+  username?: string | null;
+  /** @nullable */
+  email?: string | null;
+  updatedAt: string;
+  fileCount: number;
+}
+
+export interface AdminProjectsPage {
+  projects: AdminProject[];
+  total: number;
+  page: number;
+  pages: number;
+}
+
+export interface PromoCode {
+  id: number;
+  code: string;
+  tier: string;
+  maxUses: number;
+  usedCount: number;
+  /** @nullable */
+  expiresAt?: string | null;
+  /** @nullable */
+  notes?: string | null;
+  isActive: boolean;
+  createdBy: number;
+  createdAt: string;
+}
+
+export type PromoCodeInputTier = typeof PromoCodeInputTier[keyof typeof PromoCodeInputTier];
+
+
+export const PromoCodeInputTier = {
+  pro: 'pro',
+} as const;
+
+export interface PromoCodeInput {
+  /**
+     * @minLength 4
+     * @maxLength 64
+     */
+  code?: string;
+  tier?: PromoCodeInputTier;
+  /** @minimum 1 */
+  maxUses?: number;
+  /** @nullable */
+  expiresAt?: string | null;
+  /** @nullable */
+  notes?: string | null;
+}
+
+export interface PromoCodeUpdate {
+  /** @minimum 1 */
+  maxUses?: number;
+  /** @minimum 0 */
+  usedCount?: number;
+  /** @nullable */
+  expiresAt?: string | null;
+  /** @nullable */
+  notes?: string | null;
+  isActive?: boolean;
+}
+
+export interface ProviderConfig {
+  provider: string;
+  displayName: string;
+  isActive: boolean;
+  hasApiKey: boolean;
+  /** @nullable */
+  updatedAt?: string | null;
+}
+
+export interface ProviderConfigUpdate {
+  apiKey?: string;
+  isActive?: boolean;
+  clearKey?: boolean;
+}
+
+export type ListAdminProjectsParams = {
+page?: number;
+};
+
