@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +17,7 @@ import { useColors } from '@/hooks/useColors';
 import { useProfile } from '@/hooks/useProfile';
 import { PaywallSheet } from './PaywallSheet';
 import { resolveApiBaseUrl } from '@/app/_layout';
+import { useRedeemPromoCode } from '@workspace/api-client-react';
 
 interface ProfileModalProps {
   visible: boolean;
@@ -30,8 +32,24 @@ function getInitials(username: string): string {
 export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { data: profile, isLoading } = useProfile();
+  const { data: profile, isLoading, refetch: refetchProfile } = useProfile();
   const [showPaywall, setShowPaywall] = useState(false);
+  const [showPromoInput, setShowPromoInput] = useState(false);
+  const [promoCode, setPromoCode] = useState('');
+  const { mutate: redeemCode, isPending: isRedeeming } = useRedeemPromoCode({
+    mutation: {
+      onSuccess: (data) => {
+        setPromoCode('');
+        setShowPromoInput(false);
+        refetchProfile();
+        Alert.alert('🎉 Success!', data.message);
+      },
+      onError: (error: any) => {
+        const msg = error?.response?.data?.error ?? error?.message ?? 'Failed to redeem code';
+        Alert.alert('Invalid Code', msg);
+      },
+    },
+  });
 
   const bottomPad = Platform.OS === 'ios' ? insets.bottom + 20 : 28;
 
@@ -145,6 +163,55 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
                       🚀 Upgrade to Pro
                     </Text>
                   </Pressable>
+                )}
+
+                {/* Promo code section (free tier only) */}
+                {!isPro && (
+                  showPromoInput ? (
+                    <View style={[styles.promoInputWrap, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                      <TextInput
+                        style={[styles.promoInput, { color: colors.foreground }]}
+                        placeholder="CLOWN-XXXXXX-XXXXXX"
+                        placeholderTextColor={colors.mutedForeground}
+                        value={promoCode}
+                        onChangeText={(t) => setPromoCode(t.toUpperCase())}
+                        autoCapitalize="characters"
+                        autoCorrect={false}
+                        editable={!isRedeeming}
+                      />
+                      <View style={styles.promoActions}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.promoCancelBtn,
+                            { borderColor: colors.border, opacity: pressed ? 0.7 : 1 },
+                          ]}
+                          onPress={() => { setShowPromoInput(false); setPromoCode(''); }}
+                          disabled={isRedeeming}
+                        >
+                          <Text style={[styles.promoCancelText, { color: colors.mutedForeground }]}>Cancel</Text>
+                        </Pressable>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.promoRedeemBtn,
+                            { backgroundColor: colors.primary, opacity: (pressed || isRedeeming || !promoCode.trim()) ? 0.6 : 1 },
+                          ]}
+                          onPress={() => redeemCode({ data: { code: promoCode.trim() } })}
+                          disabled={isRedeeming || !promoCode.trim()}
+                        >
+                          {isRedeeming
+                            ? <ActivityIndicator size="small" color={colors.primaryForeground} />
+                            : <Text style={[styles.promoRedeemText, { color: colors.primaryForeground }]}>Redeem</Text>
+                          }
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    <Pressable onPress={() => setShowPromoInput(true)}>
+                      <Text style={[styles.promoLink, { color: colors.mutedForeground }]}>
+                        Have a promo code?
+                      </Text>
+                    </Pressable>
+                  )
                 )}
 
                 {/* Divider */}
@@ -343,5 +410,51 @@ const styles = StyleSheet.create({
   signOutText: {
     fontSize: 15,
     fontFamily: 'Inter_500Medium',
+  },
+  promoLink: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    textDecorationLine: 'underline',
+    paddingVertical: 2,
+  },
+  promoInputWrap: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    gap: 10,
+  },
+  promoInput: {
+    fontSize: 15,
+    fontFamily: 'Inter_500Medium',
+    letterSpacing: 1,
+    paddingVertical: 4,
+  },
+  promoActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  promoCancelBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  promoCancelText: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  promoRedeemBtn: {
+    flex: 2,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  promoRedeemText: {
+    fontSize: 14,
+    fontFamily: 'Inter_700Bold',
   },
 });

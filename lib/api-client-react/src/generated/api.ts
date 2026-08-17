@@ -42,6 +42,8 @@ import type {
   PromoCodeUpdate,
   ProviderConfig,
   ProviderConfigUpdate,
+  RedeemPromoCodeBody,
+  RedeemPromoCodeResponse,
   RegisterBody,
   ServerConfig,
   Template,
@@ -2601,5 +2603,77 @@ export const useUpdateProvider = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getUpdateProviderMutationOptions(options));
+    }
+
+export const getRedeemPromoCodeUrl = () => {
+
+
+
+
+  return `/api/promo-codes/redeem`
+}
+
+/**
+ * Validates the promo code and upgrades the authenticated user's subscription tier.
+ * @summary Redeem a promo code
+ */
+export const redeemPromoCode = async (redeemPromoCodeBody: RedeemPromoCodeBody, options?: Parameters<typeof customFetch>[1]): Promise<RedeemPromoCodeResponse> => {
+
+  return customFetch<RedeemPromoCodeResponse>(getRedeemPromoCodeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(redeemPromoCodeBody)
+  }
+);}
+
+
+
+
+
+export const getRedeemPromoCodeMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof redeemPromoCode>>, TError,{data: BodyType<RedeemPromoCodeBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof redeemPromoCode>>, TError,{data: BodyType<RedeemPromoCodeBody>}, TContext> => {
+
+const mutationKey = ['redeemPromoCode'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof redeemPromoCode>>, {data: BodyType<RedeemPromoCodeBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  redeemPromoCode(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RedeemPromoCodeMutationResult = NonNullable<Awaited<ReturnType<typeof redeemPromoCode>>>
+    export type RedeemPromoCodeMutationBody = BodyType<RedeemPromoCodeBody>
+    export type RedeemPromoCodeMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Redeem a promo code
+ */
+export const useRedeemPromoCode = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof redeemPromoCode>>, TError,{data: BodyType<RedeemPromoCodeBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof redeemPromoCode>>,
+        TError,
+        {data: BodyType<RedeemPromoCodeBody>},
+        TContext
+      > => {
+      return useMutation(getRedeemPromoCodeMutationOptions(options));
     }
 

@@ -51,6 +51,7 @@ async function buildAll() {
       "cpu-features",
       "dtrace-provider",
       "isolated-vm",
+      "@anthropic-ai/sdk",
       "lightningcss",
       "pg-native",
       "oracledb",

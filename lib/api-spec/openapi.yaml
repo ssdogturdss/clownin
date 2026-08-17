@@ -961,6 +961,58 @@ paths:
         "401": { description: Unauthorized, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
         "403": { description: Forbidden, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
 
+  /promo-codes/redeem:
+    post:
+      operationId: redeemPromoCode
+      tags: [auth]
+      summary: Redeem a promo code
+      description: Validates the promo code and upgrades the authenticated user's subscription tier.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemPromoCodeBody"
+      responses:
+        "200":
+          description: Code redeemed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedeemPromoCodeResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Invalid promo code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: User already on this tier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "410":
+          description: Code expired or exhausted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1407,6 +1459,27 @@ components:
         hasApiKey: { type: boolean }
         updatedAt: { type: ["string", "null"] }
       required: [provider, displayName, isActive, hasApiKey]
+
+    RedeemPromoCodeBody:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+      required:
+        - code
+
+    RedeemPromoCodeResponse:
+      type: object
+      properties:
+        tier:
+          type: string
+          enum: [free, pro]
+        message:
+          type: string
+      required:
+        - tier
+        - message
 
     ProviderConfigUpdate:
       type: object

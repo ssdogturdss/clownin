@@ -51,7 +51,7 @@
 import cron from "node-cron";
 import pLimit from "p-limit";
 import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { logger } from "./logger";
 
 const RC_API_BASE = "https://api.revenuecat.com/v1";
@@ -260,7 +260,18 @@ export async function syncSubscriptions(): Promise<void> {
     proUsers = await db
       .select({ id: usersTable.id })
       .from(usersTable)
-      .where(eq(usersTable.subscriptionTier, "pro"));
+      .where(
+        and(
+          eq(usersTable.subscriptionTier, "pro"),
+          // Only check users whose Pro was granted by RevenueCat.
+          // Promo-code and admin-granted tiers are not tracked in RevenueCat
+          // and must not be reverted by this sync.
+          or(
+            isNull(usersTable.subscriptionSource),
+            eq(usersTable.subscriptionSource, "revenuecat"),
+          ),
+        ),
+      );
   } catch (err) {
     logger.error({ err }, "subscriptionSync: failed to query pro users");
     return;

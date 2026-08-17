@@ -14,6 +14,7 @@ import serveRouter from "./serve";
 import envRouter from "./env";
 import templatesRouter from "./templates";
 import adminRouter from "./admin";
+import promoRouter from "./promo";
 
 const router: IRouter = Router();
 
@@ -32,6 +33,7 @@ router.use(serversRouter);
 router.use(serveRouter);
 router.use(envRouter);
 router.use(adminRouter);
+router.use(promoRouter);
 
 export default router;
 

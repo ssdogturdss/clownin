@@ -290,6 +290,24 @@ export interface ProviderConfig {
   updatedAt?: string | null;
 }
 
+export interface RedeemPromoCodeBody {
+  /** @minLength 1 */
+  code: string;
+}
+
+export type RedeemPromoCodeResponseTier = typeof RedeemPromoCodeResponseTier[keyof typeof RedeemPromoCodeResponseTier];
+
+
+export const RedeemPromoCodeResponseTier = {
+  free: 'free',
+  pro: 'pro',
+} as const;
+
+export interface RedeemPromoCodeResponse {
+  tier: RedeemPromoCodeResponseTier;
+  message: string;
+}
+
 export interface ProviderConfigUpdate {
   apiKey?: string;
   isActive?: boolean;

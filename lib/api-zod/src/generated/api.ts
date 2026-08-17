@@ -675,3 +675,20 @@ export const UpdateProviderResponse = zod.object({
 })
 
 
+/**
+ * Validates the promo code and upgrades the authenticated user's subscription tier.
+ * @summary Redeem a promo code
+ */
+
+
+
+export const RedeemPromoCodeBody = zod.object({
+  "code": zod.string().min(1)
+})
+
+export const RedeemPromoCodeResponse = zod.object({
+  "tier": zod.enum(['free', 'pro']),
+  "message": zod.string()
+})
+
+

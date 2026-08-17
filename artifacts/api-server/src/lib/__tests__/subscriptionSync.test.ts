@@ -41,6 +41,9 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((_col: unknown, val: unknown) => ({ col: _col, val })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
+  isNull: vi.fn((_col: unknown) => ({ isNull: true })),
 }));
 
 vi.mock("../logger", () => ({
