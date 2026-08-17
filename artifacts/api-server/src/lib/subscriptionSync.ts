@@ -21,6 +21,14 @@
  * (default: 2) times per user before counting as an error. After the full sync
  * completes, a structured warning is emitted when any errors remain so that
  * monitoring tools can detect a prolonged RevenueCat outage.
+ *
+ * Out-of-band alerting:
+ *   SYNC_ALERT_WEBHOOK_URL — optional URL that receives a POST request when
+ *                            syncErrors > 0. Compatible with Slack Incoming
+ *                            Webhooks and any endpoint that accepts a JSON body
+ *                            with a `text` field. The payload includes the
+ *                            error count, users checked, and UTC timestamp so
+ *                            the on-call team has actionable context immediately.
  */
 
 import cron from "node-cron";
@@ -33,6 +41,46 @@ const RC_API_BASE = "https://api.revenuecat.com/v1";
 
 /** How long to wait (ms) before the first retry on a 429. Doubles each attempt. */
 const BACKOFF_BASE_MS = 1_000;
+
+/**
+ * Send an out-of-band alert to the configured webhook URL when the sync
+ * finishes with errors. The payload is compatible with Slack Incoming Webhooks
+ * (`{ text: "..." }`) and any endpoint that accepts a plain JSON POST.
+ *
+ * Swallows errors so a broken webhook never prevents the sync from completing.
+ */
+export async function sendSyncErrorAlert(
+  syncErrors: number,
+  checked: number,
+  timestamp: string,
+  webhookUrl: string,
+): Promise<void> {
+  const text =
+    `⚠️ *Subscription sync completed with errors* — RevenueCat may be degraded.\n` +
+    `• Errors: ${syncErrors} / ${checked} users checked\n` +
+    `• Time: ${timestamp}\n` +
+    `Manual review recommended.`;
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "(unreadable)");
+      logger.warn(
+        { status: res.status, body },
+        "subscriptionSync: alert webhook returned non-2xx response",
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "subscriptionSync: failed to send alert webhook — continuing",
+    );
+  }
+}
 
 /**
  * Sleep for `ms` milliseconds.
@@ -216,14 +264,25 @@ export async function syncSubscriptions(): Promise<void> {
   await Promise.all(tasks);
 
   if (errors > 0) {
+    const timestamp = new Date().toISOString();
     logger.warn(
       {
         syncErrors: errors,
         checked: proUsers.length,
         reverted,
+        timestamp,
       },
       "subscriptionSync: completed with errors — RevenueCat may be degraded; manual review recommended",
     );
+
+    const webhookUrl = process.env.SYNC_ALERT_WEBHOOK_URL;
+    if (webhookUrl) {
+      await sendSyncErrorAlert(errors, proUsers.length, timestamp, webhookUrl);
+    } else {
+      logger.warn(
+        "subscriptionSync: SYNC_ALERT_WEBHOOK_URL not set — skipping out-of-band alert",
+      );
+    }
   }
 
   logger.info(

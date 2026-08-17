@@ -53,7 +53,7 @@ vi.mock("../logger", () => ({
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
 
-import { syncSubscriptions } from "../subscriptionSync";
+import { syncSubscriptions, sendSyncErrorAlert } from "../subscriptionSync";
 import { logger } from "../logger";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -115,6 +115,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.REVENUECAT_API_KEY;
   delete process.env.REVENUECAT_SYNC_ERROR_RETRIES;
+  delete process.env.SYNC_ALERT_WEBHOOK_URL;
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -399,5 +400,125 @@ describe("syncSubscriptions — retry on transient 5xx errors", () => {
     );
     // 2 retry warnings (attempt 0 and attempt 1 before giving up on attempt 2)
     expect(retryCalls).toHaveLength(2);
+  });
+});
+
+// ─── sendSyncErrorAlert unit tests ───────────────────────────────────────────
+
+describe("sendSyncErrorAlert", () => {
+  it("POSTs to the webhook URL with error count and timestamp", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendSyncErrorAlert(3, 10, "2026-08-17T03:00:00.000Z", "https://hooks.example.com/test");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://hooks.example.com/test");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ "Content-Type": "application/json" });
+
+    const body = JSON.parse(init.body as string) as { text: string };
+    expect(body.text).toContain("3");
+    expect(body.text).toContain("10");
+    expect(body.text).toContain("2026-08-17T03:00:00.000Z");
+  });
+
+  it("logs a warning instead of throwing when the webhook returns non-2xx", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "server error",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Should not throw
+    await expect(
+      sendSyncErrorAlert(1, 5, "2026-08-17T03:00:00.000Z", "https://hooks.example.com/test"),
+    ).resolves.toBeUndefined();
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 500 }),
+      expect.stringContaining("non-2xx"),
+    );
+  });
+
+  it("logs a warning and does not throw when fetch itself rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network failure")));
+
+    await expect(
+      sendSyncErrorAlert(2, 8, "2026-08-17T03:00:00.000Z", "https://hooks.example.com/test"),
+    ).resolves.toBeUndefined();
+
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      expect.stringContaining("failed to send alert webhook"),
+    );
+  });
+});
+
+// ─── Webhook alert integration inside syncSubscriptions ──────────────────────
+
+describe("syncSubscriptions — webhook alert on errors", () => {
+  it("POSTs to SYNC_ALERT_WEBHOOK_URL when errors > 0", async () => {
+    process.env.SYNC_ALERT_WEBHOOK_URL = "https://hooks.example.com/oncall";
+    mockWhere.mockResolvedValueOnce([{ id: 55 }]);
+    stubFetch(500, { message: "server error" });
+
+    // Second fetch call goes to the webhook — capture both
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 500,
+        ok: false,
+        text: async () => "server error",
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await syncSubscriptions();
+
+    // The second fetch should be the webhook POST
+    const webhookCall = fetchMock.mock.calls.find(
+      ([url]) => url === "https://hooks.example.com/oncall",
+    );
+    expect(webhookCall).toBeDefined();
+    const body = JSON.parse(webhookCall![1].body as string) as { text: string };
+    expect(body.text).toContain("1"); // 1 error
+  });
+
+  it("does NOT POST to the webhook when there are no errors", async () => {
+    process.env.SYNC_ALERT_WEBHOOK_URL = "https://hooks.example.com/oncall";
+    mockWhere.mockResolvedValueOnce([{ id: 7 }]);
+
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => rcResponse("pro", future),
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await syncSubscriptions();
+
+    const webhookCall = fetchMock.mock.calls.find(
+      ([url]) => url === "https://hooks.example.com/oncall",
+    );
+    expect(webhookCall).toBeUndefined();
+  });
+
+  it("logs a warning when SYNC_ALERT_WEBHOOK_URL is not set and errors > 0", async () => {
+    delete process.env.SYNC_ALERT_WEBHOOK_URL;
+    mockWhere.mockResolvedValueOnce([{ id: 55 }]);
+    stubFetch(500, { message: "server error" });
+
+    await syncSubscriptions();
+
+    const warnCalls = vi.mocked(logger.warn).mock.calls;
+    const missingWebhookWarn = warnCalls.find(([msg]) =>
+      typeof msg === "string" && msg.includes("SYNC_ALERT_WEBHOOK_URL not set"),
+    );
+    expect(missingWebhookWarn).toBeDefined();
   });
 });
