@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
+import Purchases from 'react-native-purchases';
 
 // ---------------------------------------------------------------------------
 // Platform-aware key-value storage
@@ -93,6 +94,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     applyToken(null);
     queryClient.clear();
+    // Log out of RevenueCat so the next user gets a fresh anonymous identity.
+    try {
+      await Purchases.logOut();
+    } catch {
+      // RC logOut throws when the current user is already anonymous — ignore.
+    }
     // Clear all per-project editor state (scroll positions, selected file, terminal open state)
     try {
       const allKeys = await AsyncStorage.getAllKeys();
@@ -137,9 +144,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               storage.removeItem(USER_KEY),
             ]);
           } else {
+            const parsedUser = JSON.parse(storedUser) as UserProfile;
             setToken(storedToken);
-            setUser(JSON.parse(storedUser) as UserProfile);
+            setUser(parsedUser);
             applyToken(storedToken);
+            // Re-identify the RevenueCat user on app restart so the
+            // app_user_id in webhooks matches our DB user ID.
+            try {
+              await Purchases.logIn(String(parsedUser.id));
+            } catch {
+              // RC SDK may not be configured in dev — non-fatal.
+            }
           }
         }
       } catch {
@@ -158,6 +173,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(newToken);
     setUser(newUser);
     applyToken(newToken);
+    // Identify this user in RevenueCat so that the app_user_id in webhook
+    // events matches our DB user ID (numeric ID as a string).
+    try {
+      await Purchases.logIn(String(newUser.id));
+    } catch {
+      // RC SDK may not be configured in dev — non-fatal.
+    }
   };
 
   return (

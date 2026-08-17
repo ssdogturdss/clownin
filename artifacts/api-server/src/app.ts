@@ -5,6 +5,7 @@ import path from "path";
 import router, { previewRouter } from "./routes";
 import privacyRouter from "./routes/privacy";
 import termsRouter from "./routes/terms";
+import webhookRouter from "./routes/webhooks";
 import { logger } from "./lib/logger";
 import { serveProxyRouter } from "./routes/serve";
 
@@ -35,6 +36,10 @@ app.use(cors());
 // Body parsers consume req as a stream; the proxy needs to pipe it raw to the
 // upstream port. Mounting here ensures no body parser runs first for proxy paths.
 app.use(serveProxyRouter);
+
+// ⚠️  RevenueCat webhook MUST be mounted before express.json() because it
+// uses express.raw() internally to capture the raw body for auth verification.
+app.use(webhookRouter);
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
