@@ -61,6 +61,7 @@ type HistoryEntry = { role: "user" | "assistant"; content: string };
 // Summary of a past session returned by the sessions list endpoint
 type SessionSummary = {
   sessionId: string | null;
+  name: string | null;
   preview: string;
   messageCount: number;
   startedAt: string;
@@ -101,6 +102,11 @@ function injectDateDividers(msgs: AgentMsg[]): AgentMsg[] {
     result.push(msg);
   }
   return result;
+}
+
+/** Mirrors the server-side auto-naming heuristic: first 6 words, trailing punctuation stripped. */
+function autoNameFromMessage(msg: string): string {
+  return msg.trim().split(/\s+/).slice(0, 6).join(" ").replace(/[.!?]+$/, "");
 }
 
 // Simple UUID v4 generator — works on all Hermes / web environments
@@ -161,12 +167,17 @@ type PastSessionCardProps = {
   session: SessionSummary;
   colors: ReturnType<typeof useColors>;
   onDelete: () => void;
+  onRename: (newName: string) => void;
 };
 
-function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCardProps) {
+function PastSessionCard({ projectId, session, colors, onDelete, onRename }: PastSessionCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<Array<{ id: number; role: string; content: string }> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(session.name ?? "");
+  const [saving, setSaving] = useState(false);
+  const nameRef = useRef<TextInput>(null);
   const { token } = useAuth();
 
   const toggle = useCallback(async () => {
@@ -186,9 +197,43 @@ function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCa
     finally { setLoading(false); }
   }, [expanded, messages, session.sessionId, token, projectId]);
 
+  const startEdit = useCallback((e: { stopPropagation?: () => void }) => {
+    e.stopPropagation?.();
+    setNameInput(session.name ?? session.preview.slice(0, 60) ?? "");
+    setEditingName(true);
+    setTimeout(() => nameRef.current?.focus(), 50);
+  }, [session.name, session.preview]);
+
+  const commitName = useCallback(async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed || !session.sessionId || !token) { setEditingName(false); return; }
+    setSaving(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      const r = await fetch(
+        `${baseUrl}/api/projects/${projectId}/conversations/${session.sessionId}/name`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ name: trimmed }),
+        },
+      );
+      if (r.ok) {
+        onRename(trimmed);
+      } else {
+        // Revert the input to the last committed name on failure
+        setNameInput(session.name ?? "");
+      }
+    } catch {
+      setNameInput(session.name ?? "");
+    } finally { setSaving(false); setEditingName(false); }
+  }, [nameInput, session.sessionId, session.name, projectId, token, onRename]);
+
   const label = new Date(session.lastAt).toLocaleDateString(undefined, {
     month: "short", day: "numeric", year: "numeric",
   });
+
+  const displayName = session.name || session.preview || "(no preview)";
 
   return (
     <View style={[pastStyles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -199,20 +244,40 @@ function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCa
           color={colors.mutedForeground}
         />
         <View style={{ flex: 1 }}>
-          <Text style={[pastStyles.preview, { color: colors.foreground }]} numberOfLines={expanded ? undefined : 1}>
-            {session.preview || "(no preview)"}
-          </Text>
+          {editingName ? (
+            <TextInput
+              ref={nameRef}
+              style={[pastStyles.nameInput, { color: colors.foreground, borderColor: colors.primary }]}
+              value={nameInput}
+              onChangeText={setNameInput}
+              onSubmitEditing={commitName}
+              onBlur={commitName}
+              returnKeyType="done"
+              maxLength={80}
+              editable={!saving}
+            />
+          ) : (
+            <Pressable onPress={startEdit} hitSlop={4}>
+              <Text style={[pastStyles.name, { color: colors.foreground }]} numberOfLines={1}>
+                {displayName}
+              </Text>
+            </Pressable>
+          )}
           <Text style={[pastStyles.meta, { color: colors.mutedForeground }]}>
             {label} · {session.messageCount} message{session.messageCount !== 1 ? "s" : ""}
           </Text>
         </View>
-        <Pressable
-          onPress={(e) => { e.stopPropagation?.(); onDelete(); }}
-          hitSlop={8}
-          style={{ padding: 2 }}
-        >
-          <MaterialCommunityIcons name="delete-outline" size={14} color={colors.mutedForeground} />
-        </Pressable>
+        {saving ? (
+          <ActivityIndicator size="small" color={colors.mutedForeground} style={{ padding: 2 }} />
+        ) : (
+          <Pressable
+            onPress={(e) => { e.stopPropagation?.(); onDelete(); }}
+            hitSlop={8}
+            style={{ padding: 2 }}
+          >
+            <MaterialCommunityIcons name="delete-outline" size={14} color={colors.mutedForeground} />
+          </Pressable>
+        )}
       </Pressable>
 
       {expanded && (
@@ -220,6 +285,11 @@ function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCa
           <ActivityIndicator size="small" color={colors.primary} style={{ padding: 10 }} />
         ) : (
           <View style={pastStyles.body}>
+            {session.preview ? (
+              <Text style={[pastStyles.previewText, { color: colors.mutedForeground }]} numberOfLines={2}>
+                {session.preview}
+              </Text>
+            ) : null}
             {(messages ?? []).map((m) => (
               <View
                 key={m.id}
@@ -243,13 +313,15 @@ function PastSessionCard({ projectId, session, colors, onDelete }: PastSessionCa
 }
 
 const pastStyles = StyleSheet.create({
-  card:    { marginHorizontal: 10, marginBottom: 6, borderRadius: 12, borderWidth: 1, overflow: "hidden" },
-  header:  { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  preview: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  meta:    { fontSize: 10, marginTop: 1 },
-  body:    { paddingHorizontal: 10, paddingBottom: 10, gap: 6 },
-  msgBubble: { maxWidth: "80%", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12 },
-  msgText: { fontSize: 12, lineHeight: 17 },
+  card:        { marginHorizontal: 10, marginBottom: 6, borderRadius: 12, borderWidth: 1, overflow: "hidden" },
+  header:      { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  name:        { fontSize: 12, fontFamily: "Inter_500Medium" },
+  nameInput:   { fontSize: 12, fontFamily: "Inter_400Regular", borderBottomWidth: 1, paddingVertical: 1, paddingHorizontal: 0 },
+  meta:        { fontSize: 10, marginTop: 1 },
+  previewText: { fontSize: 11, fontFamily: "Inter_400Regular", paddingHorizontal: 0, paddingBottom: 4, fontStyle: "italic" },
+  body:        { paddingHorizontal: 10, paddingBottom: 10, gap: 6 },
+  msgBubble:   { maxWidth: "80%", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12 },
+  msgText:     { fontSize: 12, lineHeight: 17 },
 });
 
 // ── Tool label helpers ────────────────────────────────────────────────────────
@@ -868,10 +940,12 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               if (messages.length > 0 && !busy) {
                 // Archive current and start fresh
                 if (currentSessionId) {
+                  const firstUserMsg = historyRef.current.find((m) => m.role === "user")?.content ?? "";
                   setPastSessions((prev) => [
                     {
                       sessionId: currentSessionId,
-                      preview: historyRef.current.find((m) => m.role === "user")?.content.slice(0, 120) ?? "",
+                      name: firstUserMsg ? autoNameFromMessage(firstUserMsg) : null,
+                      preview: firstUserMsg.slice(0, 120),
                       messageCount: messages.filter((m) => m.kind === "user" || m.kind === "agent").length,
                       startedAt: new Date().toISOString(),
                       lastAt: new Date().toISOString(),
@@ -971,6 +1045,11 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                       projectId={projectId}
                       session={s}
                       colors={colors}
+                      onRename={(newName) => {
+                        setPastSessions((prev) =>
+                          prev.map((ps) => ps.sessionId === s.sessionId ? { ...ps, name: newName } : ps)
+                        );
+                      }}
                       onDelete={() => {
                         Alert.alert(
                           "Delete conversation",

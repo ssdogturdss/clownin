@@ -43,6 +43,13 @@
       "when": 1786797960000,
       "tag": "0005_backfill_session_id",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1755475200000,
+      "tag": "0006_conversation_session_names",
+      "breakpoints": true
     }
   ]
 }

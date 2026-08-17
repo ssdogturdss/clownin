@@ -4,7 +4,7 @@ import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
 import AdmZip from "adm-zip";
-import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable, conversationSessionsTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, isNotNull, sql, asc, desc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { requireAuth, getUser } from "../lib/auth";
@@ -633,6 +633,21 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       role: "user",
       content: message || "(attachment)",
     });
+
+    // Auto-name the session on its first message (only if no name exists yet).
+    // Uses a simple heuristic: first 6 words of the user's message, title-cased.
+    if (dbMessages.length === 0 && message && typeof message === "string") {
+      const autoName = message
+        .trim()
+        .split(/\s+/)
+        .slice(0, 6)
+        .join(" ")
+        .replace(/[.!?]+$/, "");
+      await db
+        .insert(conversationSessionsTable)
+        .values({ sessionId: activeSessionId, projectId, name: autoName })
+        .onConflictDoNothing();
+    }
 
     // Build user content — plain string unless images are attached
     const textFiles = inboundAttachments.filter((a) => a.kind === "text") as { kind: "text"; name: string; content: string }[];

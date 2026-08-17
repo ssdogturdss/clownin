@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, projectEnvVarsTable } from "@workspace/db";
-import { eq, and, count, sql, asc, desc, isNotNull } from "drizzle-orm";
+import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, conversationSessionsTable, projectEnvVarsTable } from "@workspace/db";
+import { eq, and, count, sql, asc, desc, isNotNull, inArray } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
 import { findTemplate } from "../data/templates";
@@ -365,10 +365,24 @@ router.get(
       ORDER BY MAX(created_at) DESC
     `);
 
+    // Fetch session names in one query for all session ids
+    const sessionIds = sessions.rows
+      .map((r) => r.session_id)
+      .filter((id): id is string => id !== null);
+
+    const nameRows = sessionIds.length
+      ? await db
+          .select({ sessionId: conversationSessionsTable.sessionId, name: conversationSessionsTable.name })
+          .from(conversationSessionsTable)
+          .where(inArray(conversationSessionsTable.sessionId, sessionIds))
+      : [];
+    const nameMap = new Map(nameRows.map((r) => [r.sessionId, r.name]));
+
     // For each session, fetch the first user message as a preview (separate query,
     // avoids correlated subquery complexities across drivers).
     const result: Array<{
       sessionId: string | null;
+      name: string | null;
       preview: string;
       messageCount: number;
       startedAt: string;
@@ -393,6 +407,7 @@ router.get(
 
       result.push({
         sessionId: row.session_id,
+        name: row.session_id ? (nameMap.get(row.session_id) ?? null) : null,
         preview: previewRow ? previewRow.content.slice(0, 120) : "",
         messageCount: Number(row.message_count),
         startedAt: new Date(row.started_at).toISOString(),
@@ -464,6 +479,56 @@ router.delete(
       );
 
     res.json({ ok: true });
+  },
+);
+
+// Rename a session.
+router.patch(
+  "/projects/:id/conversations/:sessionId/name",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+    const sessionId = req.params["sessionId"] as string;
+    const { name } = req.body ?? {};
+    if (typeof name !== "string" || !name.trim()) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+
+    // Verify the caller owns the project
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    // Verify the session actually belongs to this project (prevents IDOR: a
+    // caller supplying a foreign session_id would find no matching message row).
+    const [sessionCheck] = await db
+      .select({ sessionId: conversationMessagesTable.sessionId })
+      .from(conversationMessagesTable)
+      .where(
+        and(
+          eq(conversationMessagesTable.projectId, projectId),
+          eq(conversationMessagesTable.sessionId, sessionId),
+        )
+      )
+      .limit(1);
+    if (!sessionCheck) { res.status(404).json({ error: "session not found" }); return; }
+
+    // Upsert — the session is confirmed to belong to this project
+    await db
+      .insert(conversationSessionsTable)
+      .values({ sessionId, projectId, name: name.trim() })
+      .onConflictDoUpdate({
+        target: conversationSessionsTable.sessionId,
+        set: { name: name.trim() },
+      });
+
+    res.json({ ok: true, name: name.trim() });
   },
 );
 
