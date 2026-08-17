@@ -4,21 +4,259 @@ import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
 import AdmZip from "adm-zip";
-import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable, conversationSessionsTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable, conversationSessionsTable, providerConfigsTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, isNotNull, sql, asc, desc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
+import { decrypt } from "../lib/envCrypto";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 
 const router: IRouter = Router();
 
-function getOpenAI(): OpenAI {
-  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-  if (!apiKey || !baseURL) throw new Error("Replit AI integration not configured");
-  return new OpenAI({ apiKey, baseURL });
+// ── Provider config cache (30 s TTL) ─────────────────────────────────────────
+// Only DB-sourced configs are cached. The env-var fallback is never cached so
+// that a newly-configured DB provider takes effect on the next request (≤30 s).
+interface CachedProvider {
+  provider: string;
+  apiKey: string;
+  baseURL: string;  // unused for anthropic but kept for uniformity
+  model: string;
+  expiresAt: number;
+}
+let _providerCache: CachedProvider | null = null;
+
+// OpenAI-compatible base URLs (Anthropic uses its own SDK, not listed here)
+const PROVIDER_BASE_URLS: Record<string, string> = {
+  openai:     "https://api.openai.com/v1",
+  gemini:     "https://generativelanguage.googleapis.com/v1beta/openai",
+  openrouter: "https://openrouter.ai/api/v1",
+};
+
+// Default model names per provider
+const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  openai:     "gpt-5.6-terra",
+  anthropic:  "claude-opus-4-5",
+  gemini:     "gemini-2.0-flash",
+  openrouter: "openai/gpt-4o",
+};
+
+interface ProviderClientResult {
+  provider: string;
+  model: string;
+  /** Set for OpenAI-compatible providers (openai, gemini, openrouter) */
+  openaiClient?: OpenAI;
+  /** Set only when provider === "anthropic" */
+  anthropicClient?: Anthropic;
+}
+
+async function getProviderClient(): Promise<ProviderClientResult> {
+  const now = Date.now();
+
+  // Return cached DB-sourced entry if still fresh
+  if (_providerCache && now < _providerCache.expiresAt) {
+    return buildResult(_providerCache.provider, _providerCache.apiKey, _providerCache.baseURL, _providerCache.model);
+  }
+
+  // Query DB for the active provider
+  try {
+    const [active] = await db
+      .select()
+      .from(providerConfigsTable)
+      .where(eq(providerConfigsTable.isActive, true))
+      .limit(1);
+
+    if (active && active.encryptedApiKey) {
+      const apiKey  = decrypt(active.encryptedApiKey);
+      const baseURL = PROVIDER_BASE_URLS[active.provider] ?? "https://api.openai.com/v1";
+      const model   = PROVIDER_DEFAULT_MODELS[active.provider] ?? "gpt-5.6-terra";
+      _providerCache = { provider: active.provider, apiKey, baseURL, model, expiresAt: now + 30_000 };
+      return buildResult(active.provider, apiKey, baseURL, model);
+    }
+
+    // No active DB provider — clear any stale cache so next request re-queries
+    _providerCache = null;
+  } catch (err) {
+    // DB error — clear cache and fall through to env-var fallback
+    _providerCache = null;
+    console.warn("[agent] Failed to load provider config from DB:", err);
+  }
+
+  // Fallback: Replit AI integration env vars (OpenAI-compatible), then bare OPENAI_API_KEY.
+  // Not cached — so if an admin configures a DB provider it takes effect
+  // on the very next request rather than being stuck behind a cache window.
+  const apiKey =
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
+    process.env.OPENAI_API_KEY;
+  const baseURL =
+    process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ??
+    "https://api.openai.com/v1";
+
+  if (!apiKey) throw new Error("No AI provider configured — set an active provider in the admin panel or configure OPENAI_API_KEY");
+
+  return buildResult("openai", apiKey, baseURL, "gpt-5.6-terra");
+}
+
+function buildResult(provider: string, apiKey: string, baseURL: string, model: string): ProviderClientResult {
+  if (provider === "anthropic") {
+    return {
+      provider,
+      model,
+      anthropicClient: new Anthropic({ apiKey }),
+    };
+  }
+  return {
+    provider,
+    model,
+    openaiClient: new OpenAI({ apiKey, baseURL }),
+  };
+}
+
+// ── Anthropic ↔ OpenAI format adapters ───────────────────────────────────────
+
+/** Convert the OpenAI messages array to Anthropic's Messages API format. */
+function toAnthropicMessages(
+  messages: OpenAI.ChatCompletionMessageParam[]
+): { system: string; messages: Anthropic.MessageParam[] } {
+  let system = "";
+  const out: Anthropic.MessageParam[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === "system") {
+      system = typeof msg.content === "string" ? msg.content : "";
+      continue;
+    }
+
+    if (msg.role === "user") {
+      const content = msg.content;
+      if (typeof content === "string") {
+        out.push({ role: "user", content });
+      } else if (Array.isArray(content)) {
+        const blocks: Anthropic.ContentBlockParam[] = [];
+        for (const part of content) {
+          if (part.type === "text") {
+            blocks.push({ type: "text", text: part.text });
+          } else if (part.type === "image_url") {
+            const url = part.image_url.url;
+            // data:mime;base64,<data>
+            const m = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (m) {
+              blocks.push({
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: m[1] as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                  data: m[2],
+                },
+              });
+            }
+          }
+        }
+        out.push({ role: "user", content: blocks });
+      }
+      continue;
+    }
+
+    if (msg.role === "assistant") {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (msg.content) {
+        blocks.push({ type: "text", text: String(msg.content) });
+      }
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.type !== "function") continue;
+          let input: Record<string, unknown> = {};
+          try { input = JSON.parse(tc.function.arguments ?? "{}"); } catch { /* ignore */ }
+          blocks.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.function.name,
+            input,
+          });
+        }
+      }
+      out.push({ role: "assistant", content: blocks });
+      continue;
+    }
+
+    if (msg.role === "tool") {
+      // Anthropic expects tool results as user messages
+      const lastMsg = out[out.length - 1];
+      const resultBlock: Anthropic.ToolResultBlockParam = {
+        type: "tool_result",
+        tool_use_id: msg.tool_call_id,
+        content: typeof msg.content === "string" ? msg.content : "",
+      };
+      if (lastMsg?.role === "user" && Array.isArray(lastMsg.content)) {
+        (lastMsg.content as Anthropic.ContentBlockParam[]).push(resultBlock);
+      } else {
+        out.push({ role: "user", content: [resultBlock] });
+      }
+    }
+  }
+
+  return { system, messages: out };
+}
+
+/** Convert OpenAI tool definitions to Anthropic's tool format. */
+function toAnthropicTools(tools: OpenAI.ChatCompletionTool[]): Anthropic.Tool[] {
+  return tools
+    .filter((t): t is OpenAI.ChatCompletionTool & { type: "function" } => t.type === "function")
+    .map((t) => ({
+      name: t.function.name,
+      description: t.function.description ?? "",
+      input_schema: (t.function.parameters ?? { type: "object", properties: {} }) as Anthropic.Tool["input_schema"],
+    }));
+}
+
+/** Run one agent iteration via Anthropic's Messages API (streaming). */
+async function runAnthropicIteration(
+  client: Anthropic,
+  model: string,
+  messages: OpenAI.ChatCompletionMessageParam[],
+  tools: OpenAI.ChatCompletionTool[],
+  onToken: (text: string) => void
+): Promise<{ textContent: string; toolCalls: { id: string; name: string; args: string }[] }> {
+  const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
+  const anthropicTools = toAnthropicTools(tools);
+
+  const stream = client.messages.stream({
+    model,
+    system,
+    messages: anthropicMessages,
+    tools: anthropicTools,
+    max_tokens: 8192,
+  });
+
+  let textContent = "";
+  const toolCalls: { id: string; name: string; args: string }[] = [];
+  // Track which tool_use block we're building input JSON for
+  const toolInputBufs: Map<string, string> = new Map();
+
+  for await (const event of stream) {
+    switch (event.type) {
+      case "content_block_start":
+        if (event.content_block.type === "tool_use") {
+          toolInputBufs.set(event.content_block.id, "");
+          toolCalls.push({ id: event.content_block.id, name: event.content_block.name, args: "" });
+        }
+        break;
+      case "content_block_delta":
+        if (event.delta.type === "text_delta") {
+          textContent += event.delta.text;
+          onToken(event.delta.text);
+        } else if (event.delta.type === "input_json_delta") {
+          // Find the tool call being built (last one without args filled yet)
+          const lastTool = toolCalls[toolCalls.length - 1];
+          if (lastTool) lastTool.args += event.delta.partial_json;
+        }
+        break;
+    }
+  }
+
+  return { textContent, toolCalls };
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -757,7 +995,8 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
 
     sse("thinking");
 
-    const openai = getOpenAI();
+    const providerResult = await getProviderClient();
+    const { model: activeModel } = providerResult;
     const MAX_ITERATIONS = 15;
     let iteration = 0;
     let aborted = false;
@@ -771,21 +1010,23 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
           sse("status", { text: "Reviewing the results, planning what to do next…" });
         }
 
-        // Retry up to 3 times on 429 rate-limit with exponential backoff
-        let stream: Awaited<ReturnType<typeof openai.chat.completions.create>>;
-        {
+        let textContent = "";
+        let toolCalls: { id: string; name: string; args: string }[] = [];
+
+        if (providerResult.anthropicClient) {
+          // ── Anthropic path ──────────────────────────────────────────────────
+          // Uses Anthropic's Messages API (not OpenAI-compatible)
           let attempt = 0;
           const delays = [1000, 2000, 4000];
           while (true) {
             try {
-              stream = await openai.chat.completions.create({
-                model: "gpt-5.6-terra",
+              ({ textContent, toolCalls } = await runAnthropicIteration(
+                providerResult.anthropicClient,
+                activeModel,
                 messages,
-                tools: AGENT_TOOLS,
-                tool_choice: "auto",
-                stream: true,
-                max_completion_tokens: 8192,
-              });
+                AGENT_TOOLS,
+                (token) => { if (!aborted) sse("token", token); }
+              ));
               break;
             } catch (err: unknown) {
               const status = (err as { status?: number }).status;
@@ -798,37 +1039,61 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
               }
             }
           }
-        }
-
-        let textContent = "";
-        const toolCallsMap = new Map<
-          number,
-          { id: string; name: string; args: string }
-        >();
-
-        for await (const chunk of stream) {
-          if (aborted) break;
-          const delta = chunk.choices[0]?.delta;
-          if (!delta) continue;
-
-          if (delta.content) {
-            textContent += delta.content;
-            sse("token", delta.content);
-          }
-
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const prev = toolCallsMap.get(tc.index) ?? { id: "", name: "", args: "" };
-              toolCallsMap.set(tc.index, {
-                id: prev.id || tc.id || "",
-                name: prev.name || tc.function?.name || "",
-                args: prev.args + (tc.function?.arguments ?? ""),
-              });
+        } else {
+          // ── OpenAI-compatible path (OpenAI, Gemini, OpenRouter) ─────────────
+          const openai = providerResult.openaiClient!;
+          let stream: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+          {
+            let attempt = 0;
+            const delays = [1000, 2000, 4000];
+            while (true) {
+              try {
+                stream = await openai.chat.completions.create({
+                  model: activeModel,
+                  messages,
+                  tools: AGENT_TOOLS,
+                  tool_choice: "auto",
+                  stream: true,
+                  max_completion_tokens: 8192,
+                });
+                break;
+              } catch (err: unknown) {
+                const status = (err as { status?: number }).status;
+                if (status === 429 && attempt < delays.length) {
+                  req.log.warn({ attempt, delay: delays[attempt] }, "Rate limited — retrying");
+                  await new Promise((r) => setTimeout(r, delays[attempt]));
+                  attempt++;
+                } else {
+                  throw err;
+                }
+              }
             }
           }
-        }
 
-        const toolCalls = [...toolCallsMap.values()];
+          const toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
+          for await (const chunk of stream) {
+            if (aborted) break;
+            const delta = chunk.choices[0]?.delta;
+            if (!delta) continue;
+
+            if (delta.content) {
+              textContent += delta.content;
+              sse("token", delta.content);
+            }
+
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const prev = toolCallsMap.get(tc.index) ?? { id: "", name: "", args: "" };
+                toolCallsMap.set(tc.index, {
+                  id: prev.id || tc.id || "",
+                  name: prev.name || tc.function?.name || "",
+                  args: prev.args + (tc.function?.arguments ?? ""),
+                });
+              }
+            }
+          }
+          toolCalls = [...toolCallsMap.values()];
+        }
 
         if (toolCalls.length === 0) {
           if (textContent) {

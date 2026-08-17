@@ -12,6 +12,7 @@
     "test:docker": "DOCKER_SMOKE=1 vitest run src/lib/__tests__/dockerSmoke.test.ts --reporter verbose"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "adm-zip": "^0.6.0",
