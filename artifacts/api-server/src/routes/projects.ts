@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, projectsTable, projectFilesTable, usersTable } from "@workspace/db";
-import { eq, and, count, sql } from "drizzle-orm";
+import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable } from "@workspace/db";
+import { eq, and, count, sql, asc } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
 import { findTemplate } from "../data/templates";
@@ -324,5 +324,57 @@ function getDefaultFile(language: string): { path: string; content: string } {
       return { path: "index.js", content: 'console.log("Hello, Clownin! 🤡");\n' };
   }
 }
+
+// ── Conversation history ─────────────────────────────────────────────────────
+
+router.get(
+  "/projects/:id/conversations",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+
+    // Verify ownership
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    const messages = await db
+      .select()
+      .from(conversationMessagesTable)
+      .where(eq(conversationMessagesTable.projectId, projectId))
+      .orderBy(asc(conversationMessagesTable.createdAt))
+      .limit(100);
+
+    res.json(messages);
+  },
+);
+
+router.delete(
+  "/projects/:id/conversations",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    await db
+      .delete(conversationMessagesTable)
+      .where(eq(conversationMessagesTable.projectId, projectId));
+
+    res.json({ ok: true });
+  },
+);
 
 export default router;

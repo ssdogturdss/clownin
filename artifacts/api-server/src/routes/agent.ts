@@ -4,8 +4,8 @@ import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
 import AdmZip from "adm-zip";
-import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable } from "@workspace/db";
-import { eq, and, or, ne, lt, isNull, sql } from "drizzle-orm";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable } from "@workspace/db";
+import { eq, and, or, ne, lt, isNull, sql, asc } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
@@ -584,9 +584,26 @@ Write complete code — no TODOs, no placeholders, no "add your logic here".
 Files:
 ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}${envVarKeys.length > 0 ? `\n\nEnvironment variables (available via process.env / os.environ in user-initiated runs):\n${envVarKeys.map((k) => `  ${k}`).join("\n")}` : ""}`;
 
-    const conversationHistory: OpenAI.ChatCompletionMessageParam[] = Array.isArray(history)
-      ? history
-      : [];
+    // Load history from DB — server is the authoritative source so the
+    // conversation survives app restarts and multi-device sessions.
+    const dbMessages = await db
+      .select()
+      .from(conversationMessagesTable)
+      .where(eq(conversationMessagesTable.projectId, projectId))
+      .orderBy(asc(conversationMessagesTable.createdAt))
+      .limit(40);
+
+    const conversationHistory: OpenAI.ChatCompletionMessageParam[] = dbMessages.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    }));
+
+    // Persist the user's message immediately (survives connection drops)
+    await db.insert(conversationMessagesTable).values({
+      projectId,
+      role: "user",
+      content: message || "(attachment)",
+    });
 
     // Build user content — plain string unless images are attached
     const textFiles = inboundAttachments.filter((a) => a.kind === "text") as { kind: "text"; name: string; content: string }[];
@@ -672,6 +689,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     const MAX_ITERATIONS = 15;
     let iteration = 0;
     let aborted = false;
+    let finalAgentText = ""; // tracked so we can persist it after the loop
     req.on("close", () => { aborted = true; });
 
     try {
@@ -741,7 +759,10 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
         const toolCalls = [...toolCallsMap.values()];
 
         if (toolCalls.length === 0) {
-          if (textContent) sse("message", { text: textContent });
+          if (textContent) {
+            finalAgentText = textContent;
+            sse("message", { text: textContent });
+          }
           sse("done");
           res.end();
           return;
@@ -1275,6 +1296,15 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       sse("error", { message: err instanceof Error ? err.message : "Unknown agent error" });
       sse("done");
       res.end();
+    } finally {
+      // Persist the assistant's reply regardless of how the agent loop exited.
+      // Runs after return statements too, so all exit paths are covered.
+      if (finalAgentText) {
+        await db
+          .insert(conversationMessagesTable)
+          .values({ projectId, role: "assistant", content: finalAgentText })
+          .catch((err) => req.log.warn({ err }, "Failed to persist assistant message"));
+      }
     }
   }
 );

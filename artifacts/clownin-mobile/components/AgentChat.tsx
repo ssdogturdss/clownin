@@ -186,6 +186,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const historyRef = useRef<HistoryEntry[]>([]);
   // Current streaming agent message id
   const streamingIdRef = useRef<string | null>(null);
+  // True once the initial history fetch has completed (success or failure)
+  const [historyLoaded, setHistoryLoaded] = useState(false);
 
   const { data: profile } = useProfile();
   const queryClient = useQueryClient();
@@ -193,6 +195,49 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const scrollToBottom = useCallback(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
+
+  // ── Load persisted history on mount ────────────────────────────────────────
+  useEffect(() => {
+    if (!token) { setHistoryLoaded(true); return; }
+    const baseUrl = resolveApiBaseUrl();
+
+    fetch(`${baseUrl}/api/projects/${projectId}/conversations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: Array<{ id: number; role: string; content: string }>) => {
+        if (!data.length) return;
+        const displayMsgs: AgentMsg[] = data.map((m) => ({
+          id: `hist-${m.id}`,
+          kind: m.role === "user" ? "user" : "agent",
+          text: m.content,
+          streaming: false,
+        }));
+        setMessages(displayMsgs);
+        historyRef.current = data.map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }));
+      })
+      .catch(() => {/* non-fatal */})
+      .finally(() => setHistoryLoaded(true));
+  // Only run once per projectId mount — intentionally omitting token
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // ── Clear conversation ─────────────────────────────────────────────────────
+  const clearConversation = useCallback(async () => {
+    if (!token) return;
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      await fetch(`${baseUrl}/api/projects/${projectId}/conversations`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setMessages([]);
+      historyRef.current = [];
+    } catch { /* non-fatal */ }
+  }, [projectId, token]);
 
   const upsertMsg = useCallback((msg: AgentMsg) => {
     setMessages((prev) => {
@@ -262,9 +307,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
-  // Auto-send initialMessage once on mount
+  // Auto-send initialMessage once on mount — wait for history to load first
+  // so the auto-sent message doesn't race with the history population.
   React.useEffect(() => {
-    if (!initialMessage || autoSentRef.current) return;
+    if (!historyLoaded || !initialMessage || autoSentRef.current) return;
     autoSentRef.current = true;
     const timer = setTimeout(() => send(initialMessage), 400);
     return () => clearTimeout(timer);
@@ -584,6 +630,25 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           <Text style={styles.panelEmoji}>🤡</Text>
           <Text style={[styles.panelTitle, { color: colors.foreground }]}>Agent</Text>
           {busy && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+          <View style={{ flex: 1 }} />
+          {messages.length > 0 && !busy && (
+            <Pressable
+              onPress={() => {
+                Alert.alert(
+                  "Clear conversation",
+                  "This will delete the full conversation history for this project. Your code files are not affected.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Clear", style: "destructive", onPress: clearConversation },
+                  ],
+                );
+              }}
+              hitSlop={8}
+              style={{ padding: 4 }}
+            >
+              <MaterialCommunityIcons name="delete-outline" size={18} color={colors.mutedForeground} />
+            </Pressable>
+          )}
         </View>
 
         {/* Messages / empty state */}
