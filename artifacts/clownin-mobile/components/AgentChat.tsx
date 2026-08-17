@@ -1036,10 +1036,11 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               if (messages.length > 0 && !busy) {
                 // Archive current and start fresh
                 if (currentSessionId) {
+                  const archivedSessionId = currentSessionId;
                   const firstUserMsg = historyRef.current.find((m) => m.role === "user")?.content ?? "";
                   setPastSessions((prev) => [
                     {
-                      sessionId: currentSessionId,
+                      sessionId: archivedSessionId,
                       name: currentSessionName ?? (firstUserMsg ? autoNameFromMessage(firstUserMsg) : null),
                       preview: firstUserMsg.slice(0, 120),
                       messageCount: messages.filter((m) => m.kind === "user" || m.kind === "agent").length,
@@ -1048,6 +1049,30 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                     },
                     ...prev,
                   ]);
+
+                  // Fetch the sessions list in the background so the archived card
+                  // shows the server-generated name rather than the locally-derived
+                  // fallback (the server may have assigned a name that the client
+                  // never received after the initial load).
+                  if (token) {
+                    const baseUrl = resolveApiBaseUrl();
+                    fetch(`${baseUrl}/api/projects/${projectId}/conversations`, {
+                      headers: { Authorization: `Bearer ${token}` },
+                    })
+                      .then((r) => (r.ok ? r.json() : null))
+                      .then((sessions: SessionSummary[] | null) => {
+                        if (!sessions) return;
+                        const match = sessions.find((s) => s.sessionId === archivedSessionId);
+                        if (match?.name) {
+                          setPastSessions((prev) =>
+                            prev.map((s) =>
+                              s.sessionId === archivedSessionId ? { ...s, name: match.name } : s,
+                            ),
+                          );
+                        }
+                      })
+                      .catch(() => {/* non-fatal */});
+                  }
                 }
                 startNewConversation();
               }
