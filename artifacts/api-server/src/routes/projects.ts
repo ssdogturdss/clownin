@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, conversationSessionsTable, projectEnvVarsTable } from "@workspace/db";
-import { eq, and, count, sql, asc, desc, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, count, sql, asc, desc, isNotNull, isNull, inArray } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
 import { findTemplate } from "../data/templates";
@@ -420,6 +420,8 @@ router.get(
 );
 
 // Returns all messages for a specific session.
+// Use the sentinel value "legacy" as the sessionId to retrieve messages where
+// session_id IS NULL (i.e. messages created before the session_id migration).
 router.get(
   "/projects/:id/conversations/:sessionId",
   requireAuth,
@@ -436,15 +438,16 @@ router.get(
       .limit(1);
     if (!project) { res.status(404).json({ error: "project not found" }); return; }
 
+    // "legacy" is the sentinel for pre-migration rows where session_id IS NULL
+    const sessionFilter =
+      sessionId === "legacy"
+        ? isNull(conversationMessagesTable.sessionId)
+        : eq(conversationMessagesTable.sessionId, sessionId);
+
     const messages = await db
       .select()
       .from(conversationMessagesTable)
-      .where(
-        and(
-          eq(conversationMessagesTable.projectId, projectId),
-          eq(conversationMessagesTable.sessionId, sessionId),
-        )
-      )
+      .where(and(eq(conversationMessagesTable.projectId, projectId), sessionFilter))
       .orderBy(asc(conversationMessagesTable.createdAt))
       .limit(200);
 
@@ -453,6 +456,8 @@ router.get(
 );
 
 // Deletes all messages for a specific session.
+// Use the sentinel value "legacy" as the sessionId to delete messages where
+// session_id IS NULL (i.e. messages created before the session_id migration).
 router.delete(
   "/projects/:id/conversations/:sessionId",
   requireAuth,
@@ -469,14 +474,15 @@ router.delete(
       .limit(1);
     if (!project) { res.status(404).json({ error: "project not found" }); return; }
 
+    // "legacy" is the sentinel for pre-migration rows where session_id IS NULL
+    const sessionFilter =
+      sessionId === "legacy"
+        ? isNull(conversationMessagesTable.sessionId)
+        : eq(conversationMessagesTable.sessionId, sessionId);
+
     await db
       .delete(conversationMessagesTable)
-      .where(
-        and(
-          eq(conversationMessagesTable.projectId, projectId),
-          eq(conversationMessagesTable.sessionId, sessionId),
-        )
-      );
+      .where(and(eq(conversationMessagesTable.projectId, projectId), sessionFilter));
 
     res.json({ ok: true });
   },

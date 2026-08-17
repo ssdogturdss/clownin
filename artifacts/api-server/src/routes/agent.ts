@@ -588,10 +588,14 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     // ── Session resolution ────────────────────────────────────────────────────
     // If the client sends a sessionId, use it. Otherwise find the latest
     // session for this project (so the agent continues the active thread).
-    // If no sessions exist at all, generate a fresh UUID.
+    // If no UUID sessions exist but pre-migration NULL-session messages do,
+    // load those as history context so the user's old conversation isn't lost.
+    // In that case a fresh UUID is still assigned for new messages going forward.
     let activeSessionId: string;
+    let historyFilter: ReturnType<typeof eq> | ReturnType<typeof isNull>;
     if (clientSessionId && typeof clientSessionId === "string") {
       activeSessionId = clientSessionId;
+      historyFilter = eq(conversationMessagesTable.sessionId, activeSessionId);
     } else {
       const [latestRow] = await db
         .select({ sessionId: conversationMessagesTable.sessionId })
@@ -604,7 +608,31 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
         )
         .orderBy(desc(conversationMessagesTable.createdAt))
         .limit(1);
-      activeSessionId = latestRow?.sessionId ?? randomUUID();
+
+      if (latestRow?.sessionId) {
+        activeSessionId = latestRow.sessionId;
+        historyFilter = eq(conversationMessagesTable.sessionId, activeSessionId);
+      } else {
+        // No UUID sessions found — check if legacy NULL-session messages exist
+        // so we can restore that history as context for the AI.
+        const [nullRow] = await db
+          .select({ id: conversationMessagesTable.id })
+          .from(conversationMessagesTable)
+          .where(
+            and(
+              eq(conversationMessagesTable.projectId, projectId),
+              isNull(conversationMessagesTable.sessionId),
+            )
+          )
+          .limit(1);
+
+        activeSessionId = randomUUID();
+        // If legacy messages exist, load them as context; new messages still get
+        // the fresh UUID so the project migrates to proper session tracking.
+        historyFilter = nullRow
+          ? isNull(conversationMessagesTable.sessionId)
+          : eq(conversationMessagesTable.sessionId, activeSessionId);
+      }
     }
 
     // Load history from DB — server is the authoritative source so the
@@ -615,7 +643,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       .where(
         and(
           eq(conversationMessagesTable.projectId, projectId),
-          eq(conversationMessagesTable.sessionId, activeSessionId),
+          historyFilter,
         )
       )
       .orderBy(asc(conversationMessagesTable.createdAt))

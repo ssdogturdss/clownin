@@ -184,12 +184,14 @@ function PastSessionCard({ projectId, session, colors, onDelete, onRename }: Pas
     if (expanded) { setExpanded(false); return; }
     setExpanded(true);
     if (messages !== null) return; // already loaded
-    if (!session.sessionId || !token) return;
+    if (!token) return;
+    // "legacy" is the API sentinel for pre-migration rows where session_id IS NULL
+    const apiSessionId = session.sessionId ?? "legacy";
     setLoading(true);
     try {
       const baseUrl = resolveApiBaseUrl();
       const r = await fetch(
-        `${baseUrl}/api/projects/${projectId}/conversations/${session.sessionId}`,
+        `${baseUrl}/api/projects/${projectId}/conversations/${apiSessionId}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (r.ok) setMessages(await r.json());
@@ -443,16 +445,21 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         const [latest, ...older] = sessions;
         setPastSessions(older);
 
-        if (!latest.sessionId) return; // legacy null-session, skip
+        // "legacy" is the API sentinel for pre-migration rows where session_id IS NULL.
+        // We still load their messages but leave currentSessionId as null so that
+        // the next message the user sends starts a fresh UUID session.
+        const apiSessionId = latest.sessionId ?? "legacy";
 
-        // Set the current session id
-        currentSessionIdRef.current = latest.sessionId;
-        setCurrentSessionId(latest.sessionId);
+        if (latest.sessionId) {
+          currentSessionIdRef.current = latest.sessionId;
+          setCurrentSessionId(latest.sessionId);
+        }
+        // (null sessionId → currentSessionId stays null → next send creates a new UUID session)
 
         // Load messages for the current session
         try {
           const r = await fetch(
-            `${baseUrl}/api/projects/${projectId}/conversations/${latest.sessionId}`,
+            `${baseUrl}/api/projects/${projectId}/conversations/${apiSessionId}`,
             { headers: { Authorization: `Bearer ${token}` } },
           );
           if (!r.ok) return;
@@ -489,15 +496,19 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
 
   // ── Clear current session (delete + reset) ─────────────────────────────────
   const clearConversation = useCallback(async () => {
-    if (!token || !currentSessionIdRef.current) {
+    if (!token) {
       setMessages([]);
       historyRef.current = [];
       return;
     }
+    // "legacy" is the API sentinel for pre-migration rows where session_id IS NULL.
+    // Even when currentSessionIdRef is null (legacy session active), we still call
+    // the API so the rows are actually deleted rather than just cleared locally.
+    const apiSessionId = currentSessionIdRef.current ?? "legacy";
     try {
       const baseUrl = resolveApiBaseUrl();
       await fetch(
-        `${baseUrl}/api/projects/${projectId}/conversations/${currentSessionIdRef.current}`,
+        `${baseUrl}/api/projects/${projectId}/conversations/${apiSessionId}`,
         { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
       );
       setMessages([]);
@@ -509,11 +520,13 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
 
   // ── Delete a past session ─────────────────────────────────────────────────
   const deletePastSession = useCallback(async (sessionId: string | null) => {
-    if (!token || !sessionId) return;
+    if (!token) return;
+    // "legacy" is the API sentinel for pre-migration rows with session_id IS NULL
+    const apiSessionId = sessionId ?? "legacy";
     try {
       const baseUrl = resolveApiBaseUrl();
       await fetch(
-        `${baseUrl}/api/projects/${projectId}/conversations/${sessionId}`,
+        `${baseUrl}/api/projects/${projectId}/conversations/${apiSessionId}`,
         { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
       );
       setPastSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
