@@ -17,28 +17,70 @@ const router: IRouter = Router();
 
 // ── requireAdmin middleware ────────────────────────────────────────────────────
 
-function getAdminUserIds(): Set<number> {
+/**
+ * Parse ADMIN_USER_IDS — accepts a comma-separated mix of:
+ *   - numeric user IDs   e.g. "1,3"
+ *   - usernames          e.g. "SS, ssdogturdss"
+ *   - emails             e.g. "ss@clownin.dev"
+ *
+ * Numeric tokens are resolved immediately; non-numeric tokens are looked up
+ * in the DB the first time they are encountered and cached for the process lifetime.
+ */
+const _adminUserIdCache = new Map<string, number>();
+
+async function resolveAdminUserIds(): Promise<Set<number>> {
   const raw = process.env.ADMIN_USER_IDS ?? "";
-  return new Set(
-    raw
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n)),
-  );
+  if (!raw.trim()) return new Set();
+
+  const tokens = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const ids = new Set<number>();
+
+  for (const token of tokens) {
+    const numeric = parseInt(token, 10);
+    if (!isNaN(numeric) && String(numeric) === token) {
+      ids.add(numeric);
+      continue;
+    }
+    // Non-numeric: look up by username or email
+    if (_adminUserIdCache.has(token)) {
+      ids.add(_adminUserIdCache.get(token)!);
+      continue;
+    }
+    try {
+      const isEmail = token.includes("@");
+      const [row] = await db
+        .select({ id: usersTable.id })
+        .from(usersTable)
+        .where(isEmail ? eq(usersTable.email, token) : eq(usersTable.username, token))
+        .limit(1);
+      if (row) {
+        _adminUserIdCache.set(token, row.id);
+        ids.add(row.id);
+      }
+    } catch {
+      // DB unavailable — skip this token
+    }
+  }
+  return ids;
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  const adminIds = getAdminUserIds();
-  if (adminIds.size === 0) {
+  const raw = process.env.ADMIN_USER_IDS ?? "";
+  if (!raw.trim()) {
     res.status(503).json({ error: "Admin access is not configured. Set ADMIN_USER_IDS." });
     return;
   }
   const { userId } = getUser(req);
-  if (!adminIds.has(userId)) {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
-  next();
+
+  resolveAdminUserIds().then((adminIds) => {
+    if (!adminIds.has(userId)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    next();
+  }).catch(() => {
+    res.status(503).json({ error: "Could not resolve admin user list" });
+  });
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

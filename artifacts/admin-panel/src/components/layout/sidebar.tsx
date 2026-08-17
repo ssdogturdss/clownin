@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FolderOpen, Tag, Cpu, Trash2 } from "lucide-react";
+import { LayoutDashboard, Users, FolderOpen, Tag, Cpu } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -10,12 +10,7 @@ const navItems = [
 ];
 
 export function Sidebar({ children }: { children: React.ReactNode }) {
-  const [location, setLocation] = useLocation();
-
-  const handleLogout = () => {
-    localStorage.removeItem("admin_token");
-    setLocation("/login");
-  };
+  const [location] = useLocation();
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -46,16 +41,6 @@ export function Sidebar({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="p-4 border-t border-sidebar-border">
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-            data-testid="button-logout"
-          >
-            <Trash2 className="w-5 h-5" />
-            Logout
-          </button>
-        </div>
       </div>
       <main className="flex-1 flex flex-col min-w-0 overflow-auto">
         <div className="p-8 max-w-7xl mx-auto w-full">

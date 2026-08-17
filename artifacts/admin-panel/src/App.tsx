@@ -4,19 +4,9 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
-// Layout & Auth
-import { RequireAuth } from '@/components/layout/require-auth';
 import { Sidebar } from '@/components/layout/sidebar';
-
-// Pages
-import Login from '@/pages/login';
 import Dashboard from '@/pages/dashboard';
 import UsersPage from '@/pages/users';
 import ProjectsPage from '@/pages/projects';
@@ -28,57 +18,16 @@ const queryClient = new QueryClient();
 function Router() {
   return (
     <RoutedErrorBoundary>
-      <Switch>
-        <Route path="/login" component={Login} />
-        
-        <Route path="/">
-          <RequireAuth>
-            <Sidebar>
-              <Dashboard />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-        
-        <Route path="/users">
-          <RequireAuth>
-            <Sidebar>
-              <UsersPage />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-
-        <Route path="/projects">
-          <RequireAuth>
-            <Sidebar>
-              <ProjectsPage />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-
-        <Route path="/promo-codes">
-          <RequireAuth>
-            <Sidebar>
-              <PromoCodesPage />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-
-        <Route path="/providers">
-          <RequireAuth>
-            <Sidebar>
-              <ProvidersPage />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-
-        <Route>
-          <RequireAuth>
-            <Sidebar>
-              <NotFound />
-            </Sidebar>
-          </RequireAuth>
-        </Route>
-      </Switch>
+      <Sidebar>
+        <Switch>
+          <Route path="/" component={Dashboard} />
+          <Route path="/users" component={UsersPage} />
+          <Route path="/projects" component={ProjectsPage} />
+          <Route path="/promo-codes" component={PromoCodesPage} />
+          <Route path="/providers" component={ProvidersPage} />
+          <Route component={NotFound} />
+        </Switch>
+      </Sidebar>
     </RoutedErrorBoundary>
   );
 }
