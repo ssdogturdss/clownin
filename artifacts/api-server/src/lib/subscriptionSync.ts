@@ -1,10 +1,22 @@
 /**
- * Daily subscription sync job.
+ * Subscription sync job.
  *
- * Runs once per day (at 03:00 server time) and verifies every user whose
- * subscriptionTier is 'pro' still has an active entitlement in RevenueCat.
- * If RevenueCat says the entitlement is gone or expired the user is reverted
- * to 'free' so stale state from a missed/failed webhook delivery is healed.
+ * Runs every 6 hours and verifies every user whose subscriptionTier is 'pro'
+ * still has an active entitlement in RevenueCat. If RevenueCat says the
+ * entitlement is gone or expired the user is reverted to 'free' so stale state
+ * from a missed/failed webhook delivery is healed.
+ *
+ * Running every 6 hours (instead of once per day) means the maximum recovery
+ * window after a RevenueCat outage is 6 hours rather than 24 hours. The revert
+ * logic is fully idempotent — running it multiple times on the same user is
+ * safe and produces no duplicate side-effects.
+ *
+ * Catch-up on partial failure:
+ *   When a sync run finishes with errors > 0 (RevenueCat returned 5xx for some
+ *   users), a one-shot follow-up sync is automatically scheduled
+ *   SYNC_CATCHUP_DELAY_MS milliseconds later (default: 2 hours). At most one
+ *   catch-up is queued at a time; if the catch-up run also has errors the next
+ *   scheduled 6-hour cron will pick up naturally.
  *
  * Required environment variable:
  *   REVENUECAT_API_KEY — the RevenueCat secret (or public) API key used to
@@ -29,6 +41,11 @@
  *                            with a `text` field. The payload includes the
  *                            error count, users checked, and UTC timestamp so
  *                            the on-call team has actionable context immediately.
+ *
+ * Catch-up delay:
+ *   SYNC_CATCHUP_DELAY_MS — milliseconds to wait before the automatic follow-up
+ *                           sync when a run finishes with errors. Default: 7200000
+ *                           (2 hours). Set to 0 to disable catch-up scheduling.
  */
 
 import cron from "node-cron";
@@ -41,6 +58,15 @@ const RC_API_BASE = "https://api.revenuecat.com/v1";
 
 /** How long to wait (ms) before the first retry on a 429. Doubles each attempt. */
 const BACKOFF_BASE_MS = 1_000;
+
+/** Default delay (ms) before a catch-up sync is triggered after errors. 2 hours. */
+const DEFAULT_CATCHUP_DELAY_MS = 2 * 60 * 60 * 1_000;
+
+/**
+ * Handle for the pending catch-up timer. Kept module-level so we can cancel a
+ * previous pending catch-up if a new one would otherwise stack up.
+ */
+let pendingCatchup: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Send an out-of-band alert to the configured webhook URL when the sync
@@ -162,11 +188,47 @@ async function hasActiveProEntitlement(
 }
 
 /**
+ * Schedule a one-shot catch-up sync to run after `delayMs` milliseconds.
+ *
+ * At most one catch-up is queued at a time. If a previous catch-up is still
+ * pending it is cancelled and replaced so timers do not accumulate during a
+ * prolonged outage where every run returns errors.
+ */
+function scheduleCatchupSync(delayMs: number): void {
+  // Cancel any existing pending catch-up
+  if (pendingCatchup !== null) {
+    clearTimeout(pendingCatchup);
+    logger.info(
+      "subscriptionSync: replaced existing catch-up timer with a fresh one",
+    );
+  }
+
+  const delayMinutes = Math.round(delayMs / 60_000);
+  logger.info(
+    { delayMs, delayMinutes },
+    "subscriptionSync: scheduling catch-up sync due to errors",
+  );
+
+  pendingCatchup = setTimeout(() => {
+    pendingCatchup = null;
+    logger.info("subscriptionSync: running catch-up sync after error delay");
+    syncSubscriptions().catch((err) => {
+      logger.error({ err }, "subscriptionSync: unhandled error in catch-up sync");
+    });
+  }, delayMs);
+}
+
+/**
  * Fetch all pro users from the database and revert those whose RevenueCat
  * entitlement is no longer active.
  *
  * Requests run at most `concurrency` at a time to avoid hammering the
  * RevenueCat API when there are many Pro users.
+ *
+ * When the run finishes with errors > 0 a catch-up sync is automatically
+ * scheduled via `scheduleCatchupSync` so users missed during a RevenueCat
+ * outage are recovered as soon as the service comes back, rather than waiting
+ * for the next scheduled cron window (up to 6 hours away).
  */
 export async function syncSubscriptions(): Promise<void> {
   const apiKey = process.env.REVENUECAT_API_KEY;
@@ -186,6 +248,10 @@ export async function syncSubscriptions(): Promise<void> {
   );
   const errorRetries = parseInt(
     process.env.REVENUECAT_SYNC_ERROR_RETRIES ?? "2",
+    10,
+  );
+  const catchupDelayMs = parseInt(
+    process.env.SYNC_CATCHUP_DELAY_MS ?? String(DEFAULT_CATCHUP_DELAY_MS),
     10,
   );
 
@@ -283,6 +349,13 @@ export async function syncSubscriptions(): Promise<void> {
         "subscriptionSync: SYNC_ALERT_WEBHOOK_URL not set — skipping out-of-band alert",
       );
     }
+
+    // Schedule a catch-up sync to recover users that were skipped during a
+    // RevenueCat outage. If SYNC_CATCHUP_DELAY_MS is 0 the operator has
+    // opted out of automatic catch-ups.
+    if (catchupDelayMs > 0) {
+      scheduleCatchupSync(catchupDelayMs);
+    }
   }
 
   logger.info(
@@ -292,14 +365,26 @@ export async function syncSubscriptions(): Promise<void> {
 }
 
 /**
- * Register the daily cron job (runs at 03:00 every day).
+ * Register the subscription sync cron job.
+ *
+ * The job runs every 6 hours (at 00:00, 06:00, 12:00, 18:00 server time).
+ * Running every 6 hours instead of once per day means that in the worst case
+ * (RevenueCat down for an entire 6-hour window) users who should have been
+ * reverted are caught within 6 hours rather than up to 24 hours.
+ *
+ * The underlying revert logic is fully idempotent — re-checking a user who is
+ * already on "free" simply confirms they have no active entitlement and makes
+ * no database write. Users already correctly on "pro" are left untouched.
+ *
  * Safe to call multiple times — the cron task is returned so callers can
  * stop it in tests.
  */
 export function startSubscriptionSyncJob(): ReturnType<typeof cron.schedule> {
-  logger.info("subscriptionSync: scheduling daily sync at 03:00");
+  logger.info(
+    "subscriptionSync: scheduling sync every 6 hours (00:00, 06:00, 12:00, 18:00)",
+  );
 
-  const task = cron.schedule("0 3 * * *", () => {
+  const task = cron.schedule("0 */6 * * *", () => {
     syncSubscriptions().catch((err) => {
       logger.error({ err }, "subscriptionSync: unhandled error in sync job");
     });
