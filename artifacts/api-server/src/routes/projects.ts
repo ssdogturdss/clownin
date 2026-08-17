@@ -370,11 +370,17 @@ router.get(
       .map((r) => r.session_id)
       .filter((id): id is string => id !== null);
 
+    // Scope by both session_id AND project_id so that if a session_id somehow
+    // appears in conversation_sessions for a different project, it cannot bleed
+    // its name into this project's sessions list.
     const nameRows = sessionIds.length
       ? await db
           .select({ sessionId: conversationSessionsTable.sessionId, name: conversationSessionsTable.name })
           .from(conversationSessionsTable)
-          .where(inArray(conversationSessionsTable.sessionId, sessionIds))
+          .where(and(
+            inArray(conversationSessionsTable.sessionId, sessionIds),
+            eq(conversationSessionsTable.projectId, projectId),
+          ))
       : [];
     const nameMap = new Map(nameRows.map((r) => [r.sessionId, r.name]));
 

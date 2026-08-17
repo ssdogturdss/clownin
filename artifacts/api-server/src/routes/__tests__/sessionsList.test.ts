@@ -390,6 +390,84 @@ describe("GET /api/projects/:id/conversations", () => {
     });
   });
 
+  // ── Cross-project isolation ──────────────────────────────────────────────────
+
+  it("does not leak a session name that belongs to a different project", async () => {
+    // Scenario: session "sess-foreign" appears in conversation_messages for
+    // project 5 (the queried project), but the conversation_sessions row for
+    // that session_id carries project_id = 9 (a completely different project).
+    //
+    // The name-lookup query is scoped by BOTH session_id AND project_id, so
+    // db.select() returns no matching row → name must be null.
+    const FOREIGN_SESSION_ID = "sess-foreign-project9";
+
+    // 1. Project ownership check → project 5 found
+    queueSelect([{ id: 5 }]);
+    // 2. Raw SQL aggregate → one session (its messages live in project 5)
+    mockDbExecute.mockResolvedValueOnce({
+      rows: [makeSessionRow(FOREIGN_SESSION_ID)],
+    });
+    // 3. Name lookup scoped to project 5 → no match because the
+    //    conversation_sessions row belongs to project 9, not 5
+    queueSelect([]);
+    // 4. Preview message
+    queueSelect([{ content: "Hello from a cross-project session" }]);
+
+    const res = await request(app)
+      .get("/api/projects/5/conversations")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      sessionId: FOREIGN_SESSION_ID,
+      // Name must not bleed from the other project
+      name: null,
+      preview: "Hello from a cross-project session",
+    });
+  });
+
+  it("only returns names for sessions that belong to the queried project", async () => {
+    // Two sessions: one whose conversation_sessions row matches project 5,
+    // one whose row belongs to project 7.  Only the first should have a name.
+    const OWN_SESSION = "sess-owned-by-5";
+    const FOREIGN_SESSION = "sess-owned-by-7";
+
+    // 1. Project ownership
+    queueSelect([{ id: 5 }]);
+    // 2. Both sessions appear in conversation_messages for project 5
+    mockDbExecute.mockResolvedValueOnce({
+      rows: [
+        makeSessionRow(OWN_SESSION, { lastAt: LATER }),
+        makeSessionRow(FOREIGN_SESSION, { lastAt: NOW }),
+      ],
+    });
+    // 3. Name lookup filtered by project_id = 5 → only OWN_SESSION matches
+    queueSelect([{ sessionId: OWN_SESSION, name: "My real session" }]);
+    // 4. Preview for OWN_SESSION
+    queueSelect([{ content: "Build a todo app" }]);
+    // 5. Preview for FOREIGN_SESSION
+    queueSelect([{ content: "Build a chat app" }]);
+
+    const res = await request(app)
+      .get("/api/projects/5/conversations")
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+
+    const owned = res.body.find(
+      (s: { sessionId: string }) => s.sessionId === OWN_SESSION,
+    );
+    const foreign = res.body.find(
+      (s: { sessionId: string }) => s.sessionId === FOREIGN_SESSION,
+    );
+
+    expect(owned).toMatchObject({ name: "My real session" });
+    // Foreign session's name must not appear — scoped-out by project_id filter
+    expect(foreign).toMatchObject({ name: null });
+  });
+
   // ── Timestamps are ISO strings ───────────────────────────────────────────────
 
   it("returns startedAt and lastAt as ISO 8601 strings", async () => {
