@@ -424,6 +424,9 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
 
   // ── Active session name (inline rename) ───────────────────────────────────
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
+  // Ref that always mirrors currentSessionName so the archive closure always
+  // captures the absolute latest value regardless of render timing.
+  const currentSessionNameRef = useRef<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState(false);
   const [sessionNameInput, setSessionNameInput] = useState("");
   const [savingSessionName, setSavingSessionName] = useState(false);
@@ -460,7 +463,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         if (latest.sessionId) {
           currentSessionIdRef.current = latest.sessionId;
           setCurrentSessionId(latest.sessionId);
-          if (latest.name) setCurrentSessionName(latest.name);
+          if (latest.name) {
+            currentSessionNameRef.current = latest.name;
+            setCurrentSessionName(latest.name);
+          }
         }
         // (null sessionId → currentSessionId stays null → next send creates a new UUID session)
 
@@ -498,6 +504,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     const newId = generateUUID();
     currentSessionIdRef.current = newId;
     setCurrentSessionId(newId);
+    currentSessionNameRef.current = null;
     setCurrentSessionName(null);
     setMessages([]);
     historyRef.current = [];
@@ -520,6 +527,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         },
       );
       if (r.ok) {
+        currentSessionNameRef.current = trimmed;
         setCurrentSessionName(trimmed);
       } else {
         // Revert input on failure
@@ -1041,7 +1049,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                   setPastSessions((prev) => [
                     {
                       sessionId: archivedSessionId,
-                      name: currentSessionName ?? (firstUserMsg ? autoNameFromMessage(firstUserMsg) : null),
+                      name: currentSessionNameRef.current ?? (firstUserMsg ? autoNameFromMessage(firstUserMsg) : null),
                       preview: firstUserMsg.slice(0, 120),
                       messageCount: messages.filter((m) => m.kind === "user" || m.kind === "agent").length,
                       startedAt: new Date().toISOString(),
