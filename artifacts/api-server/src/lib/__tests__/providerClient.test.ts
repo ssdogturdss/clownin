@@ -1,0 +1,284 @@
+/**
+ * Unit tests for getProviderClient().
+ *
+ * Covers three critical cache-bypass scenarios:
+ *   (a) A decrypt error does NOT populate the cache — the corrected key is
+ *       picked up on the very next call without a cache wait.
+ *   (b) After the key is fixed, the next call uses the corrected key
+ *       immediately (no 30-second wait).
+ *   (c) A DB error falls through to the env-var fallback without caching —
+ *       the next call re-queries the DB rather than serving a stale entry.
+ *
+ * All external I/O is mocked:
+ *   - `@workspace/db`      → vi.mock (DB never touched)
+ *   - `./envCrypto.js`     → vi.mock (decrypt is a controlled stub)
+ *   - `openai`             → vi.mock (no real HTTP; constructor-safe stub)
+ *   - `@anthropic-ai/sdk`  → vi.mock (no real HTTP; constructor-safe stub)
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ── Hoisted mock state ────────────────────────────────────────────────────────
+// vi.hoisted() runs before module resolution so these refs are safe to use
+// inside vi.mock() factory callbacks.
+
+const { mockLimit, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
+  const mockLimit  = vi.fn().mockResolvedValue([]);
+  const mockWhere  = vi.fn(() => ({ limit: mockLimit }));
+  const mockFrom   = vi.fn(() => ({ where: mockWhere }));
+  const mockSelect = vi.fn(() => ({ from: mockFrom }));
+  return { mockLimit, mockWhere, mockFrom, mockSelect };
+});
+
+const { mockDecrypt } = vi.hoisted(() => {
+  const mockDecrypt = vi.fn<(s: string) => string>();
+  return { mockDecrypt };
+});
+
+// ── Module mocks ──────────────────────────────────────────────────────────────
+
+vi.mock("@workspace/db", () => ({
+  db: { select: mockSelect },
+  providerConfigsTable: { isActive: "isActive" },
+}));
+
+vi.mock("drizzle-orm", () => ({
+  eq: vi.fn((_col: unknown, val: unknown) => ({ col: _col, val })),
+}));
+
+vi.mock("../envCrypto.js", () => ({
+  decrypt: mockDecrypt,
+}));
+
+// Plain vi.fn() stubs — safe to call with `new` (vitest mock functions are
+// regular functions and can act as constructors).
+vi.mock("openai", () => ({ default: vi.fn() }));
+vi.mock("@anthropic-ai/sdk", () => ({ default: vi.fn() }));
+
+// ── Import after mocks ────────────────────────────────────────────────────────
+
+import { getProviderClient, _resetProviderCacheForTests } from "../providerClient.js";
+import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+
+const MockOpenAI    = vi.mocked(OpenAI);
+const MockAnthropic = vi.mocked(Anthropic);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Build a minimal active-provider DB row. */
+function activeRow(provider = "openai", encryptedApiKey = "enc-key") {
+  return { provider, encryptedApiKey, isActive: true };
+}
+
+// ── Setup / teardown ──────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  // Reset the in-process cache so every test starts cold.
+  _resetProviderCacheForTests();
+
+  // Clear mock call history.
+  mockSelect.mockClear();
+  mockFrom.mockClear();
+  mockWhere.mockClear();
+  mockLimit.mockClear();
+  mockDecrypt.mockReset();
+  MockOpenAI.mockClear();
+  MockAnthropic.mockClear();
+
+  // Default: no active DB provider.
+  mockLimit.mockResolvedValue([]);
+
+  // Default: fallback env vars present.
+  process.env.AI_INTEGRATIONS_OPENAI_API_KEY = "env-key";
+  process.env.AI_INTEGRATIONS_OPENAI_BASE_URL = "https://api.openai.com/v1";
+  delete process.env.OPENAI_API_KEY;
+});
+
+// ── (a) Decrypt error does NOT populate the cache ─────────────────────────────
+
+describe("getProviderClient — decrypt error bypasses cache", () => {
+  it("falls back to env-var on decrypt error", async () => {
+    mockLimit.mockResolvedValue([activeRow()]);
+    mockDecrypt.mockImplementation(() => { throw new Error("decryption failed"); });
+
+    const result = await getProviderClient();
+
+    // Should have fallen through to the env-var fallback (openai client created).
+    expect(result.provider).toBe("openai");
+    expect(result.openaiClient).toBeDefined();
+  });
+
+  it("uses the env-var key (not the DB key) when decrypt fails", async () => {
+    mockLimit.mockResolvedValue([activeRow()]);
+    mockDecrypt.mockImplementation(() => { throw new Error("bad key"); });
+
+    await getProviderClient();
+
+    // OpenAI should have been constructed with the env-var key.
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "env-key" }),
+    );
+  });
+
+  it("does NOT cache after a decrypt error — next call re-queries DB", async () => {
+    mockLimit.mockResolvedValue([activeRow()]);
+    mockDecrypt.mockImplementation(() => { throw new Error("bad key"); });
+
+    // First call — decrypt fails, fallback is used.
+    await getProviderClient();
+
+    // Second call — DB should be queried again (not served from cache).
+    await getProviderClient();
+
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── (b) Fixed key is picked up immediately on the next call ───────────────────
+
+describe("getProviderClient — fixed key takes effect immediately", () => {
+  it("uses the corrected key on the call immediately after a decrypt failure", async () => {
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-fixed")]);
+
+    // First call: decrypt throws.
+    mockDecrypt.mockImplementationOnce(() => { throw new Error("corrupt key"); });
+    await getProviderClient(); // falls back to env-var
+
+    MockOpenAI.mockClear(); // discard the env-var call
+
+    // Key is now fixed — decrypt succeeds.
+    mockDecrypt.mockReturnValue("sk-corrected-key");
+
+    await getProviderClient();
+
+    // The OpenAI constructor should have been called with the corrected key.
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-corrected-key" }),
+    );
+  });
+
+  it("does not require waiting for the 30-second TTL after a decrypt failure", async () => {
+    // Simulate a decrypt failure on call 1, then success on call 2 immediately.
+    mockLimit.mockResolvedValue([activeRow("openai", "enc")]);
+    mockDecrypt
+      .mockImplementationOnce(() => { throw new Error("corrupt"); })
+      .mockReturnValueOnce("sk-fresh-key");
+
+    await getProviderClient(); // call 1: decrypt fails, no cache
+    const result = await getProviderClient(); // call 2: decrypt succeeds immediately
+
+    expect(result.provider).toBe("openai");
+    // DB was queried twice (no cache hit after the error).
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── (c) DB error falls through to env-var without caching ────────────────────
+
+describe("getProviderClient — DB error falls through to env-var without caching", () => {
+  it("returns the env-var fallback when the DB query throws", async () => {
+    mockLimit.mockRejectedValue(new Error("connection refused"));
+
+    const result = await getProviderClient();
+
+    expect(result.provider).toBe("openai");
+    expect(result.openaiClient).toBeDefined();
+  });
+
+  it("uses the env-var key when the DB throws", async () => {
+    mockLimit.mockRejectedValue(new Error("connection refused"));
+
+    await getProviderClient();
+
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "env-key" }),
+    );
+  });
+
+  it("does NOT cache after a DB error — next call re-queries DB", async () => {
+    mockLimit
+      .mockRejectedValueOnce(new Error("DB timeout"))
+      .mockResolvedValueOnce([]); // second call succeeds (no active row)
+
+    await getProviderClient(); // DB error → env-var fallback
+    await getProviderClient(); // should re-query, not serve from cache
+
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the corrected DB provider immediately after a transient DB error", async () => {
+    mockDecrypt.mockReturnValue("sk-db-key");
+    mockLimit
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce([activeRow("openai", "enc-ok")]);
+
+    await getProviderClient(); // DB error → env-var
+
+    MockOpenAI.mockClear();
+
+    const result = await getProviderClient(); // DB is back → use DB provider
+
+    expect(result.provider).toBe("openai");
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-db-key" }),
+    );
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Bonus: successful DB provider IS cached ───────────────────────────────────
+
+describe("getProviderClient — successful DB resolution is cached", () => {
+  it("returns the cached result on the second call without re-querying DB", async () => {
+    mockDecrypt.mockReturnValue("sk-valid");
+    mockLimit.mockResolvedValue([activeRow()]);
+
+    await getProviderClient(); // populates cache
+    await getProviderClient(); // served from cache
+
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the DB provider key, not the env-var key, when DB succeeds", async () => {
+    mockDecrypt.mockReturnValue("sk-from-db");
+    mockLimit.mockResolvedValue([activeRow()]);
+
+    await getProviderClient();
+
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-from-db" }),
+    );
+  });
+});
+
+// ── Anthropic provider path ───────────────────────────────────────────────────
+
+describe("getProviderClient — anthropic provider", () => {
+  it("returns an anthropicClient when provider is 'anthropic'", async () => {
+    mockDecrypt.mockReturnValue("sk-ant-key");
+    mockLimit.mockResolvedValue([activeRow("anthropic", "enc-ant")]);
+
+    const result = await getProviderClient();
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.anthropicClient).toBeDefined();
+    expect(result.openaiClient).toBeUndefined();
+    expect(MockAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-ant-key" }),
+    );
+  });
+});
+
+// ── No provider configured at all ────────────────────────────────────────────
+
+describe("getProviderClient — no provider configured", () => {
+  it("throws when no DB provider and no env-var key are present", async () => {
+    delete process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    delete process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    mockLimit.mockResolvedValue([]);
+
+    await expect(getProviderClient()).rejects.toThrow("No AI provider configured");
+  });
+});
