@@ -59,6 +59,7 @@
     "expo-document-picker": "^14.0.8",
     "expo-file-system": "^19.0.23",
     "expo-secure-store": "~15.0.8",
+    "react-native-purchases": "8.9.2",
     "react-native-webview": "^14.0.1"
   }
 }

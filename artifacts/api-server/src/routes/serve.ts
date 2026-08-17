@@ -463,4 +463,26 @@ router.delete("/projects/:id/serve", requireAuth, (req, res): void => {
   res.status(204).end();
 });
 
+// ── Cleanup exports ───────────────────────────────────────────────────────────
+
+/**
+ * Kill every active local/SSH server.
+ * Called by the API server's SIGTERM/SIGINT handler so child processes
+ * don't become orphans when the parent is restarted.
+ */
+export function cleanupAllServers(): void {
+  for (const entry of activeServers.values()) {
+    killEntry(entry);
+  }
+  activeServers.clear();
+}
+
+/**
+ * Return the local port a project's server is listening on, or null if none.
+ * Used by the WebSocket upgrade proxy in index.ts.
+ */
+export function getActiveServerPort(projectId: number): number | null {
+  return activeServers.get(projectId)?.port ?? null;
+}
+
 export default router;

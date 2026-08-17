@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Alert } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -16,6 +17,22 @@ import * as SplashScreen from 'expo-splash-screen';
 import { Platform } from 'react-native';
 import { setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { initializeRevenueCat, SubscriptionProvider } from '@/lib/revenuecat';
+
+// Initialize RevenueCat once at app startup, before any purchase UI is shown.
+// Silently skips if API keys are not yet configured (dev without RC set up).
+try {
+  initializeRevenueCat();
+} catch (err: unknown) {
+  if (
+    err instanceof Error &&
+    err.message.includes('RevenueCat Public API Keys not configured')
+  ) {
+    console.log('[RC] Skipping RevenueCat init — API keys not set yet');
+  } else {
+    Alert.alert('RevenueCat Unavailable', err instanceof Error ? err.message : 'Unknown error');
+  }
+}
 
 // Resolve the correct API base URL at runtime so it works both in Expo Go
 // (native) and in the Expo web preview (browser on any device).
@@ -81,7 +98,9 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
-                <RootLayoutNav />
+                <SubscriptionProvider>
+                  <RootLayoutNav />
+                </SubscriptionProvider>
               </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
