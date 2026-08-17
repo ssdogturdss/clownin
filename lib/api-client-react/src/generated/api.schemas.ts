@@ -314,7 +314,31 @@ export interface ProviderConfigUpdate {
   clearKey?: boolean;
 }
 
+export interface VaultSecret {
+  id: number;
+  name: string;
+  /** @nullable */
+  description?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertSecretBody {
+  name: string;
+  value: string;
+  /** @nullable */
+  description?: string | null;
+}
+
 export type ListAdminProjectsParams = {
 page?: number;
+};
+
+export type ListSecrets200 = {
+  secrets: VaultSecret[];
+};
+
+export type InjectSecretIntoEnvBody = {
+  overrideName?: string;
 };
 

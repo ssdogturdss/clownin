@@ -32,7 +32,9 @@ import type {
   ErrorResponse,
   ExecuteBody,
   HealthStatus,
+  InjectSecretIntoEnvBody,
   ListAdminProjectsParams,
+  ListSecrets200,
   LoginBody,
   Project,
   ProjectFile,
@@ -51,6 +53,7 @@ import type {
   UpdateFileBody,
   UpdateProjectBody,
   UpdateServerBody,
+  UpsertSecretBody,
   UserProfile
 } from './api.schemas';
 
@@ -2603,6 +2606,299 @@ export const useUpdateProvider = <TError = ErrorType<ErrorResponse>,
         TContext
       > => {
       return useMutation(getUpdateProviderMutationOptions(options));
+    }
+
+export const getListSecretsUrl = () => {
+
+
+
+
+  return `/api/secrets`
+}
+
+/**
+ * @summary List vault secrets
+ */
+export const listSecrets = async ( options?: Parameters<typeof customFetch>[1]): Promise<ListSecrets200> => {
+
+  return customFetch<ListSecrets200>(getListSecretsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSecretsQueryKey = () => {
+    return [
+    `/api/secrets`
+    ] as const;
+    }
+
+
+export const getListSecretsQueryOptions = <TData = Awaited<ReturnType<typeof listSecrets>>, TError = ErrorType<ErrorResponse>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSecretsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSecrets>>> = ({ signal }) => listSecrets({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSecretsQueryResult = NonNullable<Awaited<ReturnType<typeof listSecrets>>>
+export type ListSecretsQueryError = ErrorType<ErrorResponse>
+
+
+/**
+ * @summary List vault secrets
+ */
+
+export function useListSecrets<TData = Awaited<ReturnType<typeof listSecrets>>, TError = ErrorType<ErrorResponse>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSecretsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getUpsertSecretUrl = () => {
+
+
+
+
+  return `/api/secrets`
+}
+
+/**
+ * @summary Create or update a vault secret
+ */
+export const upsertSecret = async (upsertSecretBody: UpsertSecretBody, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getUpsertSecretUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(upsertSecretBody)
+  }
+);}
+
+
+
+
+
+export const getUpsertSecretMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof upsertSecret>>, TError,{data: BodyType<UpsertSecretBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof upsertSecret>>, TError,{data: BodyType<UpsertSecretBody>}, TContext> => {
+
+const mutationKey = ['upsertSecret'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof upsertSecret>>, {data: BodyType<UpsertSecretBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  upsertSecret(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpsertSecretMutationResult = NonNullable<Awaited<ReturnType<typeof upsertSecret>>>
+    export type UpsertSecretMutationBody = BodyType<UpsertSecretBody>
+    export type UpsertSecretMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Create or update a vault secret
+ */
+export const useUpsertSecret = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof upsertSecret>>, TError,{data: BodyType<UpsertSecretBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof upsertSecret>>,
+        TError,
+        {data: BodyType<UpsertSecretBody>},
+        TContext
+      > => {
+      return useMutation(getUpsertSecretMutationOptions(options));
+    }
+
+export const getDeleteSecretUrl = (id: number,) => {
+
+
+
+
+  return `/api/secrets/${id}`
+}
+
+/**
+ * @summary Delete a vault secret
+ */
+export const deleteSecret = async (id: number, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getDeleteSecretUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteSecretMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteSecret'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSecret>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteSecret(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteSecretMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSecret>>>
+
+    export type DeleteSecretMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Delete a vault secret
+ */
+export const useDeleteSecret = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteSecret>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteSecretMutationOptions(options));
+    }
+
+export const getInjectSecretIntoEnvUrl = (id: number,
+    secretId: number,) => {
+
+
+
+
+  return `/api/projects/${id}/env/from-secret/${secretId}`
+}
+
+/**
+ * @summary Copy a vault secret value into a project env var
+ */
+export const injectSecretIntoEnv = async (id: number,
+    secretId: number,
+    injectSecretIntoEnvBody?: InjectSecretIntoEnvBody, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getInjectSecretIntoEnvUrl(id,secretId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(injectSecretIntoEnvBody)
+  }
+);}
+
+
+
+
+
+export const getInjectSecretIntoEnvMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof injectSecretIntoEnv>>, TError,{id: number;secretId: number;data?: BodyType<InjectSecretIntoEnvBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof injectSecretIntoEnv>>, TError,{id: number;secretId: number;data?: BodyType<InjectSecretIntoEnvBody>}, TContext> => {
+
+const mutationKey = ['injectSecretIntoEnv'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof injectSecretIntoEnv>>, {id: number;secretId: number;data?: BodyType<InjectSecretIntoEnvBody>}> = (props) => {
+          const {id,secretId,data} = props ?? {};
+
+          return  injectSecretIntoEnv(id,secretId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type InjectSecretIntoEnvMutationResult = NonNullable<Awaited<ReturnType<typeof injectSecretIntoEnv>>>
+    export type InjectSecretIntoEnvMutationBody = BodyType<InjectSecretIntoEnvBody> | undefined
+    export type InjectSecretIntoEnvMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Copy a vault secret value into a project env var
+ */
+export const useInjectSecretIntoEnv = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof injectSecretIntoEnv>>, TError,{id: number;secretId: number;data?: BodyType<InjectSecretIntoEnvBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof injectSecretIntoEnv>>,
+        TError,
+        {id: number;secretId: number;data?: BodyType<InjectSecretIntoEnvBody>},
+        TContext
+      > => {
+      return useMutation(getInjectSecretIntoEnvMutationOptions(options));
     }
 
 export const getRedeemPromoCodeUrl = () => {

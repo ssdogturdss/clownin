@@ -676,6 +676,57 @@ export const UpdateProviderResponse = zod.object({
 
 
 /**
+ * @summary List vault secrets
+ */
+export const ListSecretsResponse = zod.object({
+  "secrets": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "description": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "updatedAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Create or update a vault secret
+ */
+export const UpsertSecretBody = zod.object({
+  "name": zod.string(),
+  "value": zod.string(),
+  "description": zod.string().nullish()
+})
+
+export const UpsertSecretResponse = zod.void()
+
+
+/**
+ * @summary Delete a vault secret
+ */
+export const DeleteSecretParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteSecretResponse = zod.void()
+
+
+/**
+ * @summary Copy a vault secret value into a project env var
+ */
+export const InjectSecretIntoEnvParams = zod.object({
+  "id": zod.coerce.number(),
+  "secretId": zod.coerce.number()
+})
+
+export const InjectSecretIntoEnvBody = zod.object({
+  "overrideName": zod.string().optional()
+})
+
+export const InjectSecretIntoEnvResponse = zod.void()
+
+
+/**
  * Validates the promo code and upgrades the authenticated user's subscription tier.
  * @summary Redeem a promo code
  */

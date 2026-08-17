@@ -4,6 +4,8 @@
  * Lets users add, view (masked), and delete key=value pairs that are injected
  * into every code run for the project. Values are write-only: they are never
  * returned from the API after saving.
+ *
+ * Includes "From vault" — pick a saved secret and inject it in one tap.
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -18,6 +20,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Modal,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +29,7 @@ import * as Haptics from 'expo-haptics';
 import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
 import { fetch as expoFetch } from 'expo/fetch';
+import { useListSecrets, useInjectSecretIntoEnv } from '@workspace/api-client-react';
 
 type EnvVar = { key: string; maskedValue: string };
 
@@ -56,7 +60,14 @@ export default function ProjectEnvScreen() {
   const [newValue, setNewValue] = useState('');
   const [keyError, setKeyError] = useState('');
 
+  // Vault picker state
+  const [showVaultPicker, setShowVaultPicker] = useState(false);
+
   const apiBase = getApiHost();
+
+  // Vault secrets
+  const { data: vaultData, isLoading: vaultLoading } = useListSecrets();
+  const injectMutation = useInjectSecretIntoEnv();
 
   const fetchVars = useCallback(async () => {
     try {
@@ -135,8 +146,28 @@ export default function ProjectEnvScreen() {
     );
   }, [apiBase, projectId, token]);
 
+  const handleInjectFromVault = useCallback((secretId: number, secretName: string) => {
+    setShowVaultPicker(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    injectMutation.mutate(
+      { id: projectId, secretId },
+      {
+        onSuccess: () => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          fetchVars();
+        },
+        onError: (err: unknown) => {
+          const msg = (err as { data?: { error?: string } })?.data?.error ?? 'Failed to inject secret';
+          Alert.alert('Error', msg);
+        },
+      },
+    );
+  }, [projectId, injectMutation, fetchVars]);
+
   const topPad = insets.top;
   const bottomPad = insets.bottom;
+
+  const vaultSecrets = vaultData?.secrets ?? [];
 
   return (
     <KeyboardAvoidingView
@@ -150,8 +181,16 @@ export default function ProjectEnvScreen() {
         </Pressable>
         <Text style={[styles.title, { color: colors.foreground }]}>Environment</Text>
         <Pressable
+          style={[styles.vaultBtn, { borderColor: colors.border }]}
+          onPress={() => { setShowAdd(false); setShowVaultPicker(true); }}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons name="shield-key-outline" size={15} color={colors.foreground} />
+          <Text style={[styles.vaultBtnText, { color: colors.foreground }]}>Vault</Text>
+        </Pressable>
+        <Pressable
           style={[styles.addBtn, { backgroundColor: colors.primary }]}
-          onPress={() => { setShowAdd(true); setNewKey(''); setNewValue(''); setKeyError(''); }}
+          onPress={() => { setShowVaultPicker(false); setShowAdd(true); setNewKey(''); setNewValue(''); setKeyError(''); }}
           hitSlop={4}
         >
           <Ionicons name="add" size={18} color="#fff" />
@@ -251,6 +290,80 @@ export default function ProjectEnvScreen() {
           )}
         />
       )}
+
+      {/* Vault picker modal */}
+      <Modal
+        visible={showVaultPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowVaultPicker(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowVaultPicker(false)}>
+          <Pressable
+            style={[styles.modalSheet, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {/* Handle */}
+            <View style={[styles.handle, { backgroundColor: colors.border }]} />
+            <View style={styles.modalHeader}>
+              <MaterialCommunityIcons name="shield-key-outline" size={18} color={colors.primary} />
+              <Text style={[styles.modalTitle, { color: colors.foreground }]}>Inject from vault</Text>
+              <Pressable onPress={() => setShowVaultPicker(false)} hitSlop={8}>
+                <Ionicons name="close" size={20} color={colors.mutedForeground} />
+              </Pressable>
+            </View>
+            <Text style={[styles.modalHint, { color: colors.mutedForeground }]}>
+              Tap a secret to copy it into this project's environment. The key name is used as-is.
+            </Text>
+            {vaultLoading ? (
+              <View style={styles.center}>
+                <ActivityIndicator color={colors.primary} />
+              </View>
+            ) : vaultSecrets.length === 0 ? (
+              <View style={[styles.center, { paddingVertical: 32 }]}>
+                <Text style={[styles.emptyHint, { color: colors.mutedForeground }]}>
+                  No vault secrets yet.
+                </Text>
+                <Pressable
+                  style={{ marginTop: 12 }}
+                  onPress={() => { setShowVaultPicker(false); router.push('/(app)/secrets'); }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 14, fontWeight: '600' }}>
+                    Go to Secrets vault →
+                  </Text>
+                </Pressable>
+              </View>
+            ) : (
+              <FlatList
+                data={vaultSecrets}
+                keyExtractor={(s) => String(s.id)}
+                style={{ maxHeight: 320 }}
+                ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: colors.border }]} />}
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.vaultRow,
+                      { backgroundColor: pressed ? colors.secondary : colors.card },
+                    ]}
+                    onPress={() => handleInjectFromVault(item.id, item.name)}
+                  >
+                    <MaterialCommunityIcons name="shield-key-outline" size={16} color={colors.primary} style={{ marginRight: 10 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.keyText, { color: colors.foreground }]}>{item.name}</Text>
+                      {item.description ? (
+                        <Text style={[styles.maskedText, { color: colors.mutedForeground }]}>{item.description}</Text>
+                      ) : (
+                        <Text style={[styles.maskedText, { color: colors.mutedForeground }]}>••••••••••••</Text>
+                      )}
+                    </View>
+                    <Ionicons name="arrow-forward-circle-outline" size={20} color={colors.primary} />
+                  </Pressable>
+                )}
+              />
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -267,6 +380,16 @@ const styles = StyleSheet.create({
   },
   backBtn: { padding: 4 },
   title: { flex: 1, fontSize: 17, fontWeight: '600' },
+  vaultBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  vaultBtnText: { fontSize: 13, fontWeight: '500' },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -326,4 +449,29 @@ const styles = StyleSheet.create({
   keyText: { fontSize: 14, fontWeight: '600', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   maskedText: { fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 2 },
   deleteBtn: { padding: 8, borderRadius: 6 },
+
+  // Vault picker modal
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalSheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    paddingBottom: 32,
+  },
+  handle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 10, marginBottom: 4 },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  modalTitle: { flex: 1, fontSize: 16, fontWeight: '600' },
+  modalHint: { fontSize: 12, lineHeight: 16, paddingHorizontal: 16, paddingBottom: 8 },
+  vaultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
 });

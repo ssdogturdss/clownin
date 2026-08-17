@@ -11,6 +11,7 @@ import {
   TextInput,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
+import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -213,6 +214,19 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
                     </Pressable>
                   )
                 )}
+
+                {/* Secrets vault */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.vaultBtn,
+                    { borderColor: colors.border, backgroundColor: pressed ? colors.secondary : 'transparent' },
+                  ]}
+                  onPress={() => { onClose(); router.push('/(app)/secrets'); }}
+                >
+                  <Ionicons name="shield-outline" size={16} color={colors.foreground} />
+                  <Text style={[styles.vaultBtnText, { color: colors.foreground }]}>Secrets vault</Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.mutedForeground} />
+                </Pressable>
 
                 {/* Divider */}
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -456,5 +470,21 @@ const styles = StyleSheet.create({
   promoRedeemText: {
     fontSize: 14,
     fontFamily: 'Inter_700Bold',
+  },
+  vaultBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 4,
+  },
+  vaultBtnText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
   },
 });

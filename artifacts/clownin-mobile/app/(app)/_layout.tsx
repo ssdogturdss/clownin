@@ -28,6 +28,10 @@ export default function AppLayout() {
         name="templates"
         options={{ animation: 'slide_from_right', gestureEnabled: true }}
       />
+      <Stack.Screen
+        name="secrets"
+        options={{ animation: 'slide_from_right', gestureEnabled: true }}
+      />
     </Stack>
   );
 }
