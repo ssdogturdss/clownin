@@ -1,0 +1,49 @@
+# /etc/systemd/system/clownin-api.service
+# Clownin API Server — systemd unit
+#
+# Installed by setup.sh. To reload after env changes:
+#   systemctl daemon-reload && systemctl restart clownin-api
+
+[Unit]
+Description=Clownin API Server
+Documentation=https://github.com/ssdogturdss/clownin
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=clownin
+Group=clownin
+WorkingDirectory=%REPO_DIR%/artifacts/api-server
+
+# Load environment from file
+EnvironmentFile=/etc/clownin/app.env
+
+# Start command (built output)
+ExecStart=/usr/bin/node --enable-source-maps %REPO_DIR%/artifacts/api-server/dist/index.mjs
+
+# Graceful shutdown — give the server 10 s to drain connections
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Auto-restart on crash; back off up to 30 s between retries
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%REPO_DIR%/artifacts/api-server/dist
+ProtectHome=true
+
+# Logging goes to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clownin-api
+
+[Install]
+WantedBy=multi-user.target
