@@ -1080,12 +1080,12 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             }}
             hitSlop={8}
             style={{ padding: 4, marginRight: 2 }}
-            disabled={busy}
+            disabled={busy || messages.length === 0}
           >
             <MaterialCommunityIcons
               name="chat-plus-outline"
               size={18}
-              color={busy ? colors.mutedForeground + "88" : colors.mutedForeground}
+              color={busy || messages.length === 0 ? colors.mutedForeground + "88" : colors.mutedForeground}
             />
           </Pressable>
 
