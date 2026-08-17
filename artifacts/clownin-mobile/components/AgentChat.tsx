@@ -46,11 +46,14 @@ type TextMsg = {
   kind: "user" | "agent";
   text: string;
   streaming?: boolean;
+  createdAt?: string;
 };
 
 type ThinkingMsg = { id: string; kind: "thinking"; statusText?: string };
 
-type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg;
+type DateDividerMsg = { id: string; kind: "date_divider"; label: string };
+
+type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg;
 
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
@@ -63,6 +66,42 @@ type SessionSummary = {
   startedAt: string;
   lastAt: string;
 };
+
+// ── Date divider helpers ──────────────────────────────────────────────────────
+function formatDateLabel(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart.getTime() - 86400000);
+  const msgStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (msgStart.getTime() === todayStart.getTime()) return "Today";
+  if (msgStart.getTime() === yesterdayStart.getTime()) return "Yesterday";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function calendarDay(dateStr: string): string {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** Insert DateDividerMsg items between messages that cross a calendar day boundary. */
+function injectDateDividers(msgs: AgentMsg[]): AgentMsg[] {
+  const result: AgentMsg[] = [];
+  let lastDay: string | null = null;
+  for (const msg of msgs) {
+    const dateStr = (msg as TextMsg).createdAt;
+    if (dateStr) {
+      const day = calendarDay(dateStr);
+      if (day !== lastDay) {
+        result.push({ id: `divider-${day}`, kind: "date_divider", label: formatDateLabel(dateStr) });
+        lastDay = day;
+      }
+    }
+    result.push(msg);
+  }
+  return result;
+}
 
 // Simple UUID v4 generator — works on all Hermes / web environments
 function generateUUID(): string {
@@ -345,15 +384,16 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             { headers: { Authorization: `Bearer ${token}` } },
           );
           if (!r.ok) return;
-          const data: Array<{ id: number; role: string; content: string }> = await r.json();
+          const data: Array<{ id: number; role: string; content: string; createdAt?: string }> = await r.json();
           if (!data.length) return;
-          const displayMsgs: AgentMsg[] = data.map((m) => ({
+          const rawMsgs: AgentMsg[] = data.map((m) => ({
             id: `hist-${m.id}`,
             kind: m.role === "user" ? "user" : "agent",
             text: m.content,
             streaming: false,
+            createdAt: m.createdAt,
           }));
-          setMessages(displayMsgs);
+          setMessages(injectDateDividers(rawMsgs));
           historyRef.current = data.map((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
@@ -713,6 +753,18 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   // ── Render helpers ───────────────────────────────────────────────────────────
   const renderItem = useCallback(
     ({ item }: { item: AgentMsg }) => {
+      if (item.kind === "date_divider") {
+        return (
+          <View style={styles.dateDividerRow}>
+            <View style={[styles.dateDividerLine, { backgroundColor: colors.border }]} />
+            <Text style={[styles.dateDividerLabel, { color: colors.mutedForeground, backgroundColor: colors.background }]}>
+              {item.label}
+            </Text>
+            <View style={[styles.dateDividerLine, { backgroundColor: colors.border }]} />
+          </View>
+        );
+      }
+
       if (item.kind === "thinking") {
         return <ThinkingBubble statusText={item.statusText} colors={colors} />;
       }
@@ -1140,6 +1192,11 @@ const styles = StyleSheet.create({
   },
   chipThumb: { width: 22, height: 22, borderRadius: 4 },
   chipName: { fontSize: 11, flex: 1 },
+
+  // Date divider
+  dateDividerRow: { flexDirection: "row", alignItems: "center", marginVertical: 6, paddingHorizontal: 4 },
+  dateDividerLine: { flex: 1, height: 1 },
+  dateDividerLabel: { fontSize: 11, fontFamily: "Inter_400Regular", paddingHorizontal: 10 },
 
   // New conversation hint (shown in FlatList empty state when past sessions exist)
   newConvoHint: { alignItems: "center", paddingVertical: 20, paddingHorizontal: 24 },
