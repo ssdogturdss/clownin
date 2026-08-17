@@ -937,6 +937,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           {/* New conversation button */}
           <Pressable
             onPress={() => {
+              // Only act when there are messages — prevents ghost sessions from
+              // being added to pastSessions for empty (never-sent) sessions.
               if (messages.length > 0 && !busy) {
                 // Archive current and start fresh
                 if (currentSessionId) {
@@ -954,10 +956,8 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                   ]);
                 }
                 startNewConversation();
-              } else if (messages.length === 0) {
-                // nothing to archive — just ensure a fresh session id
-                startNewConversation();
               }
+              // If messages.length === 0, this is a no-op — nothing to archive.
             }}
             hitSlop={8}
             style={{ padding: 4, marginRight: 2 }}
