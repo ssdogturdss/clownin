@@ -159,6 +159,114 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "search_files",
+      description:
+        "Search all project files for a text pattern and return matching lines with file paths and line numbers. Use this BEFORE reading individual files to quickly locate where a function, variable, or string is defined or used. Much faster than reading every file.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: {
+            type: "string",
+            description: "Exact text or substring to search for",
+          },
+          case_insensitive: {
+            type: "boolean",
+            description: "If true, search case-insensitively. Defaults to false.",
+          },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description:
+        "Make a targeted, surgical edit to a file by replacing an exact string with new content. Safer than write_file for existing files — only the changed region is touched. The old_str must match exactly as it appears in the file (including whitespace and indentation). Use enough context in old_str to make it unique. If the match is ambiguous (appears multiple times), use a longer old_str.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File path" },
+          old_str: {
+            type: "string",
+            description: "The exact string to find and replace. Must match the file contents verbatim.",
+          },
+          new_str: {
+            type: "string",
+            description: "The replacement string. May be empty to delete old_str.",
+          },
+        },
+        required: ["path", "old_str", "new_str"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rename_file",
+      description:
+        "Rename or move a file within the project without changing its content. More efficient than delete + create. Use when refactoring or reorganising the project structure.",
+      parameters: {
+        type: "object",
+        properties: {
+          old_path: { type: "string", description: "Current file path" },
+          new_path: { type: "string", description: "New file path" },
+          language: {
+            type: "string",
+            enum: ["javascript", "typescript", "python", "bash", "go", "rust", "ruby", "java", "plaintext"],
+            description: "Override language if the extension changes",
+          },
+        },
+        required: ["old_path", "new_path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_terminal",
+      description:
+        "Run an arbitrary shell command in the project directory. Use for: creating directories (mkdir -p), git operations, curl requests, environment inspection, file system tasks, and anything that isn't just executing a code file. Output is capped at 4000 characters. Timeout is 30 seconds.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            description: "Shell command to run, e.g. 'mkdir -p src/components' or 'ls -la'",
+          },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_url",
+      description:
+        "Fetch the content of a public URL. HTML pages are returned as readable plain text (tags stripped). JSON responses are pretty-printed. Use to look up documentation, read a package README, check an API endpoint, or verify external resources. Response is capped at 8000 characters. Timeout is 10 seconds.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to fetch" },
+          method: {
+            type: "string",
+            enum: ["GET", "POST"],
+            description: "HTTP method. Defaults to GET.",
+          },
+          body: {
+            type: "string",
+            description: "Request body for POST requests (JSON string)",
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 // ── Execution helpers ─────────────────────────────────────────────────────────
@@ -247,6 +355,61 @@ function runProcess(
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
+// Plain-language narration emitted just before each tool call so the client
+// can update its "thinking" bubble with human-readable status text.
+function toolStatusNarration(name: string, args: Record<string, unknown>): string {
+  const path = typeof args.path === "string" ? args.path : "";
+  switch (name) {
+    case "list_files":
+      return "Checking what files are in your project…";
+    case "read_file":
+      return path ? `Reading ${path}…` : "Reading a file…";
+    case "write_file":
+      return path ? `Writing ${path}…` : "Updating a file…";
+    case "create_file":
+      return path ? `Creating ${path}…` : "Creating a new file…";
+    case "delete_file":
+      return path ? `Removing ${path}…` : "Deleting a file…";
+    case "run_code":
+      return path ? `Running ${path}…` : "Running your code…";
+    case "install_packages": {
+      const pkgs = Array.isArray(args.packages)
+        ? (args.packages as string[]).join(", ")
+        : "packages";
+      return `Installing ${pkgs}…`;
+    }
+    case "enable_preview":
+      return "Setting up a preview link…";
+    case "deploy": {
+      const platform = typeof args.platform === "string" ? args.platform : "your app";
+      return `Deploying to ${platform}…`;
+    }
+    case "search_files": {
+      const pat = typeof args.pattern === "string" ? args.pattern : "";
+      return pat ? `Searching for "${pat}"…` : "Searching the project…";
+    }
+    case "edit_file": {
+      const p = typeof args.path === "string" ? args.path : "";
+      return p ? `Editing ${p}…` : "Editing a file…";
+    }
+    case "rename_file": {
+      const op = typeof args.old_path === "string" ? args.old_path : "";
+      return op ? `Renaming ${op}…` : "Renaming a file…";
+    }
+    case "run_terminal": {
+      const cmd = typeof args.command === "string" ? args.command.slice(0, 40) : "command";
+      return `Running: ${cmd}…`;
+    }
+    case "fetch_url": {
+      const u = typeof args.url === "string" ? args.url : "";
+      try { return `Fetching ${new URL(u).hostname}…`; }
+      catch { return "Fetching a URL…"; }
+    }
+    default:
+      return "Working on it…";
+  }
+}
+
 router.post(
   "/projects/:id/agent",
   requireAuth,
@@ -354,32 +517,72 @@ router.post(
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
-    type EvtType = "thinking" | "tool_call" | "tool_result" | "token" | "message" | "done" | "error";
+    type EvtType = "thinking" | "status" | "tool_call" | "tool_result" | "token" | "message" | "done" | "error";
     function sse(type: EvtType, payload?: unknown) {
       res.write(`data: ${JSON.stringify({ type, payload })}\n\n`);
     }
 
-    const systemPrompt = `You are an autonomous coding agent inside Clownin — a mobile code editor.
-Project: "${project.name}" | Primary language: ${project.language}
+    const systemPrompt = `You are an expert autonomous coding agent inside Clownin — a mobile code editor. You write production-quality code, use tools efficiently, and always verify your work.
 
-Supported languages: JavaScript (.js), TypeScript (.ts), Python (.py), Bash (.sh), Go (.go), Rust (.rs), Ruby (.rb), Java (.java).
-- Go: use \`go run file.go\`. No module init needed for single-file programs; import standard library freely.
-- Rust: use single-file programs with \`rustc\`. All code in one file; no Cargo.toml.
-- Ruby: use \`ruby file.rb\`. Standard library available; no gem installs for built-ins.
-- Java: one public class per file; file name must match the class name (e.g. Main.java → public class Main).
+Project: "${project.name}" | Language: ${project.language}
 
-When the user asks you to build something:
-1. List existing files first (list_files), then read relevant ones (read_file).
-2. Write complete, working code — no TODOs, no placeholders, no "add your logic here".
-3. After writing, always run_code to verify. Fix errors and re-run until exit 0.
-4. Be brief in your final response: what you built + how to run it. No lengthy explanations.
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+list_files        List all project files (always start here)
+search_files      Grep across all files — use BEFORE reading to locate code fast
+read_file         Read one file's full content
+edit_file         Surgical find-and-replace — prefer over write_file for existing files
+write_file        Overwrite an existing file entirely
+create_file       Create a new file
+delete_file       Delete a file
+rename_file       Rename or move a file without touching its content
+run_code          Execute a file — always do this after writing code; fix errors and retry
+run_terminal      Arbitrary shell command: mkdir, curl, git, ls, env inspection
+install_packages  npm or pip install; create package.json first if it doesn't exist
+fetch_url         Fetch docs, a README, or an API endpoint (HTML stripped to text)
+enable_preview    Give the user a live shareable link (no deploy needed)
+deploy            Publish to Netlify or Vercel (permanent URL; ask for token first)
 
-Preview & Deploy:
-- If the user asks to preview, share, or show their project → call enable_preview immediately. No setup needed.
-- If the user asks to deploy or publish → call deploy. If they haven't provided a token, ask for it first, then call deploy once you have it.
+━━━ REASONING WORKFLOW ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Before writing any code:
+1. list_files — see what already exists
+2. search_files — find where relevant functions/vars are defined (saves reading many files)
+3. read_file — read only the files that are actually relevant
+4. Execute the change using the most targeted tool available
 
-Current files:
-${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}${envVarKeys.length > 0 ? `\n\nEnvironment variables set for this project (available in code via process.env / os.environ during user-initiated runs; NOT injected into agent-controlled executions):\n${envVarKeys.map((k) => `  ${k}`).join("\n")}` : ""}`;
+When modifying existing files:
+• Use edit_file for targeted changes (a function, a block, a few lines)
+• Use write_file only for wholesale rewrites
+• Always run_code after writing to verify — fix errors and re-run until exit 0
+
+When something errors:
+• Read the error carefully — it almost always says exactly what's wrong
+• Fix the root cause; don't mask it with try/catch
+• If a module is missing, install it; if a file isn't found, create it
+
+━━━ LANGUAGE NOTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Go     → go run file.go  (single-file programs, standard library freely available)
+Rust   → rustc file.rs   (single file, no Cargo.toml)
+Ruby   → ruby file.rb    (built-in stdlib, no gem needed for standard operations)
+Java   → javac + java    (filename must match public class name, e.g. Main.java)
+Python → python3         (use pip3 install for packages; --user flag if needed)
+JS/TS  → node / bun      (create package.json before running npm install)
+
+━━━ TOOL SELECTION QUICK GUIDE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"where is function X?"   → search_files
+"change just one block"  → edit_file (not write_file)
+"create directories"     → run_terminal (mkdir -p)
+"look up how X works"    → fetch_url the docs/README
+"show/share the project" → enable_preview
+"publish permanently"    → deploy
+
+━━━ RESPONSES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Keep final replies concise: what you built/changed + how to use it.
+Don't re-explain tool output. If you fixed an error, just say what you fixed.
+Write complete code — no TODOs, no placeholders, no "add your logic here".
+
+━━━ CURRENT PROJECT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Files:
+${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.language})`).join("\n")}${envVarKeys.length > 0 ? `\n\nEnvironment variables (available via process.env / os.environ in user-initiated runs):\n${envVarKeys.map((k) => `  ${k}`).join("\n")}` : ""}`;
 
     const conversationHistory: OpenAI.ChatCompletionMessageParam[] = Array.isArray(history)
       ? history
@@ -474,6 +677,9 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
     try {
       while (iteration < MAX_ITERATIONS && !aborted) {
         iteration++;
+        if (iteration > 1) {
+          sse("status", { text: "Reviewing the results, planning what to do next…" });
+        }
 
         // Retry up to 3 times on 429 rate-limit with exponential backoff
         let stream: Awaited<ReturnType<typeof openai.chat.completions.create>>;
@@ -559,6 +765,7 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
           let args: Record<string, unknown> = {};
           try { args = JSON.parse(tc.args || "{}"); } catch { /* ignore */ }
 
+          sse("status", { text: toolStatusNarration(tc.name, args) });
           sse("tool_call", { tool: tc.name, args, callId: tc.id });
 
           let result = "";
@@ -867,6 +1074,177 @@ ${files.length === 0 ? "(none)" : files.map((f) => `  ${f.path} (${f.language})`
 
                 } else {
                   result = `Unknown platform: ${platform}. Supported: netlify, vercel.`;
+                  isError = true;
+                }
+                break;
+              }
+
+              case "search_files": {
+                const pattern = String(args.pattern ?? "");
+                const caseInsensitive = Boolean(args.case_insensitive);
+                if (!pattern) { result = "pattern is required"; isError = true; break; }
+
+                const allFiles = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+
+                const matches: string[] = [];
+                for (const file of allFiles) {
+                  const lines = file.content.split("\n");
+                  for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const haystack = caseInsensitive ? line.toLowerCase() : line;
+                    const needle   = caseInsensitive ? pattern.toLowerCase() : pattern;
+                    if (haystack.includes(needle)) {
+                      matches.push(`${file.path}:${i + 1}: ${line.trimEnd()}`);
+                    }
+                  }
+                }
+
+                if (matches.length === 0) {
+                  result = `No matches for "${pattern}"`;
+                } else {
+                  const cap = 200;
+                  result = matches.slice(0, cap).join("\n");
+                  if (matches.length > cap) result += `\n… (${matches.length - cap} more matches not shown)`;
+                }
+                break;
+              }
+
+              case "edit_file": {
+                const path    = String(args.path ?? "");
+                const oldStr  = String(args.old_str ?? "");
+                const newStr  = String(args.new_str ?? "");
+                if (!path || oldStr === "") { result = "path and old_str are required"; isError = true; break; }
+
+                const [row] = await db.select().from(projectFilesTable)
+                  .where(and(eq(projectFilesTable.projectId, projectId), eq(projectFilesTable.path, path)))
+                  .limit(1);
+                if (!row) { result = `Not found: ${path}`; isError = true; break; }
+
+                if (!row.content.includes(oldStr)) {
+                  result = `old_str not found in ${path}. Check that the whitespace and indentation match exactly.`;
+                  isError = true;
+                  break;
+                }
+
+                const occurrences = row.content.split(oldStr).length - 1;
+                if (occurrences > 1) {
+                  result = `old_str appears ${occurrences} times in ${path} — use a longer, more unique old_str.`;
+                  isError = true;
+                  break;
+                }
+
+                const newContent = row.content.replace(oldStr, newStr);
+                await db.update(projectFilesTable)
+                  .set({ content: newContent, updatedAt: new Date() })
+                  .where(eq(projectFilesTable.id, row.id));
+                result = `Edited ${path}`;
+                break;
+              }
+
+              case "rename_file": {
+                const oldPath = String(args.old_path ?? "");
+                const newPath = String(args.new_path ?? "");
+                if (!oldPath || !newPath) { result = "old_path and new_path are required"; isError = true; break; }
+
+                const [row] = await db.select().from(projectFilesTable)
+                  .where(and(eq(projectFilesTable.projectId, projectId), eq(projectFilesTable.path, oldPath)))
+                  .limit(1);
+                if (!row) { result = `Not found: ${oldPath}`; isError = true; break; }
+
+                const [conflict] = await db.select({ id: projectFilesTable.id }).from(projectFilesTable)
+                  .where(and(eq(projectFilesTable.projectId, projectId), eq(projectFilesTable.path, newPath)))
+                  .limit(1);
+                if (conflict) { result = `${newPath} already exists — delete it first.`; isError = true; break; }
+
+                const newLanguage = args.language ? String(args.language) : row.language;
+                await db.update(projectFilesTable)
+                  .set({ path: newPath, language: newLanguage, updatedAt: new Date() })
+                  .where(eq(projectFilesTable.id, row.id));
+                result = `Renamed ${oldPath} → ${newPath}`;
+                break;
+              }
+
+              case "run_terminal": {
+                const command = String(args.command ?? "").trim();
+                if (!command) { result = "command is required"; isError = true; break; }
+
+                const allFiles = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+                const dir = await syncProjectFiles(projectId, allFiles);
+
+                const TERMINAL_TIMEOUT_MS = 30_000;
+                const TERMINAL_OUTPUT_CAP = 4000;
+
+                const { stdout, stderr, exitCode } = await runProcess(
+                  "sh", ["-c", command], dir, TERMINAL_TIMEOUT_MS,
+                );
+
+                const raw = [
+                  stdout && `stdout:\n${stdout.trimEnd()}`,
+                  stderr && `stderr:\n${stderr.trimEnd()}`,
+                  `exit: ${exitCode}`,
+                ].filter(Boolean).join("\n");
+
+                result = raw.length > TERMINAL_OUTPUT_CAP
+                  ? raw.slice(0, TERMINAL_OUTPUT_CAP) + "\n… (truncated)"
+                  : raw;
+                if (exitCode !== 0) isError = true;
+                break;
+              }
+
+              case "fetch_url": {
+                const url    = String(args.url ?? "").trim();
+                const method = String(args.method ?? "GET").toUpperCase();
+                const body   = args.body ? String(args.body) : undefined;
+                if (!url) { result = "url is required"; isError = true; break; }
+
+                const FETCH_TIMEOUT_MS   = 10_000;
+                const FETCH_OUTPUT_CAP   = 8000;
+
+                try {
+                  const controller = new AbortController();
+                  const tid = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+                  const res = await fetch(url, {
+                    method,
+                    headers: {
+                      "User-Agent": "Clownin-Agent/1.0",
+                      "Accept": "text/html,application/json,text/plain,*/*",
+                      ...(body ? { "Content-Type": "application/json" } : {}),
+                    },
+                    body: body && method !== "GET" ? body : undefined,
+                    signal: controller.signal,
+                  });
+                  clearTimeout(tid);
+
+                  const contentType = res.headers.get("content-type") ?? "";
+                  const raw = await res.text();
+
+                  let text: string;
+                  if (contentType.includes("application/json")) {
+                    try { text = JSON.stringify(JSON.parse(raw), null, 2); }
+                    catch { text = raw; }
+                  } else {
+                    text = raw
+                      .replace(/<script[\s\S]*?<\/script>/gi, "")
+                      .replace(/<style[\s\S]*?<\/style>/gi, "")
+                      .replace(/<[^>]+>/g, " ")
+                      .replace(/&nbsp;/g, " ")
+                      .replace(/&amp;/g, "&")
+                      .replace(/&lt;/g, "<")
+                      .replace(/&gt;/g, ">")
+                      .replace(/\s+/g, " ")
+                      .trim();
+                  }
+
+                  result = `HTTP ${res.status}\n` +
+                    (text.length > FETCH_OUTPUT_CAP
+                      ? text.slice(0, FETCH_OUTPUT_CAP) + "\n… (truncated)"
+                      : text);
+                  if (!res.ok) isError = true;
+                } catch (err: unknown) {
+                  result = err instanceof Error ? err.message : "fetch failed";
                   isError = true;
                 }
                 break;

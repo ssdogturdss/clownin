@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -48,33 +48,94 @@ type TextMsg = {
   streaming?: boolean;
 };
 
-type ThinkingMsg = { id: string; kind: "thinking" };
+type ThinkingMsg = { id: string; kind: "thinking"; statusText?: string };
 
 type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg;
 
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
 
+// ── Thinking bubble (animated) ────────────────────────────────────────────────
+const THINKING_PHRASES = [
+  "Thinking through your request…",
+  "Reading your project…",
+  "Planning the changes…",
+  "Working out the details…",
+  "Putting it together…",
+  "Almost ready…",
+];
+
+function ThinkingBubble({ statusText, colors }: {
+  statusText?: string;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const [phraseIdx, setPhraseIdx] = useState(0);
+
+  useEffect(() => {
+    if (statusText) return; // server is narrating — don't cycle
+    const id = setInterval(
+      () => setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length),
+      2500,
+    );
+    return () => clearInterval(id);
+  }, [statusText]);
+
+  return (
+    <View style={thinkStyles.row}>
+      <View style={[thinkStyles.bubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <ActivityIndicator size="small" color={colors.primary} />
+        <Text style={[thinkStyles.text, { color: colors.mutedForeground }]}>
+          {statusText ?? THINKING_PHRASES[phraseIdx]}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const thinkStyles = StyleSheet.create({
+  row:    { paddingHorizontal: 16, paddingVertical: 4, alignItems: "flex-start" },
+  bubble: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1, maxWidth: "80%" },
+  text:   { fontSize: 13, fontFamily: "Inter_400Regular" },
+});
+
 // ── Tool label helpers ────────────────────────────────────────────────────────
 function toolLabel(tool: string, args: Record<string, unknown>): string {
   const path = typeof args.path === "string" ? args.path : "";
   switch (tool) {
-    case "list_files":      return "Listing files…";
-    case "read_file":       return `Reading ${path}`;
-    case "write_file":      return `Writing ${path}`;
-    case "create_file":     return `Creating ${path}`;
-    case "delete_file":     return `Deleting ${path}`;
-    case "run_code":        return `Running ${path}`;
+    case "list_files":       return "Listing files…";
+    case "read_file":        return path ? `Reading ${path}` : "Reading file…";
+    case "write_file":       return path ? `Writing ${path}` : "Writing file…";
+    case "create_file":      return path ? `Creating ${path}` : "Creating file…";
+    case "delete_file":      return path ? `Deleting ${path}` : "Deleting file…";
+    case "edit_file":        return path ? `Editing ${path}` : "Editing file…";
+    case "rename_file": {
+      const op = typeof args.old_path === "string" ? args.old_path : "";
+      const np = typeof args.new_path === "string" ? args.new_path : "";
+      return op && np ? `${op} → ${np}` : "Renaming file…";
+    }
+    case "run_code":         return path ? `Running ${path}` : "Running code…";
+    case "run_terminal": {
+      const cmd = typeof args.command === "string" ? args.command.slice(0, 40) : "";
+      return cmd ? `$ ${cmd}` : "Running command…";
+    }
     case "install_packages": {
       const pkgs = Array.isArray(args.packages) ? (args.packages as string[]).join(", ") : "";
-      return `Installing ${pkgs}`;
+      return pkgs ? `Installing ${pkgs}` : "Installing packages…";
     }
-    case "enable_preview":  return "Generating preview link…";
+    case "search_files": {
+      const pat = typeof args.pattern === "string" ? args.pattern : "";
+      return pat ? `Search: "${pat}"` : "Searching files…";
+    }
+    case "fetch_url": {
+      const u = typeof args.url === "string" ? args.url : "";
+      try { return `Fetching ${new URL(u).hostname}`; } catch { return "Fetching URL…"; }
+    }
+    case "enable_preview":   return "Setting up preview link…";
     case "deploy": {
       const platform = typeof args.platform === "string" ? args.platform : "hosting";
       return `Deploying to ${platform}…`;
     }
-    default:                return tool;
+    default:                 return tool.replace(/_/g, " ");
   }
 }
 
@@ -84,9 +145,14 @@ function toolIcon(tool: string): string {
     case "read_file":        return "file-eye-outline";
     case "write_file":
     case "create_file":      return "file-edit-outline";
+    case "edit_file":        return "file-find-outline";
     case "delete_file":      return "file-remove-outline";
+    case "rename_file":      return "file-move-outline";
     case "run_code":         return "play-circle-outline";
+    case "run_terminal":     return "console";
     case "install_packages": return "package-down";
+    case "search_files":     return "magnify";
+    case "fetch_url":        return "web";
     case "enable_preview":   return "link-variant";
     case "deploy":           return "rocket-launch-outline";
     default:                 return "wrench-outline";
@@ -319,6 +385,16 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             case "thinking":
               break;
 
+            case "status": {
+              const { text: statusText } = event.payload as { text: string };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === thinkId ? { ...m, statusText } as ThinkingMsg : m,
+                ),
+              );
+              break;
+            }
+
             case "token": {
               removeThinking();
               agentText += event.payload as string;
@@ -414,14 +490,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const renderItem = useCallback(
     ({ item }: { item: AgentMsg }) => {
       if (item.kind === "thinking") {
-        return (
-          <View style={[styles.thinkRow]}>
-            <View style={[styles.thinkBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={[styles.thinkText, { color: colors.mutedForeground }]}>thinking…</Text>
-            </View>
-          </View>
-        );
+        return <ThinkingBubble statusText={item.statusText} colors={colors} />;
       }
 
       if (item.kind === "user") {
