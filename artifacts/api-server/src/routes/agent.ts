@@ -52,6 +52,24 @@ interface ProviderClientResult {
   anthropicClient?: Anthropic;
 }
 
+/**
+ * Fallback: Replit AI integration env vars (OpenAI-compatible), then bare OPENAI_API_KEY.
+ * Never cached — so if an admin configures a DB provider it takes effect
+ * on the very next request rather than being stuck behind a cache window.
+ */
+function getEnvVarFallback(): ProviderClientResult {
+  const apiKey =
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
+    process.env.OPENAI_API_KEY;
+  const baseURL =
+    process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ??
+    "https://api.openai.com/v1";
+
+  if (!apiKey) throw new Error("No AI provider configured — set an active provider in the admin panel or configure OPENAI_API_KEY");
+
+  return buildResult("openai", apiKey, baseURL, "gpt-5.6-terra");
+}
+
 async function getProviderClient(): Promise<ProviderClientResult> {
   const now = Date.now();
 
@@ -69,7 +87,24 @@ async function getProviderClient(): Promise<ProviderClientResult> {
       .limit(1);
 
     if (active && active.encryptedApiKey) {
-      const apiKey  = decrypt(active.encryptedApiKey);
+      // Decrypt separately so a corrupt/expired key does not get cached and
+      // is retried on the very next request rather than being served stale.
+      let apiKey: string;
+      try {
+        apiKey = decrypt(active.encryptedApiKey);
+      } catch (decryptErr) {
+        // Key is corrupt or was encrypted with a different secret.
+        // Log with a distinct code so operators can find this in logs quickly.
+        // Do NOT populate the cache — a corrected key must take effect immediately.
+        console.error(
+          "[PROVIDER_DECRYPT_ERROR] Failed to decrypt API key for active provider '%s'. " +
+          "Requests are falling back to the env-var provider until the key is fixed in the admin panel.",
+          active.provider,
+          decryptErr,
+        );
+        return getEnvVarFallback();
+      }
+
       const baseURL = PROVIDER_BASE_URLS[active.provider] ?? "https://api.openai.com/v1";
       const model   = PROVIDER_DEFAULT_MODELS[active.provider] ?? "gpt-5.6-terra";
       _providerCache = { provider: active.provider, apiKey, baseURL, model, expiresAt: now + 30_000 };
@@ -84,19 +119,7 @@ async function getProviderClient(): Promise<ProviderClientResult> {
     console.warn("[agent] Failed to load provider config from DB:", err);
   }
 
-  // Fallback: Replit AI integration env vars (OpenAI-compatible), then bare OPENAI_API_KEY.
-  // Not cached — so if an admin configures a DB provider it takes effect
-  // on the very next request rather than being stuck behind a cache window.
-  const apiKey =
-    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
-    process.env.OPENAI_API_KEY;
-  const baseURL =
-    process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ??
-    "https://api.openai.com/v1";
-
-  if (!apiKey) throw new Error("No AI provider configured — set an active provider in the admin panel or configure OPENAI_API_KEY");
-
-  return buildResult("openai", apiKey, baseURL, "gpt-5.6-terra");
+  return getEnvVarFallback();
 }
 
 function buildResult(provider: string, apiKey: string, baseURL: string, model: string): ProviderClientResult {
