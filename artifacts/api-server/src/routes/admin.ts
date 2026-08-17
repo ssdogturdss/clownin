@@ -356,6 +356,77 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
   });
 });
 
+router.post("/admin/providers/:provider/test", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const providerKey = String(req.params.provider);
+  const knownProvider = KNOWN_PROVIDERS.find((p) => p.provider === providerKey);
+  if (!knownProvider) {
+    res.status(400).json({ ok: false, error: "unknown provider" }); return;
+  }
+
+  const { decrypt } = await import("../lib/envCrypto.js");
+
+  // Load the stored key for this provider
+  const [row] = await db
+    .select()
+    .from(providerConfigsTable)
+    .where(eq(providerConfigsTable.provider, providerKey))
+    .limit(1);
+
+  if (!row?.encryptedApiKey) {
+    res.status(400).json({ ok: false, error: "No API key configured for this provider" }); return;
+  }
+
+  let apiKey: string;
+  try {
+    apiKey = decrypt(row.encryptedApiKey);
+  } catch {
+    res.status(400).json({ ok: false, error: "Stored API key could not be decrypted — please re-enter it" }); return;
+  }
+
+  // Provider base URLs and models (mirrors agent.ts)
+  const PROVIDER_BASE_URLS: Record<string, string> = {
+    openai:     "https://api.openai.com/v1",
+    gemini:     "https://generativelanguage.googleapis.com/v1beta/openai",
+    openrouter: "https://openrouter.ai/api/v1",
+  };
+  const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+    openai:     "gpt-4o-mini",
+    anthropic:  "claude-haiku-4-5",
+    gemini:     "gemini-2.0-flash",
+    openrouter: "openai/gpt-4o-mini",
+  };
+
+  const model = PROVIDER_DEFAULT_MODELS[providerKey] ?? "gpt-4o-mini";
+
+  try {
+    if (providerKey === "anthropic") {
+      const Anthropic = (await import("@anthropic-ai/sdk")).default;
+      const client = new Anthropic({ apiKey });
+      const msg = await client.messages.create({
+        model,
+        max_tokens: 16,
+        messages: [{ role: "user", content: "Reply with the single word: ok" }],
+      });
+      const text = msg.content.map((b: any) => (b.type === "text" ? b.text : "")).join("").trim();
+      res.json({ ok: true, response: text || "(empty)" });
+    } else {
+      const OpenAI = (await import("openai")).default;
+      const baseURL = PROVIDER_BASE_URLS[providerKey] ?? "https://api.openai.com/v1";
+      const client = new OpenAI({ apiKey, baseURL });
+      const completion = await client.chat.completions.create({
+        model,
+        max_tokens: 16,
+        messages: [{ role: "user", content: "Reply with the single word: ok" }],
+      });
+      const text = (completion.choices[0]?.message?.content ?? "").trim();
+      res.json({ ok: true, response: text || "(empty)" });
+    }
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    res.json({ ok: false, error: message });
+  }
+});
+
 // ── API key-style generation endpoint ─────────────────────────────────────────
 // POST /admin/promo-codes/generate  — same as POST /admin/promo-codes but named
 // explicitly for programmatic / API use from external scripts.

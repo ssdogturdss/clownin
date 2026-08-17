@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useListProviders, useUpdateProvider, getListProvidersQueryKey } from "@workspace/api-client-react";
+import { useListProviders, useUpdateProvider, useTestProvider, getListProvidersQueryKey } from "@workspace/api-client-react";
+import type { ProviderTestResult } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Cpu, KeyRound, CheckCircle2, Bot, BrainCircuit } from "lucide-react";
+import { Loader2, Cpu, KeyRound, CheckCircle2, XCircle, Bot, BrainCircuit, FlaskConical } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -66,8 +67,10 @@ export default function ProvidersPage() {
 function ProviderCard({ provider }: { provider: any }) {
   const queryClient = useQueryClient();
   const updateMutation = useUpdateProvider();
+  const testMutation = useTestProvider();
   const [apiKey, setApiKey] = useState("");
   const [isSettingKey, setIsSettingKey] = useState(false);
+  const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
 
   const getProviderIcon = (name: string) => {
     const n = name.toLowerCase();
@@ -76,7 +79,7 @@ function ProviderCard({ provider }: { provider: any }) {
     return Cpu;
   };
 
-  const Icon = getProviderIcon(provider.name);
+  const Icon = getProviderIcon(provider.provider);
 
   const handleSaveKey = async () => {
     if (!apiKey.trim()) return;
@@ -85,7 +88,7 @@ function ProviderCard({ provider }: { provider: any }) {
       { provider: provider.provider, data: { apiKey } },
       {
         onSuccess: () => {
-          toast.success(`${provider.name} API key saved`);
+          toast.success(`${provider.displayName} API key saved`);
           queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
           setApiKey("");
         },
@@ -100,15 +103,31 @@ function ProviderCard({ provider }: { provider: any }) {
   };
 
   const handleClearKey = () => {
+    setTestResult(null);
     updateMutation.mutate(
       { provider: provider.provider, data: { clearKey: true } },
       {
         onSuccess: () => {
-          toast.success(`${provider.name} API key cleared`);
+          toast.success(`${provider.displayName} API key cleared`);
           queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
         },
         onError: (err: any) => {
           toast.error(err.message || "Failed to clear API key");
+        }
+      }
+    );
+  };
+
+  const handleTestConnection = () => {
+    setTestResult(null);
+    testMutation.mutate(
+      { provider: provider.provider },
+      {
+        onSuccess: (result) => {
+          setTestResult(result);
+        },
+        onError: (err: any) => {
+          setTestResult({ ok: false, error: err.message || "Request failed" });
         }
       }
     );
@@ -124,8 +143,8 @@ function ProviderCard({ provider }: { provider: any }) {
             <Icon className="h-6 w-6" />
           </div>
           <div>
-            <CardTitle className="text-xl">{provider.name}</CardTitle>
-            <CardDescription className="font-mono text-xs mt-1">{provider.baseUrl || 'Default URL'}</CardDescription>
+            <CardTitle className="text-xl">{provider.displayName}</CardTitle>
+            <CardDescription className="font-mono text-xs mt-1">{provider.provider}</CardDescription>
           </div>
         </div>
         <div className="flex items-center space-x-2 bg-background p-2 rounded-md border border-border">
@@ -138,7 +157,7 @@ function ProviderCard({ provider }: { provider: any }) {
           </label>
         </div>
       </CardHeader>
-      <CardContent className="pt-4 border-t border-border/50 mt-4">
+      <CardContent className="pt-4 border-t border-border/50 mt-4 space-y-3">
         {provider.hasApiKey ? (
           <div className="flex items-center justify-between bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 p-3 rounded-md">
             <div className="flex items-center gap-2">
@@ -167,6 +186,48 @@ function ProviderCard({ provider }: { provider: any }) {
               {isSettingKey && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save Key
             </Button>
+          </div>
+        )}
+
+        {provider.hasApiKey && (
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestConnection}
+              disabled={testMutation.isPending}
+              className="w-full"
+              data-testid={`button-test-${provider.provider}`}
+            >
+              {testMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <FlaskConical className="mr-2 h-4 w-4" />
+              )}
+              {testMutation.isPending ? "Testing…" : "Test connection"}
+            </Button>
+
+            {testResult && (
+              <div
+                className={`flex items-start gap-2 p-3 rounded-md text-sm ${
+                  testResult.ok
+                    ? "bg-green-500/10 border border-green-500/20 text-green-700 dark:text-green-400"
+                    : "bg-red-500/10 border border-red-500/20 text-red-700 dark:text-red-400"
+                }`}
+                data-testid={`test-result-${provider.provider}`}
+              >
+                {testResult.ok ? (
+                  <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+                ) : (
+                  <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                )}
+                <span className="break-all">
+                  {testResult.ok
+                    ? `Connection successful — model replied: "${testResult.response}"`
+                    : testResult.error}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </CardContent>
