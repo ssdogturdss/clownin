@@ -1100,7 +1100,7 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
             finalAgentText = textContent;
             sse("message", { text: textContent });
           }
-          sse("done", { sessionId: activeSessionId });
+          sse("done", { sessionId: activeSessionId, provider: providerResult.provider });
           res.end();
           return;
         }

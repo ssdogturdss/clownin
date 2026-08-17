@@ -109,6 +109,17 @@ function autoNameFromMessage(msg: string): string {
   return msg.trim().split(/\s+/).slice(0, 6).join(" ").replace(/[.!?]+$/, "");
 }
 
+/** Map internal provider slug to a display name. */
+function providerDisplayName(provider: string): string {
+  switch (provider) {
+    case "openai":     return "OpenAI";
+    case "anthropic":  return "Anthropic";
+    case "gemini":     return "Gemini";
+    case "openrouter": return "OpenRouter";
+    default:           return provider.charAt(0).toUpperCase() + provider.slice(1);
+  }
+}
+
 // Simple UUID v4 generator — works on all Hermes / web environments
 function generateUUID(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -422,6 +433,9 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const currentSessionIdRef = useRef<string | null>(null);
   const [pastSessions, setPastSessions] = useState<SessionSummary[]>([]);
 
+  // ── Active AI provider (set from the "done" SSE event) ───────────────────
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
+
   // ── Active session name (inline rename) ───────────────────────────────────
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
   // Ref that always mirrors currentSessionName so the archive closure always
@@ -508,6 +522,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     setCurrentSessionName(null);
     setMessages([]);
     historyRef.current = [];
+    setActiveProvider(null);
   }, []);
 
   // ── Rename the active session ─────────────────────────────────────────────
@@ -847,11 +862,14 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                   { role: "assistant", content: agentText },
                 ];
               }
-              // Capture the sessionId the server used for this turn
-              const { sessionId: serverSessionId } = (event.payload ?? {}) as { sessionId?: string };
+              // Capture the sessionId and provider the server used for this turn
+              const { sessionId: serverSessionId, provider: serverProvider } = (event.payload ?? {}) as { sessionId?: string; provider?: string };
               if (serverSessionId && serverSessionId !== currentSessionIdRef.current) {
                 currentSessionIdRef.current = serverSessionId;
                 setCurrentSessionId(serverSessionId);
+              }
+              if (serverProvider) {
+                setActiveProvider(serverProvider);
               }
               break;
             }
@@ -1251,6 +1269,16 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
           </View>
         )}
 
+        {/* Provider badge */}
+        {activeProvider && (
+          <View style={[styles.providerBadgeRow, { borderTopColor: colors.border }]}>
+            <MaterialCommunityIcons name="robot-outline" size={11} color={colors.mutedForeground} />
+            <Text style={[styles.providerBadgeText, { color: colors.mutedForeground }]}>
+              Powered by {providerDisplayName(activeProvider)}
+            </Text>
+          </View>
+        )}
+
         {/* Input */}
         <View style={[styles.inputRow, { borderTopColor: colors.border }]}>
           <Pressable
@@ -1409,6 +1437,13 @@ const styles = StyleSheet.create({
 
   // New conversation hint (shown in FlatList empty state when past sessions exist)
   newConvoHint: { alignItems: "center", paddingVertical: 20, paddingHorizontal: 24 },
+
+  // Provider badge
+  providerBadgeRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 4, paddingVertical: 4, borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  providerBadgeText: { fontSize: 10, fontFamily: "Inter_400Regular" },
 
   // Picker menu
   pickerMenu: { marginHorizontal: 10, marginBottom: 4, borderWidth: 1, borderRadius: 12, overflow: "hidden" },
