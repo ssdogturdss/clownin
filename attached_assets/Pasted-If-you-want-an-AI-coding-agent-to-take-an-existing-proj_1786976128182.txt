@@ -1,0 +1,485 @@
+If you want an AI coding agent to take an existing project and turn it into a complete, reproducible GitHub backup repository, use this:
+
+COMPLETE PROJECT BACKUP + GITHUB REPOSITORY
+
+Take the existing project/workspace and create a complete, production-quality GitHub backup repository.
+
+Do not create a partial backup. Do not omit important source files. Do not replace working code with placeholders. Preserve the actual project.
+
+1. INSPECT THE ENTIRE PROJECT
+
+First inspect the complete project structure.
+
+Identify:
+
+* Frontend
+* Backend
+* API routes
+* Database code
+* Database migrations
+* Configuration
+* Environment-variable requirements
+* AI/LLM integrations
+* Image-generation integrations
+* Authentication
+* API key systems
+* Agent tools
+* Monaco Editor
+* Canvas functionality
+* Assets
+* Components
+* Services
+* Scripts
+* Tests
+* Docker configuration
+* Deployment configuration
+* CI/CD configuration
+* Documentation
+
+Determine the actual technology stack before making changes.
+
+Do not assume the framework or package manager.
+
+⸻
+
+2. PRESERVE THE WORKING PROJECT
+
+Create a complete backup of the current working state.
+
+Preserve:
+
+* Source code
+* Configuration files
+* Package manifests
+* Lock files
+* Database schema
+* Migration files
+* Scripts
+* Tests
+* Documentation
+* Static assets
+* Public assets
+* Build configuration
+* Docker files
+* Deployment configuration
+* GitHub Actions
+* Infrastructure configuration
+
+Do NOT commit:
+
+* API keys
+* passwords
+* private certificates
+* authentication secrets
+* private tokens
+* .env files containing real credentials
+* SSH private keys
+* database credentials
+* cloud credentials
+* personal/private data
+
+Replace secret files with safe templates such as:
+
+.env.example
+
+⸻
+
+3. CREATE A PROPER .GITIGNORE
+
+Create or update .gitignore based on the actual technology stack.
+
+Include appropriate exclusions for:
+
+* node_modules
+* build output
+* dist
+* caches
+* temporary files
+* operating-system files
+* IDE files
+* local environment files
+* logs
+* generated artifacts
+* credentials
+* secrets
+
+Do not blindly ignore files that are required to reproduce the project.
+
+⸻
+
+4. CREATE ENVIRONMENT TEMPLATE
+
+Create:
+
+.env.example
+
+Document every environment variable required by the project.
+
+Example:
+
+DATABASE_URL=
+XAI_API_KEY=
+OPENAI_API_KEY=
+AUTH_SECRET=
+STORAGE_ENDPOINT=
+STORAGE_ACCESS_KEY=
+STORAGE_SECRET_KEY=
+REDIS_URL=
+
+Only include variables actually required by the project.
+
+Add comments explaining where each value comes from.
+
+Never put real credentials into .env.example.
+
+⸻
+
+5. VERIFY DEPENDENCIES
+
+Inspect:
+
+* package.json
+* package-lock.json
+* pnpm-lock.yaml
+* yarn.lock
+* requirements.txt
+* pyproject.toml
+* Docker files
+* other dependency manifests
+
+Use the project’s existing package manager.
+
+Make sure dependency versions are recorded.
+
+Do not unnecessarily upgrade dependencies during the backup.
+
+The objective is preservation, not modernization.
+
+⸻
+
+6. DATABASE BACKUP
+
+If the project uses a database:
+
+Preserve:
+
+* schema
+* migrations
+* seed scripts
+* ORM configuration
+* database setup documentation
+
+Do NOT commit production database credentials.
+
+If an actual database dump can safely be created without exposing secrets or private customer data, document the backup procedure.
+
+Do not include private customer data in the GitHub repository unless explicitly authorized.
+
+⸻
+
+7. CREATE DOCUMENTATION
+
+Create or update:
+
+README.md
+
+The README must explain:
+
+Project
+
+What the application does.
+
+Architecture
+
+Explain:
+
+Frontend
+Backend
+Database
+AI services
+Storage
+External APIs
+Infrastructure
+
+Requirements
+
+List required software.
+
+Installation
+
+Provide exact installation commands.
+
+Environment
+
+Explain .env.example.
+
+Development
+
+Provide the actual commands needed to run the project.
+
+Testing
+
+Provide test commands.
+
+Build
+
+Provide production build commands.
+
+Deployment
+
+Explain how to deploy the application.
+
+Backup and Restore
+
+Explain how to restore the repository into a working development environment.
+
+⸻
+
+8. CREATE BACKUP MANIFEST
+
+Create:
+
+BACKUP_MANIFEST.md
+
+Document:
+
+* Project name
+* Backup date
+* Git commit
+* Framework
+* Runtime version
+* Package manager
+* Database technology
+* External services
+* Required environment variables
+* Deployment method
+* Build command
+* Start command
+* Test command
+
+Also include a project directory tree.
+
+⸻
+
+9. CREATE RESTORE PROCEDURE
+
+Create:
+
+RESTORE.md
+
+Someone with a fresh computer should be able to follow this document and restore the project.
+
+The process should be:
+
+1. Clone repository.
+2. Install required runtime.
+3. Install dependencies.
+4. Copy .env.example to .env.
+5. Configure required services.
+6. Run database migrations.
+7. Start development server.
+8. Run tests.
+9. Build production version.
+
+Use the project’s actual commands.
+
+Do not invent commands.
+
+⸻
+
+10. RUN VALIDATION
+
+Before committing the backup:
+
+Run the appropriate:
+
+* dependency validation
+* type checking
+* linting
+* tests
+* build
+* configuration checks
+
+If something fails, determine whether the failure existed before the backup.
+
+Do NOT silently modify unrelated application functionality just to make the backup appear healthy.
+
+Document existing failures in:
+
+BACKUP_STATUS.md
+
+⸻
+
+11. GIT INITIALIZATION
+
+If the project is not already a Git repository:
+
+Initialize Git.
+
+Create an appropriate .gitignore.
+
+Create the initial commit.
+
+Use a meaningful commit message such as:
+
+chore: complete project backup
+
+If the project already has Git history, preserve the existing history whenever possible.
+
+Do not destroy existing commits.
+
+⸻
+
+12. GITHUB REPOSITORY
+
+Create a GitHub repository for the project if one does not already exist.
+
+Repository name should be based on the actual project name.
+
+Do not expose credentials.
+
+If GitHub authentication is unavailable, stop at the point where credentials or authorization are required and clearly tell the user what must be connected.
+
+Do not pretend the repository was uploaded if it was not.
+
+⸻
+
+13. PUSH THE COMPLETE BACKUP
+
+Push the complete project to GitHub.
+
+Verify:
+
+git status
+git remote -v
+git log
+git branch
+
+Then verify the remote repository actually contains the expected project files.
+
+Do not claim success until the remote push has actually completed.
+
+⸻
+
+14. CREATE GITHUB ACTIONS
+
+If appropriate for the project, create:
+
+.github/workflows/ci.yml
+
+The workflow should perform appropriate automated checks such as:
+
+* dependency installation
+* lint
+* type checking
+* tests
+* production build
+
+Do not create CI steps that are incompatible with the actual project.
+
+⸻
+
+15. CREATE RELEASE BACKUP
+
+Create a versioned backup tag.
+
+Example:
+
+backup-2026-08-17
+
+or:
+
+v1.0.0-backup
+
+Only create a release/version if appropriate.
+
+The repository should have a clear restore point.
+
+⸻
+
+16. VERIFY THE BACKUP
+
+Perform a final verification.
+
+Confirm:
+
+* Repository exists
+* Remote is configured
+* Files are committed
+* Push completed
+* Working tree is clean
+* No secrets are committed
+* .env.example exists
+* README exists
+* RESTORE.md exists
+* BACKUP_MANIFEST.md exists
+* Build information is documented
+* Tests are documented
+* Database migrations are preserved
+* Deployment configuration is preserved
+
+Perform a secret scan before pushing.
+
+If secrets are discovered:
+
+STOP.
+
+Do not push them.
+
+Remove them from the commit history when necessary and replace them with environment variables.
+
+⸻
+
+17. FINAL REPORT
+
+After completion, provide a concise report containing:
+
+Repository:
+GitHub repository name
+
+Branch:
+Default branch
+
+Commit:
+Latest backup commit
+
+Tag:
+Backup tag, if created
+
+Files:
+Number of tracked files
+
+Validation:
+Build status
+
+Tests:
+Test status
+
+Secrets:
+Secret scan status
+
+Restore:
+Instructions available in RESTORE.md
+
+Also clearly report anything that could NOT be backed up.
+
+ABSOLUTE RULE
+
+This is a real backup operation.
+
+Never say:
+
+“Backed up successfully”
+
+unless the repository was actually created/updated and the files were actually committed and pushed.
+
+Never fabricate:
+
+* GitHub URLs
+* commit hashes
+* repository names
+* test results
+* deployment status
+* backup completion
+
+If GitHub authentication or repository permissions are missing, stop and report the exact action required from the user.
