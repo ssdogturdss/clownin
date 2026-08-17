@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and, count, sql, asc } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
@@ -200,7 +200,9 @@ router.delete("/projects/:id", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  // Delete files first
+  // Delete child rows first to avoid FK violations
+  await db.delete(conversationMessagesTable).where(eq(conversationMessagesTable.projectId, id));
+  await db.delete(projectEnvVarsTable).where(eq(projectEnvVarsTable.projectId, id));
   await db.delete(projectFilesTable).where(eq(projectFilesTable.projectId, id));
   await db.delete(projectsTable).where(eq(projectsTable.id, id));
 
