@@ -490,6 +490,49 @@ router.post("/admin/providers/:provider/test", requireAuth, requireAdmin, async 
   }
 });
 
+// ── Provider health (decrypt check) ───────────────────────────────────────────
+
+/**
+ * GET /admin/provider-health
+ *
+ * Checks whether the active provider's stored key can be decrypted without
+ * actually calling the AI API. Returns:
+ *   { ok: true,  provider: string }            — key decrypts fine (or no active key in DB)
+ *   { ok: false, provider: string, error: string } — key is corrupt / wrong secret
+ */
+router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  const { decrypt } = await import("../lib/envCrypto.js");
+
+  const [active] = await db
+    .select()
+    .from(providerConfigsTable)
+    .where(eq(providerConfigsTable.isActive, true))
+    .limit(1);
+
+  if (!active) {
+    // No active DB-sourced provider — env-var fallback is in use, nothing to decrypt.
+    res.json({ ok: true, provider: null, usingEnvFallback: true });
+    return;
+  }
+
+  if (!active.encryptedApiKey) {
+    // Provider is marked active but has no key stored yet.
+    res.json({ ok: true, provider: active.provider, usingEnvFallback: false, noKeyStored: true });
+    return;
+  }
+
+  try {
+    decrypt(active.encryptedApiKey);
+    res.json({ ok: true, provider: active.provider, usingEnvFallback: false });
+  } catch {
+    res.json({
+      ok: false,
+      provider: active.provider,
+      error: "The stored key could not be decrypted — re-enter it below",
+    });
+  }
+});
+
 // ── API key-style generation endpoint ─────────────────────────────────────────
 // POST /admin/promo-codes/generate  — same as POST /admin/promo-codes but named
 // explicitly for programmatic / API use from external scripts.

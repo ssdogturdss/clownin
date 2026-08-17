@@ -1,17 +1,18 @@
 import { useState } from "react";
-import { useListProviders, useUpdateProvider, useTestProvider, getListProvidersQueryKey } from "@workspace/api-client-react";
+import { useListProviders, useUpdateProvider, useTestProvider, getListProvidersQueryKey, useProviderHealth } from "@workspace/api-client-react";
 import type { ProviderTestResult } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Cpu, KeyRound, CheckCircle2, XCircle, Bot, BrainCircuit, FlaskConical } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, Cpu, KeyRound, CheckCircle2, XCircle, Bot, BrainCircuit, FlaskConical, AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 export default function ProvidersPage() {
   const { data: providers, isLoading, error } = useListProviders();
+  const { data: health } = useProviderHealth();
   const queryClient = useQueryClient();
   const updateMutation = useUpdateProvider();
 
@@ -47,6 +48,7 @@ export default function ProvidersPage() {
   }
 
   const activeProviderId = providers?.find(p => p.isActive)?.provider;
+  const decryptFailed = health && !health.ok;
 
   return (
     <div className="space-y-6">
@@ -55,16 +57,32 @@ export default function ProvidersPage() {
         <p className="text-muted-foreground mt-2">Configure API keys and set the active model provider.</p>
       </div>
 
+      {decryptFailed && (
+        <Alert variant="destructive" className="flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+          <div>
+            <AlertTitle className="font-semibold">Provider key could not be decrypted</AlertTitle>
+            <AlertDescription>
+              {health.error ?? "The stored key could not be decrypted — re-enter it below."}{" "}
+              {health.provider && (
+                <span className="font-medium">Affected provider: <code className="font-mono">{health.provider}</code>.</span>
+              )}{" "}
+              Requests are currently falling back to the environment-variable provider.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
+
       <RadioGroup value={activeProviderId} onValueChange={handleSetActive} className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {providers?.map((provider) => (
-          <ProviderCard key={provider.provider} provider={provider} />
+          <ProviderCard key={provider.provider} provider={provider} decryptFailed={decryptFailed && health?.provider === provider.provider} />
         ))}
       </RadioGroup>
     </div>
   );
 }
 
-function ProviderCard({ provider }: { provider: any }) {
+function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFailed?: boolean }) {
   const queryClient = useQueryClient();
   const updateMutation = useUpdateProvider();
   const testMutation = useTestProvider();
@@ -158,7 +176,13 @@ function ProviderCard({ provider }: { provider: any }) {
         </div>
       </CardHeader>
       <CardContent className="pt-4 border-t border-border/50 mt-4 space-y-3">
-        {provider.hasApiKey ? (
+        {decryptFailed && (
+          <div className="flex items-start gap-2 p-3 rounded-md text-sm bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>Key is corrupt or was encrypted with a different secret — re-enter it below to fix.</span>
+          </div>
+        )}
+        {provider.hasApiKey && !decryptFailed ? (
           <div className="flex items-center justify-between bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 p-3 rounded-md">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4" />
