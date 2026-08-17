@@ -12,66 +12,108 @@
  *
  * The entitlement identifier that grants Pro access is read from:
  *   REVENUECAT_PRO_ENTITLEMENT_ID (default: "pro")
+ *
+ * Concurrency is capped at REVENUECAT_SYNC_CONCURRENCY (default: 5) parallel
+ * requests. 429 responses trigger exponential back-off with up to
+ * REVENUECAT_SYNC_MAX_RETRIES (default: 4) retries.
  */
 
 import cron from "node-cron";
+import pLimit from "p-limit";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
 
 const RC_API_BASE = "https://api.revenuecat.com/v1";
 
+/** How long to wait (ms) before the first retry on a 429. Doubles each attempt. */
+const BACKOFF_BASE_MS = 1_000;
+
+/**
+ * Sleep for `ms` milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Check whether a given RC app_user_id (= String(user.id)) has an active
  * Pro entitlement right now according to the RevenueCat REST API.
  *
  * Returns `true` if the entitlement is active, `false` otherwise.
+ * Retries up to `maxRetries` times on 429 responses with exponential back-off.
  * Throws on network / auth errors so the caller can decide whether to skip.
  */
 async function hasActiveProEntitlement(
   appUserId: string,
   apiKey: string,
   entitlementId: string,
+  maxRetries: number = 4,
 ): Promise<boolean> {
   const url = `${RC_API_BASE}/subscribers/${encodeURIComponent(appUserId)}`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "X-Platform": "stripe", // required by RC REST API for server-side calls
-    },
-  });
 
-  if (res.status === 404) {
-    // User not found in RevenueCat → no active subscription
-    return false;
-  }
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "X-Platform": "stripe", // required by RC REST API for server-side calls
+      },
+    });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "(unreadable)");
-    throw new Error(`RevenueCat API error ${res.status}: ${text}`);
-  }
+    if (res.status === 404) {
+      // User not found in RevenueCat → no active subscription
+      return false;
+    }
 
-  const data = (await res.json()) as {
-    subscriber?: {
-      entitlements?: Record<
-        string,
-        { expires_date: string | null; product_identifier: string }
-      >;
+    if (res.status === 429) {
+      if (attempt === maxRetries) {
+        const text = await res.text().catch(() => "(unreadable)");
+        throw new Error(
+          `RevenueCat rate-limited after ${maxRetries + 1} attempts: ${text}`,
+        );
+      }
+      const backoffMs = BACKOFF_BASE_MS * Math.pow(2, attempt);
+      logger.warn(
+        { appUserId, attempt, backoffMs },
+        "subscriptionSync: rate-limited by RevenueCat, backing off",
+      );
+      await sleep(backoffMs);
+      continue;
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "(unreadable)");
+      throw new Error(`RevenueCat API error ${res.status}: ${text}`);
+    }
+
+    const data = (await res.json()) as {
+      subscriber?: {
+        entitlements?: Record<
+          string,
+          { expires_date: string | null; product_identifier: string }
+        >;
+      };
     };
-  };
 
-  const entitlement = data.subscriber?.entitlements?.[entitlementId];
-  if (!entitlement) return false;
+    const entitlement = data.subscriber?.entitlements?.[entitlementId];
+    if (!entitlement) return false;
 
-  // expires_date is null for lifetime purchases; otherwise compare to now
-  if (entitlement.expires_date === null) return true;
-  return new Date(entitlement.expires_date) > new Date();
+    // expires_date is null for lifetime purchases; otherwise compare to now
+    if (entitlement.expires_date === null) return true;
+    return new Date(entitlement.expires_date) > new Date();
+  }
+
+  // Unreachable, but satisfies TypeScript
+  throw new Error("Unexpected exit from retry loop");
 }
 
 /**
  * Fetch all pro users from the database and revert those whose RevenueCat
  * entitlement is no longer active.
+ *
+ * Requests run at most `concurrency` at a time to avoid hammering the
+ * RevenueCat API when there are many Pro users.
  */
 export async function syncSubscriptions(): Promise<void> {
   const apiKey = process.env.REVENUECAT_API_KEY;
@@ -81,6 +123,14 @@ export async function syncSubscriptions(): Promise<void> {
   }
 
   const entitlementId = process.env.REVENUECAT_PRO_ENTITLEMENT_ID ?? "pro";
+  const concurrency = parseInt(
+    process.env.REVENUECAT_SYNC_CONCURRENCY ?? "5",
+    10,
+  );
+  const maxRetries = parseInt(
+    process.env.REVENUECAT_SYNC_MAX_RETRIES ?? "4",
+    10,
+  );
 
   let proUsers: { id: number }[];
   try {
@@ -94,41 +144,48 @@ export async function syncSubscriptions(): Promise<void> {
   }
 
   logger.info(
-    { count: proUsers.length },
+    { count: proUsers.length, concurrency, maxRetries },
     "subscriptionSync: checking pro users against RevenueCat",
   );
 
   let reverted = 0;
   let errors = 0;
 
-  for (const user of proUsers) {
-    const appUserId = String(user.id);
-    try {
-      const active = await hasActiveProEntitlement(
-        appUserId,
-        apiKey,
-        entitlementId,
-      );
+  const limit = pLimit(concurrency);
 
-      if (!active) {
-        await db
-          .update(usersTable)
-          .set({ subscriptionTier: "free" })
-          .where(eq(usersTable.id, user.id));
-        logger.info(
-          { userId: user.id },
-          "subscriptionSync: reverted lapsed user to free",
+  const tasks = proUsers.map((user) =>
+    limit(async () => {
+      const appUserId = String(user.id);
+      try {
+        const active = await hasActiveProEntitlement(
+          appUserId,
+          apiKey,
+          entitlementId,
+          maxRetries,
         );
-        reverted++;
+
+        if (!active) {
+          await db
+            .update(usersTable)
+            .set({ subscriptionTier: "free" })
+            .where(eq(usersTable.id, user.id));
+          logger.info(
+            { userId: user.id },
+            "subscriptionSync: reverted lapsed user to free",
+          );
+          reverted++;
+        }
+      } catch (err) {
+        logger.error(
+          { err, userId: user.id },
+          "subscriptionSync: error checking user — skipping",
+        );
+        errors++;
       }
-    } catch (err) {
-      logger.error(
-        { err, userId: user.id },
-        "subscriptionSync: error checking user — skipping",
-      );
-      errors++;
-    }
-  }
+    }),
+  );
+
+  await Promise.all(tasks);
 
   logger.info(
     { checked: proUsers.length, reverted, errors },
