@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Users, FolderOpen, Tag, Cpu } from "lucide-react";
+import { LayoutDashboard, Users, FolderOpen, Tag, Cpu, MessageSquare } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -7,6 +7,7 @@ const navItems = [
   { href: "/projects", label: "Projects", icon: FolderOpen },
   { href: "/promo-codes", label: "Promo Codes", icon: Tag },
   { href: "/providers", label: "AI Providers", icon: Cpu },
+  { href: "/sessions", label: "Sessions", icon: MessageSquare },
 ];
 
 export function Sidebar({ children }: { children: React.ReactNode }) {

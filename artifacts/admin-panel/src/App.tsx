@@ -12,6 +12,7 @@ import UsersPage from '@/pages/users';
 import ProjectsPage from '@/pages/projects';
 import PromoCodesPage from '@/pages/promo-codes';
 import ProvidersPage from '@/pages/providers';
+import SessionsPage from '@/pages/sessions';
 
 const queryClient = new QueryClient();
 
@@ -25,6 +26,7 @@ function Router() {
           <Route path="/projects" component={ProjectsPage} />
           <Route path="/promo-codes" component={PromoCodesPage} />
           <Route path="/providers" component={ProvidersPage} />
+          <Route path="/sessions" component={SessionsPage} />
           <Route component={NotFound} />
         </Switch>
       </Sidebar>

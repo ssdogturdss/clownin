@@ -7,8 +7,8 @@
  */
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, promoCodeRedemptionsTable, providerConfigsTable } from "@workspace/db";
-import { eq, desc, count, sql, and } from "drizzle-orm";
+import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, promoCodeRedemptionsTable, providerConfigsTable, conversationSessionsTable } from "@workspace/db";
+import { eq, desc, count, sql, and, isNotNull } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
 import { z } from "zod";
@@ -84,6 +84,48 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /admin/session-name-coverage
+ *
+ * Returns { total, named, unnamed } where:
+ *   total  — distinct session_ids in conversation_messages that are eligible
+ *            for a name (non-null session_id, at least one user message with
+ *            non-empty content). This mirrors the population the backfill
+ *            migration targets, so if the migration never ran, total > 0 and
+ *            unnamed = total.
+ *   named  — of those sessions, how many have a non-null name in
+ *            conversation_sessions.
+ *   unnamed — total − named; > 0 means the migration is incomplete.
+ */
+router.get("/admin/session-name-coverage", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
+  // Drive the count from conversation_messages so sessions that exist only in
+  // messages (but have no conversation_sessions row) are counted as unnamed.
+  const [row] = await db
+    .select({
+      total: sql<number>`count(distinct ${conversationMessagesTable.sessionId})::int`,
+      named: sql<number>`count(distinct case when ${conversationSessionsTable.name} is not null then ${conversationMessagesTable.sessionId} end)::int`,
+    })
+    .from(conversationMessagesTable)
+    .leftJoin(
+      conversationSessionsTable,
+      eq(conversationMessagesTable.sessionId, conversationSessionsTable.sessionId),
+    )
+    .where(
+      and(
+        isNotNull(conversationMessagesTable.sessionId),
+        eq(conversationMessagesTable.role, "user"),
+        isNotNull(conversationMessagesTable.content),
+        sql`trim(${conversationMessagesTable.content}) != ''`,
+      ),
+    );
+
+  const total = row?.total ?? 0;
+  const named = row?.named ?? 0;
+  const unnamed = total - named;
+
+  res.json({ total, named, unnamed });
+});
 
 router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   const [[{ userCount }], [{ projectCount }], [{ promoCount }], [{ proCount }]] = await Promise.all([
