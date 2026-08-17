@@ -127,6 +127,58 @@ router.get("/admin/session-name-coverage", requireAuth, requireAdmin, async (_re
   res.json({ total, named, unnamed });
 });
 
+/**
+ * GET /admin/unnamed-sessions?limit=50
+ *
+ * Returns up to `limit` (max 50) sessions that have no name, with exactly one
+ * row per session_id.  Each row includes:
+ *   - sessionId     — the session identifier
+ *   - projectId     — canonical project (smallest project_id among all messages
+ *                     for that session, deterministic when messages span projects)
+ *   - projectName   — name of that project (null if deleted)
+ *   - effectiveCreatedAt — COALESCE(conversation_sessions.created_at,
+ *                          MIN(conversation_messages.created_at)) so rows with
+ *                          no conversation_sessions entry still carry a timestamp
+ *
+ * Ordered by effectiveCreatedAt descending (most recently created first).
+ */
+router.get("/admin/unnamed-sessions", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const rawLimit = parseInt((req.query["limit"] as string) ?? "50", 10);
+  const limit = Math.min(isNaN(rawLimit) ? 50 : Math.max(1, rawLimit), 50);
+
+  // One row per session_id using aggregation.
+  // The eligible population mirrors /admin/session-name-coverage: session_ids
+  // that appear in at least one user message with non-empty content.
+  // We left-join conversation_sessions to detect missing / null-name rows.
+  const result = await db.execute(sql`
+    SELECT
+      cm.session_id                                         AS "sessionId",
+      MIN(cm.project_id)                                    AS "projectId",
+      (
+        SELECT p.name
+        FROM   projects p
+        WHERE  p.id = MIN(cm.project_id)
+      )                                                     AS "projectName",
+      COALESCE(
+        MIN(cs.created_at),
+        MIN(cm.created_at)
+      )                                                     AS "createdAt"
+    FROM   conversation_messages cm
+    LEFT JOIN conversation_sessions cs
+           ON cs.session_id = cm.session_id
+    WHERE  cm.session_id  IS NOT NULL
+      AND  cm.role        = 'user'
+      AND  cm.content     IS NOT NULL
+      AND  trim(cm.content) != ''
+      AND  cs.name        IS NULL          -- no row (LEFT JOIN → null) OR explicit null name
+    GROUP BY cm.session_id
+    ORDER BY "createdAt" DESC NULLS LAST
+    LIMIT  ${limit}
+  `);
+
+  res.json({ sessions: result.rows, limit });
+});
+
 router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   const [[{ userCount }], [{ projectCount }], [{ promoCount }], [{ proCount }]] = await Promise.all([
     db.select({ userCount: count() }).from(usersTable),

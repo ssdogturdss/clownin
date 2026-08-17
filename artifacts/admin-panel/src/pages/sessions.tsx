@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MessageSquare, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { MessageSquare, CheckCircle, XCircle, Loader2, CheckCircle2 } from "lucide-react";
 
 interface SessionNameCoverage {
   total: number;
@@ -9,17 +9,38 @@ interface SessionNameCoverage {
   unnamed: number;
 }
 
-async function fetchSessionNameCoverage(): Promise<SessionNameCoverage> {
+interface UnnamedSession {
+  sessionId: string | null;
+  projectId: number | null;
+  projectName: string | null;
+  createdAt: string | null;
+}
+
+interface UnnamedSessionsResult {
+  sessions: UnnamedSession[];
+  limit: number;
+}
+
+const API_ORIGIN = window.location.origin;
+
+function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("admin_token");
-  const res = await fetch(
-    `${window.location.origin}/api/admin/session-name-coverage`,
-    {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
-  }
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function fetchSessionNameCoverage(): Promise<SessionNameCoverage> {
+  const res = await fetch(`${API_ORIGIN}/api/admin/session-name-coverage`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json();
+}
+
+async function fetchUnnamedSessions(): Promise<UnnamedSessionsResult> {
+  const res = await fetch(`${API_ORIGIN}/api/admin/unnamed-sessions?limit=50`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
   return res.json();
 }
 
@@ -30,9 +51,23 @@ function useSessionNameCoverage() {
   });
 }
 
+function useUnnamedSessions(enabled: boolean) {
+  return useQuery<UnnamedSessionsResult>({
+    queryKey: ["admin", "unnamed-sessions"],
+    queryFn: fetchUnnamedSessions,
+    enabled,
+  });
+}
+
 export default function SessionsPage() {
   const { data, isLoading, error, dataUpdatedAt, refetch, isFetching } =
     useSessionNameCoverage();
+
+  const hasUnnamed = (data?.unnamed ?? 0) > 0;
+  const {
+    data: unnamedData,
+    isLoading: isLoadingUnnamed,
+  } = useUnnamedSessions(!!data && hasUnnamed);
 
   if (isLoading) {
     return (
@@ -177,6 +212,91 @@ export default function SessionsPage() {
         </CardContent>
       </Card>
 
+      {/* Unnamed sessions detail table */}
+      <Card data-testid="card-unnamed-sessions-table">
+        <CardHeader>
+          <CardTitle className="text-sm font-medium text-muted-foreground">
+            Unnamed Sessions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!hasUnnamed ? (
+            <div
+              className="flex flex-col items-center gap-2 py-8 text-center"
+              data-testid="empty-state-unnamed"
+            >
+              <CheckCircle2 className="h-8 w-8 text-green-500" />
+              <p className="text-sm font-medium text-foreground">No unnamed sessions</p>
+              <p className="text-xs text-muted-foreground">
+                All eligible sessions have a name — the backfill migration ran successfully.
+              </p>
+            </div>
+          ) : isLoadingUnnamed ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <>
+              {(unnamedData?.sessions.length ?? 0) > 0 ? (
+                <div className="overflow-x-auto" data-testid="table-unnamed-sessions">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="pb-2 pr-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Session ID
+                        </th>
+                        <th className="pb-2 pr-4 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Project
+                        </th>
+                        <th className="pb-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Created
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {unnamedData!.sessions.map((s) => (
+                        <tr key={s.sessionId ?? "unknown"} className="hover:bg-muted/50">
+                          <td className="py-2 pr-4 font-mono text-xs text-foreground">
+                            {s.sessionId ?? "—"}
+                          </td>
+                          <td className="py-2 pr-4 text-xs text-foreground">
+                            {s.projectName ? (
+                              <>
+                                <span>{s.projectName}</span>
+                                <span className="ml-1 text-muted-foreground">
+                                  #{s.projectId}
+                                </span>
+                              </>
+                            ) : s.projectId != null ? (
+                              <span className="text-muted-foreground">#{s.projectId}</span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="py-2 text-xs text-muted-foreground">
+                            {s.createdAt
+                              ? new Date(s.createdAt).toLocaleString()
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {(data?.unnamed ?? 0) > (unnamedData?.limit ?? 50) && (
+                    <p className="mt-3 text-xs text-muted-foreground" data-testid="text-truncation-notice">
+                      Showing first {unnamedData?.limit ?? 50} of{" "}
+                      {data?.unnamed.toLocaleString()} unnamed sessions.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="py-4 text-sm text-muted-foreground">No rows returned.</p>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
       <Card data-testid="card-api-hint">
         <CardHeader>
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -196,7 +316,9 @@ export default function SessionsPage() {
             Returns{" "}
             <code className="bg-muted px-1 rounded">{"{ total, named, unnamed }"}</code>.
             An <code className="bg-muted px-1 rounded">unnamed</code> value greater than 0
-            means the migration did not fully apply.
+            means the migration did not fully apply. Use{" "}
+            <code className="bg-muted px-1 rounded">/api/admin/unnamed-sessions</code> to
+            list the specific sessions (up to 50 rows).
           </p>
         </CardContent>
       </Card>
