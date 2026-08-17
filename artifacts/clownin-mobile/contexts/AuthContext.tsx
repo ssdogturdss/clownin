@@ -4,9 +4,28 @@ import * as SecureStore from 'expo-secure-store';
 import { router } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { setAuthTokenGetter, setUnauthorizedHandler } from '@workspace/api-client-react';
+import { setAuthTokenGetter, setUnauthorizedHandler, customFetch } from '@workspace/api-client-react';
 import type { UserProfile } from '@workspace/api-client-react';
 import Purchases from 'react-native-purchases';
+
+// ---------------------------------------------------------------------------
+// Auto-login credentials — no login screen shown; app always signs in as this
+// account on first launch (or after a token expiry).
+// ---------------------------------------------------------------------------
+const AUTO_LOGIN_EMAIL = 'ss@clownin.dev';
+const AUTO_LOGIN_PASSWORD = '1211';
+
+async function fetchAutoLoginToken(): Promise<{ token: string; user: UserProfile } | null> {
+  try {
+    const res = await customFetch<{ token: string; user: UserProfile }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: AUTO_LOGIN_EMAIL, password: AUTO_LOGIN_PASSWORD }),
+    });
+    return res;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Platform-aware key-value storage
@@ -82,8 +101,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthTokenGetter(t ? () => t : null);
   }, []);
 
-  // Keep a ref to the latest logout so the unauthorized handler never goes stale
+  // Keep refs to login/logout so async handlers never capture stale closures
   const logoutRef = useRef<() => Promise<void>>(async () => {});
+  const loginRef = useRef<(token: string, user: UserProfile) => Promise<void>>(async () => {});
 
   const logout = useCallback(async () => {
     await Promise.all([
@@ -114,21 +134,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyToken, queryClient]);
 
-  // Keep the ref in sync
-  useEffect(() => {
-    logoutRef.current = logout;
-  }, [logout]);
+  // Keep refs in sync with latest callbacks
+  useEffect(() => { logoutRef.current = logout; }, [logout]);
+  useEffect(() => { loginRef.current = login; });
 
-  // Register a global 401 handler — clears credentials and sends user to login
+  // Register a global 401 handler — clears credentials and re-logs in automatically
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       await logoutRef.current();
-      router.replace('/(auth)/login');
+      const result = await fetchAutoLoginToken();
+      if (result) {
+        await loginRef.current(result.token, result.user);
+      } else {
+        // API unreachable — stay on current screen, will retry next request
+      }
     });
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  // Restore persisted session on app start, skipping expired tokens
+  // Restore persisted session on app start; auto-login if none found or expired
   useEffect(() => {
     (async () => {
       try {
@@ -136,26 +160,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           storage.getItem(TOKEN_KEY),
           storage.getItem(USER_KEY),
         ]);
-        if (storedToken && storedUser) {
-          if (isTokenExpired(storedToken)) {
-            // Token is expired — purge it so the user is sent to login
-            await Promise.all([
-              storage.removeItem(TOKEN_KEY),
-              storage.removeItem(USER_KEY),
-            ]);
-          } else {
-            const parsedUser = JSON.parse(storedUser) as UserProfile;
-            setToken(storedToken);
-            setUser(parsedUser);
-            applyToken(storedToken);
-            // Re-identify the RevenueCat user on app restart so the
-            // app_user_id in webhooks matches our DB user ID.
-            try {
-              await Purchases.logIn(String(parsedUser.id));
-            } catch {
-              // RC SDK may not be configured in dev — non-fatal.
-            }
+
+        const hasValid = storedToken && storedUser && !isTokenExpired(storedToken);
+
+        if (hasValid) {
+          const parsedUser = JSON.parse(storedUser!) as UserProfile;
+          setToken(storedToken!);
+          setUser(parsedUser);
+          applyToken(storedToken!);
+          try { await Purchases.logIn(String(parsedUser.id)); } catch { /* non-fatal */ }
+        } else {
+          // No valid stored session — auto-login silently
+          if (storedToken) {
+            await Promise.all([storage.removeItem(TOKEN_KEY), storage.removeItem(USER_KEY)]);
           }
+          const result = await fetchAutoLoginToken();
+          if (result) {
+            await loginRef.current(result.token, result.user);
+          }
+          // If auto-login fails (API down), isLoading finishes and index.tsx
+          // will redirect to login as the fallback.
         }
       } catch {
         // ignore storage errors
@@ -163,6 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyToken]);
 
   const login = async (newToken: string, newUser: UserProfile) => {

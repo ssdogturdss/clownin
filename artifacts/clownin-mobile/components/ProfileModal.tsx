@@ -17,7 +17,7 @@ import { useColors } from '@/hooks/useColors';
 import { useProfile } from '@/hooks/useProfile';
 import { PaywallSheet } from './PaywallSheet';
 import { resolveApiBaseUrl } from '@/app/_layout';
-import { useRedeemPromoCode } from '@workspace/api-client-react';
+import { useRedeemPromoCode, type RedeemPromoCodeResponse } from '@workspace/api-client-react';
 
 interface ProfileModalProps {
   visible: boolean;
@@ -38,7 +38,7 @@ export function ProfileModal({ visible, onClose, onLogout }: ProfileModalProps) 
   const [promoCode, setPromoCode] = useState('');
   const { mutate: redeemCode, isPending: isRedeeming } = useRedeemPromoCode({
     mutation: {
-      onSuccess: (data) => {
+      onSuccess: (data: RedeemPromoCodeResponse) => {
         setPromoCode('');
         setShowPromoInput(false);
         refetchProfile();
