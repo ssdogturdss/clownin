@@ -627,6 +627,64 @@ describe("PATCH /api/projects/:id/conversations/:sessionId/name", () => {
     expect(res.body).toMatchObject({ error: "session not found" });
   });
 
+  // ── IDOR: cross-user rename attempt ─────────────────────────────────────────
+
+  it("cannot rename a session that belongs to a different user's project (IDOR)", async () => {
+    // Scenario: user A (userId=1, the authenticated user) sends a PATCH request
+    // targeting project 99, which is owned by user B.
+    //
+    // The ownership check query must be scoped to BOTH the requested project ID
+    // (99) AND the authenticated user's ID (1). We assert the where-clause
+    // condition contains both values — so removing the userId filter from the
+    // route would fail this test even if the mock happens to return [].
+    //
+    // The route finds no row and returns 404. db.insert is never called,
+    // confirming user B's conversation_sessions row is completely untouched.
+    const USER_A_ID = 1; // mockGetUser always returns userId: 1
+    const USER_B_PROJECT_ID = 99;
+    const USER_B_SESSION_ID = "sess-user-b-private";
+
+    // Project ownership check returns no rows because user A does not own
+    // project 99 — the route must stop here.
+    queueSelect([]);
+
+    const res = await request(app)
+      .patch(`/api/projects/${USER_B_PROJECT_ID}/conversations/${USER_B_SESSION_ID}/name`)
+      .set(AUTH) // authenticated as user A (userId=1)
+      .send({ name: "Hijacked Name" });
+
+    // Must be 404 — the project is not visible to user A
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: "project not found" });
+
+    // The upsert must never have been called — user B's session row is untouched
+    expect(mockDbInsert).not.toHaveBeenCalled();
+
+    // Critical: assert the ownership query was scoped to BOTH the target
+    // project ID AND the authenticated user's ID.
+    //
+    // The route issues:
+    //   db.select().from(projectsTable)
+    //     .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+    //     .limit(1)
+    //
+    // The drizzle-orm mock translates this to:
+    //   eq(col, val) → { eq: val }
+    //   and(...args) → { and: args }
+    //
+    // So the where argument becomes: { and: [{ eq: 99 }, { eq: 1 }] }
+    //
+    // If a future change removes the userId filter, { eq: USER_A_ID } will not
+    // appear in the conditions array and this assertion will catch it.
+    const selectResult = mockDbSelect.mock.results[0]!.value as {
+      from: { mock: { results: Array<{ value: { where: { mock: { calls: Array<[unknown]> } } } }> } };
+    };
+    const whereArg = selectResult.from.mock.results[0]!.value.where.mock.calls[0]![0];
+    const conditions = (whereArg as { and: Array<{ eq: unknown }> }).and;
+    expect(conditions).toContainEqual({ eq: USER_B_PROJECT_ID }); // project ID filter
+    expect(conditions).toContainEqual({ eq: USER_A_ID });          // userId filter — proves ownership is checked
+  });
+
   // ── Happy path: rename an existing session ────────────────────────────────────
 
   it("renames a session that already has a conversation_sessions row", async () => {
