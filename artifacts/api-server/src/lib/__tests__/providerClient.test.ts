@@ -57,7 +57,11 @@ vi.mock("@anthropic-ai/sdk", () => ({ default: vi.fn() }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────
 
-import { getProviderClient, _resetProviderCacheForTests } from "../providerClient.js";
+import {
+  getProviderClient,
+  _resetProviderCacheForTests,
+  PROVIDER_DEFAULT_MODELS,
+} from "../providerClient.js";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -570,6 +574,102 @@ describe("getProviderClient — key revoked mid-session", () => {
     expect(MockOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "sk-replacement-key" }),
     );
+  });
+});
+
+// ── (g) Model override — DB model column survives a restart ──────────────────
+//
+// When the admin sets a custom model in the DB (provider_configs.model), that
+// model must be used by getProviderClient() regardless of whether the process
+// has just started (cold cache) — simulating an API server restart.
+//
+// Two cases are required:
+//   1. Non-null / non-empty model → custom model is used.
+//   2. Null / empty model         → falls back to PROVIDER_DEFAULT_MODELS.
+
+describe("getProviderClient — model override persists across server restart", () => {
+  it("uses the custom model stored in the DB row when it is non-null", async () => {
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: "gpt-4o-mini" },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe("gpt-4o-mini");
+  });
+
+  it("uses the custom model on a cold cache (simulating a fresh server restart)", async () => {
+    // _resetProviderCacheForTests() is called in beforeEach, so the cache is
+    // already cold — this mirrors the state immediately after a restart.
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: "o3-mini" },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe("o3-mini");
+    // DB was queried (cold cache → no shortcut).
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to PROVIDER_DEFAULT_MODELS when the DB model column is null", async () => {
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: null },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe(PROVIDER_DEFAULT_MODELS["openai"]);
+  });
+
+  it("falls back to PROVIDER_DEFAULT_MODELS when the DB model column is an empty string", async () => {
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: "" },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe(PROVIDER_DEFAULT_MODELS["openai"]);
+  });
+
+  it("falls back to PROVIDER_DEFAULT_MODELS when the DB model column is a whitespace-only string", async () => {
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: "   " },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe(PROVIDER_DEFAULT_MODELS["openai"]);
+  });
+
+  it("uses the correct per-provider default when model is null (anthropic)", async () => {
+    mockDecrypt.mockReturnValue("sk-ant-key");
+    mockLimit.mockResolvedValue([
+      { provider: "anthropic", encryptedApiKey: "enc-ant", isActive: true, model: null },
+    ]);
+
+    const result = await getProviderClient();
+
+    expect(result.model).toBe(PROVIDER_DEFAULT_MODELS["anthropic"]);
+  });
+
+  it("custom model is cached and served without re-querying DB on the next call", async () => {
+    mockDecrypt.mockReturnValue("sk-key");
+    mockLimit.mockResolvedValue([
+      { provider: "openai", encryptedApiKey: "enc-key", isActive: true, model: "gpt-4o-mini" },
+    ]);
+
+    const result1 = await getProviderClient(); // populates cache
+    const result2 = await getProviderClient(); // served from cache
+
+    expect(result1.model).toBe("gpt-4o-mini");
+    expect(result2.model).toBe("gpt-4o-mini");
+    expect(mockSelect).toHaveBeenCalledTimes(1); // DB queried only once
   });
 });
 
