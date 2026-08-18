@@ -859,6 +859,35 @@ describe("PATCH /api/projects/:id/conversations/:sessionId/name", () => {
     });
   });
 
+  // ── DELETE: legacy sentinel skips conversation_sessions cleanup ──────────────
+
+  it("deletes only messages (not sessions) and returns { ok: true } when sessionId is 'legacy'", async () => {
+    // "legacy" is the sentinel for pre-migration rows where session_id IS NULL.
+    // These rows have no conversation_sessions entry, so the handler must:
+    //   1. Delete from conversationMessagesTable  (one db.delete() call)
+    //   2. Skip the conversationSessionsTable delete entirely
+    // This test asserts exactly one db.delete() call was made.
+    const PROJECT_ID = 5;
+
+    // Project ownership check → found
+    queueSelect([{ id: PROJECT_ID }]);
+
+    const res = await request(app)
+      .delete(`/api/projects/${PROJECT_ID}/conversations/legacy`)
+      .set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+
+    // Exactly one delete — messages only; sessions table must not be touched.
+    expect(mockDbDelete).toHaveBeenCalledTimes(1);
+    // The single call must target conversationMessagesTable, which has no "name"
+    // column in our mock. conversationSessionsTable has "name" — its absence here
+    // proves the sessions-table branch was skipped.
+    const deletedTable = mockDbDelete.mock.calls[0]![0] as Record<string, unknown>;
+    expect(deletedTable).not.toHaveProperty("name");
+  });
+
   it("returns name: null after delete-then-recreate (no ghost name)", async () => {
     // Scenario: a session is named via PATCH, then deleted via DELETE.
     // If the same session_id is re-used (e.g. a retry/reconnect flow), the GET
