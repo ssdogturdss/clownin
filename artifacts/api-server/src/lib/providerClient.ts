@@ -24,6 +24,7 @@ export const PROVIDER_BASE_URLS: Record<string, string> = {
   openai:     "https://api.openai.com/v1",
   gemini:     "https://generativelanguage.googleapis.com/v1beta/openai",
   openrouter: "https://openrouter.ai/api/v1",
+  xai:        "https://api.x.ai/v1",
 };
 
 // ── Default model names per provider ─────────────────────────────────────────
@@ -32,6 +33,7 @@ export const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   anthropic:  "claude-opus-4-5",
   gemini:     "gemini-2.0-flash",
   openrouter: "openai/gpt-4o",
+  xai:        "grok-3",
 };
 
 export interface ProviderClientResult {

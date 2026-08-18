@@ -116,6 +116,7 @@ function providerDisplayName(provider: string): string {
     case "anthropic":  return "Anthropic";
     case "gemini":     return "Gemini";
     case "openrouter": return "OpenRouter";
+    case "xai":        return "xAI Grok";
     default:           return provider.charAt(0).toUpperCase() + provider.slice(1);
   }
 }

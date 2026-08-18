@@ -394,6 +394,7 @@ const KNOWN_PROVIDERS = [
   { provider: "anthropic",  displayName: "Anthropic" },
   { provider: "gemini",     displayName: "Google Gemini" },
   { provider: "openrouter", displayName: "OpenRouter" },
+  { provider: "xai",        displayName: "xAI Grok" },
 ];
 
 router.get("/admin/providers", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
@@ -508,12 +509,14 @@ router.post("/admin/providers/:provider/test", requireAuth, requireAdmin, async 
     openai:     "https://api.openai.com/v1",
     gemini:     "https://generativelanguage.googleapis.com/v1beta/openai",
     openrouter: "https://openrouter.ai/api/v1",
+    xai:        "https://api.x.ai/v1",
   };
   const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
     openai:     "gpt-4o-mini",
     anthropic:  "claude-haiku-4-5",
     gemini:     "gemini-2.0-flash",
     openrouter: "openai/gpt-4o-mini",
+    xai:        "grok-3-mini",
   };
 
   const model = PROVIDER_DEFAULT_MODELS[providerKey] ?? "gpt-4o-mini";
