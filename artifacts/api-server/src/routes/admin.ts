@@ -580,10 +580,12 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
   // Resolve the client the same way user requests do. Throws only when there
   // is no usable provider anywhere (no DB key and no env-var key).
   let liveProvider: string | null = null;
+  let liveModel: string | null = null;
   let liveError: string | null = null;
   try {
     const client = await getProviderClient();
     liveProvider = client.provider;
+    liveModel = client.model;
   } catch (err: any) {
     liveError = err?.message ?? String(err);
   }
@@ -604,6 +606,7 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
       ok: false,
       provider: active?.provider ?? null,
       activeProvider: null,
+      model: null,
       noProvider: true,
       decryptError,
       error: liveError,
@@ -616,6 +619,7 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
       ok: false,
       provider: active!.provider,
       activeProvider: liveProvider,
+      model: liveModel,
       usingEnvFallback: true,
       decryptError: true,
       error: "The stored key could not be decrypted — re-enter it below",
@@ -630,6 +634,7 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
     ok: true,
     provider: active?.provider ?? null,
     activeProvider: liveProvider,
+    model: liveModel,
     usingEnvFallback: !usingDbKey,
     ...(active && !active.encryptedApiKey ? { noKeyStored: true } : {}),
   });

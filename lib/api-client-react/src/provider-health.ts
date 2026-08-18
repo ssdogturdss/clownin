@@ -12,6 +12,8 @@ export interface ProviderHealthResult {
   provider: string | null;
   /** The provider actually serving requests right now (or null when unreachable) */
   activeProvider?: string | null;
+  /** The model currently in use (custom override or provider default) */
+  model?: string | null;
   /** true when the stored key for the active provider failed to decrypt */
   decryptError?: boolean;
   /** true when falling back to env-var provider (no DB key to decrypt) */

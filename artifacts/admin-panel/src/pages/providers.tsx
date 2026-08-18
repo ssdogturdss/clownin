@@ -80,7 +80,10 @@ export default function ProvidersPage() {
           >
             <span className={`h-2 w-2 rounded-full ${health.ok ? "bg-green-500" : "bg-red-500"}`} />
             {health.ok
-              ? `Live: ${health.activeProvider ?? health.provider ?? "env fallback"}`
+              ? [
+                  `Live: ${health.activeProvider ?? health.provider ?? "env fallback"}`,
+                  health.model ? `· ${health.model}` : null,
+                ].filter(Boolean).join(" ")
               : health.noProvider
                 ? "No provider reachable"
                 : "Provider key error"}
