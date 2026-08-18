@@ -826,9 +826,9 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     // Safety limits prevent a malicious or oversized archive from exhausting memory
     // or producing a prompt too large for the model.
     const TEXT_EXTENSIONS = new Set(["js","ts","jsx","tsx","py","rb","go","rs","java","sh","bash","txt","md","json","yaml","yml","toml","html","css","scss","sql","env","gitignore","dockerfile","makefile","ini","cfg","conf"]);
-    const ZIP_MAX_ENTRIES        = 50;          // max files extracted per archive
-    const ZIP_MAX_ENTRY_BYTES    = 256 * 1024;  // 256 KB per file
-    const ZIP_MAX_TOTAL_BYTES    = 1024 * 1024; // 1 MB total across all zip files
+    const ZIP_MAX_ENTRIES        = 500;           // max files extracted per archive
+    const ZIP_MAX_ENTRY_BYTES    = 2 * 1024 * 1024;  // 2 MB per file
+    const ZIP_MAX_TOTAL_BYTES    = 20 * 1024 * 1024; // 20 MB total across all zip files
     let zipTotalBytes = 0;
     for (const zipAtt of zipFiles) {
       try {

@@ -42,8 +42,8 @@ app.use(serveProxyRouter);
 // uses express.raw() internally to capture the raw body for auth verification.
 app.use(webhookRouter);
 
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 // Serve static assets (og:image etc.) at /preview/...
 app.use("/preview", express.static(path.join(__dirname, "assets")));

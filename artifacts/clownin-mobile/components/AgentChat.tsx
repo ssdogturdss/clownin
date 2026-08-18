@@ -604,6 +604,9 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     });
   }, []);
 
+  // 75 MB ceiling — server accepts 100 MB JSON, but base64 adds ~33% overhead
+  const MAX_ATTACHMENT_BYTES = 75 * 1024 * 1024;
+
   const pickImage = useCallback(async () => {
     setPickerOpen(false);
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -611,13 +614,17 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       base64: true,
-      quality: 0.7,
+      quality: 0.85,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
+      const base64 = asset.base64 ?? "";
+      if (base64.length * 0.75 > MAX_ATTACHMENT_BYTES) {
+        Alert.alert("Image too large", "Please choose an image under 75 MB.");
+        return;
+      }
       const name = asset.fileName ?? `image-${Date.now()}.jpg`;
       const mimeType = asset.mimeType ?? "image/jpeg";
-      const base64 = asset.base64 ?? "";
       setAttachments((prev) => [...prev, { kind: "image", name, base64, mimeType, preview: asset.uri }]);
     }
   }, []);
@@ -628,6 +635,11 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       const result = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
+      // Check reported file size before reading it into memory
+      if (asset.size && asset.size > MAX_ATTACHMENT_BYTES) {
+        Alert.alert("File too large", `This file is ${(asset.size / (1024 * 1024)).toFixed(0)} MB. Please choose a file under 75 MB.`);
+        return;
+      }
       const lowerName = asset.name.toLowerCase();
       const isZip =
         lowerName.endsWith(".zip") ||
@@ -636,6 +648,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       if (isZip) {
         const resp = await fetch(asset.uri);
         const blob = await resp.blob();
+        if (blob.size > MAX_ATTACHMENT_BYTES) {
+          Alert.alert("File too large", `This zip is ${(blob.size / (1024 * 1024)).toFixed(0)} MB. Please choose a file under 75 MB.`);
+          return;
+        }
         const base64 = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => {
@@ -648,6 +664,10 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         setAttachments((prev) => [...prev, { kind: "zip", name: asset.name, base64 }]);
       } else {
         const content = await FileSystem.readAsStringAsync(asset.uri);
+        if (content.length > MAX_ATTACHMENT_BYTES) {
+          Alert.alert("File too large", "Please choose a file under 75 MB.");
+          return;
+        }
         setAttachments((prev) => [...prev, { kind: "text", name: asset.name, content }]);
       }
     } catch {
