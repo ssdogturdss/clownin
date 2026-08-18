@@ -371,6 +371,100 @@ describe("getProviderClient — TTL expiry re-queries DB", () => {
   });
 });
 
+// ── (e) Admin deactivates provider mid-session ───────────────────────────────
+//
+// When a valid cache entry exists but the admin removes or deactivates the
+// provider row (isActive → false), the next re-query should find no active
+// row, clear _providerCache, and fall through to the env-var fallback
+// immediately — not after the remaining TTL window.
+
+describe("getProviderClient — admin deactivates provider mid-session", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("clears the cache and falls back to env-var when the active provider is deactivated after TTL", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-db-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // call 1 — populates cache
+
+    // Admin deactivates the provider; DB now returns no active row.
+    mockLimit.mockResolvedValue([]);
+
+    vi.advanceTimersByTime(31_000); // TTL expires → next call re-queries DB
+
+    const result = await getProviderClient(); // call 2 — finds no active row
+
+    expect(result.provider).toBe("openai"); // env-var fallback
+    expect(result.openaiClient).toBeDefined();
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the env-var key (not the stale cached DB key) after provider is deactivated", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-db-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // cache populated with "sk-db-key"
+    MockOpenAI.mockClear();
+
+    // Provider deactivated.
+    mockLimit.mockResolvedValue([]);
+    vi.advanceTimersByTime(31_000);
+
+    await getProviderClient();
+
+    // Must use the env-var key, not the previously cached DB key.
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "env-key" }),
+    );
+    expect(MockOpenAI).not.toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-db-key" }),
+    );
+  });
+
+  it("clears _providerCache so subsequent requests also re-query the DB", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-db-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // call 1 — cache populated
+
+    // Provider deactivated.
+    mockLimit.mockResolvedValue([]);
+    vi.advanceTimersByTime(31_000);
+
+    await getProviderClient(); // call 2 — deactivated: cache cleared, env-var used
+    await getProviderClient(); // call 3 — cache still null: re-queries DB again
+
+    // DB queried on calls 1, 2, and 3 (cache never re-populated after deactivation).
+    expect(mockSelect).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to env-var immediately when admin calls resetProviderCache before TTL expires", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-db-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // cache populated, TTL window still open
+
+    // Admin deactivates provider and the admin route calls resetProviderCache().
+    mockLimit.mockResolvedValue([]);
+    _resetProviderCacheForTests(); // simulates resetProviderCache() called by admin route
+
+    // No time advance — cache was manually cleared, not TTL-expired.
+    const result = await getProviderClient();
+
+    expect(result.provider).toBe("openai"); // env-var fallback
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "env-key" }),
+    );
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── No provider configured at all ────────────────────────────────────────────
 
 describe("getProviderClient — no provider configured", () => {
