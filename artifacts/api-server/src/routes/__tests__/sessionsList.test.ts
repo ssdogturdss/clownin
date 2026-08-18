@@ -21,7 +21,7 @@ import request from "supertest";
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 
-const { mockDbExecute, mockDbSelect, mockDbInsert, mockRequireAuth, mockGetUser, nameStore } =
+const { mockDbExecute, mockDbSelect, mockDbInsert, mockDbDelete, mockRequireAuth, mockGetUser, nameStore } =
   vi.hoisted(() => {
     const mockDbExecute = vi.fn();
 
@@ -100,7 +100,25 @@ const { mockDbExecute, mockDbSelect, mockDbInsert, mockRequireAuth, mockGetUser,
       username: "testuser",
     }));
 
-    return { mockDbExecute, mockDbSelect, mockDbInsert, mockRequireAuth, mockGetUser, nameStore };
+    // Stateful delete mock: when deleting from conversation_sessions (detected by
+    // presence of a "name" column on the table object), remove the entry from
+    // nameStore so that a subsequent GET for the same session sees no ghost name.
+    const mockDbDelete = vi.fn((table: unknown) => ({
+      where: vi.fn((condition: unknown) => {
+        const tbl = table as Record<string, unknown>;
+        if ("name" in tbl) {
+          // conversationSessionsTable — extract the sessionId from the drizzle-orm
+          // mock's and([{eq: sessionId}, {eq: projectId}]) shape and clear it.
+          const cond = condition as { and?: Array<{ eq?: unknown }> };
+          if (cond?.and?.[0]?.eq != null) {
+            nameStore.delete(String(cond.and[0].eq));
+          }
+        }
+        return Promise.resolve();
+      }),
+    }));
+
+    return { mockDbExecute, mockDbSelect, mockDbInsert, mockDbDelete, mockRequireAuth, mockGetUser, nameStore };
   });
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -112,7 +130,7 @@ vi.mock("@workspace/db", () => ({
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
     insert: mockDbInsert,
     transaction: vi.fn(),
-    delete: vi.fn(() => ({ where: vi.fn() })),
+    delete: mockDbDelete,
   },
   usersTable: {
     id: "id",
@@ -227,6 +245,19 @@ beforeEach(() => {
   (mockDbSelect as unknown as SelectMock)._queue.length = 0;
   // Clear the stateful name store so round-trip tests start with a clean slate.
   nameStore.clear();
+  // Re-apply the stateful implementation after clearAllMocks resets it.
+  mockDbDelete.mockImplementation((table: unknown) => ({
+    where: vi.fn((condition: unknown) => {
+      const tbl = table as Record<string, unknown>;
+      if ("name" in tbl) {
+        const cond = condition as { and?: Array<{ eq?: unknown }> };
+        if (cond?.and?.[0]?.eq != null) {
+          nameStore.delete(String(cond.and[0].eq));
+        }
+      }
+      return Promise.resolve();
+    }),
+  }));
 
   mockRequireAuth.mockImplementation(
     (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -767,6 +798,67 @@ describe("PATCH /api/projects/:id/conversations/:sessionId/name", () => {
     expect(getRes.body[0]).toMatchObject({
       sessionId: SESSION_ID,
       name: "First Ever Name",
+    });
+  });
+
+  it("returns name: null after delete-then-recreate (no ghost name)", async () => {
+    // Scenario: a session is named via PATCH, then deleted via DELETE.
+    // If the same session_id is re-used (e.g. a retry/reconnect flow), the GET
+    // must NOT return the old name — it should be null.
+    //
+    // The DELETE handler must delete the conversation_sessions row so the name
+    // cannot reappear.  The mockDbDelete mock clears nameStore for
+    // conversationSessionsTable, mirroring what the real DELETE does to the DB.
+    const SESSION_ID = "sess-ghost-name-test";
+    const PROJECT_ID = 5;
+
+    // ── PATCH: name the session ───────────────────────────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // ownership
+    queueSelect([{ sessionId: SESSION_ID }]);   // session existence
+
+    const patchRes = await request(app)
+      .patch(`/api/projects/${PROJECT_ID}/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "Soon To Be Deleted" });
+
+    expect(patchRes.status).toBe(200);
+    expect(nameStore.get(SESSION_ID)).toBe("Soon To Be Deleted");
+
+    // ── DELETE: remove the session ────────────────────────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // ownership
+
+    const deleteRes = await request(app)
+      .delete(`/api/projects/${PROJECT_ID}/conversations/${SESSION_ID}`)
+      .set(AUTH);
+
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body).toMatchObject({ ok: true });
+
+    // The session name must have been cleared by the DELETE handler so a
+    // re-created session with the same ID cannot inherit the old name.
+    expect(nameStore.get(SESSION_ID)).toBeUndefined();
+
+    // ── GET: simulate re-creation with same session_id ────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // ownership
+    mockDbExecute.mockResolvedValueOnce({
+      rows: [makeSessionRow(SESSION_ID)],       // session exists again (re-created)
+    });
+    // Name lookup reads from nameStore — must be empty after DELETE
+    queueDynamicSelect(() => {
+      const name = nameStore.get(SESSION_ID);
+      return name ? [{ sessionId: SESSION_ID, name }] : [];
+    });
+    queueSelect([{ content: "Starting over" }]); // preview
+
+    const getRes = await request(app)
+      .get(`/api/projects/${PROJECT_ID}/conversations`)
+      .set(AUTH);
+
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toHaveLength(1);
+    expect(getRes.body[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      name: null,
     });
   });
 });

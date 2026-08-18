@@ -490,6 +490,20 @@ router.delete(
       .delete(conversationMessagesTable)
       .where(and(eq(conversationMessagesTable.projectId, projectId), sessionFilter));
 
+    // Also remove the conversation_sessions row so the session name cannot
+    // reappear if a new session is later created with the same session_id.
+    // "legacy" sessions have no session_id and therefore no sessions row.
+    if (sessionId !== "legacy") {
+      await db
+        .delete(conversationSessionsTable)
+        .where(
+          and(
+            eq(conversationSessionsTable.sessionId, sessionId),
+            eq(conversationSessionsTable.projectId, projectId),
+          ),
+        );
+    }
+
     res.json({ ok: true });
   },
 );
