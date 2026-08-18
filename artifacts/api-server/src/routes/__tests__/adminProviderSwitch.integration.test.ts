@@ -379,6 +379,50 @@ describe("PATCH /api/admin/providers/:provider — real cache cleared before nex
     );
   });
 
+  it("a model override via PATCH is reflected immediately in the next getProviderClient call", async () => {
+    vi.useFakeTimers();
+
+    // ── Step 1: populate the real cache with the old model ───────────────────
+    const oldRow = dbActiveRow({ encryptedApiKey: "enc:key", model: "gpt-4o" });
+    mockDbLimit.mockResolvedValueOnce([oldRow]);
+    mockDecrypt.mockReturnValue("sk-key");
+
+    const result1 = await getProviderClient();
+    expect(result1.model).toBe("gpt-4o"); // cache is warm with old model
+
+    // ── Step 2: PATCH saves a new model override ─────────────────────────────
+    // DB mock sequence for PATCH /admin/providers/openai with { model: "gpt-5" }:
+    //   a. db.select ... .limit(1)  → check-existing (existing row)
+    //   b. db.update (model = "gpt-5")
+    //   c. db.select ... .limit(1)  → fetch updated row for response body
+    const existingRow = dbActiveRow({ encryptedApiKey: "enc:key", model: "gpt-4o" });
+    const updatedRow  = dbActiveRow({ encryptedApiKey: "enc:key", model: "gpt-5" });
+    mockDbLimit
+      .mockResolvedValueOnce([existingRow])   // (a) check-existing
+      .mockResolvedValueOnce([updatedRow]);   // (c) response fetch
+
+    mockDbUpdateWhere.mockResolvedValue([updatedRow]);
+
+    await request(app)
+      .patch("/api/admin/providers/openai")
+      .set(AUTH)
+      .send({ model: "gpt-5" })
+      .expect(200);
+
+    // ── Step 3: next getProviderClient — time has NOT advanced ───────────────
+    // The 30-second TTL is still valid. The model update is visible ONLY
+    // because resetProviderCache() was called inside the PATCH handler.
+    mockDbLimit.mockResolvedValueOnce([updatedRow]); // post-PATCH DB re-query
+
+    mockDbSelect.mockClear();
+    const result2 = await getProviderClient();
+
+    // DB was re-queried (proves cache was invalidated by the route, not TTL).
+    expect(mockDbSelect).toHaveBeenCalledOnce();
+    // Model reflects the new value from the DB, not the stale cached value.
+    expect(result2.model).toBe("gpt-5");
+  });
+
   it("switching from openai to anthropic via PATCH is reflected immediately in getProviderClient", async () => {
     vi.useFakeTimers();
 
