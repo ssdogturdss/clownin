@@ -59,6 +59,36 @@ let _providerCache: CachedProvider | null = null;
  * Clears the in-process provider cache so the next request re-reads the DB.
  * Called by the admin routes after a provider config change so a newly saved
  * key (or deactivation) takes effect immediately instead of after the 30s TTL.
+ *
+ * ── Single-process deployment note ───────────────────────────────────────────
+ * This cache lives entirely in the memory of the current Node.js process.
+ * resetProviderCache() is therefore sufficient for our current deployment,
+ * where the admin panel and the API server run in the same process (or a
+ * single API-server process).
+ *
+ * Known limitation — if the deployment ever moves to multiple API-server
+ * processes (e.g. horizontal scaling, blue/green, or a separate admin-panel
+ * backend process), this in-process reset will NOT propagate to sibling
+ * processes.  A new process always starts with a cold cache and re-reads the
+ * DB on its first request (correct behaviour), but a long-lived sibling that
+ * already has a cached entry will keep serving the stale provider until its
+ * 30 s TTL expires naturally.
+ *
+ * Remediation options when multi-process becomes a requirement:
+ *   1. Redis PUBLISH/SUBSCRIBE — publish a "provider:invalidate" message after
+ *      every PATCH /admin/providers/:provider; each process subscribes and calls
+ *      resetProviderCache() on receipt.
+ *   2. Webhook broadcast — the admin endpoint POSTs to a well-known internal
+ *      invalidation path on every known sibling process (e.g. via a sidecar
+ *      or service-discovery list).
+ *   3. Reduce TTL — lowering the 30 s TTL to a few seconds limits the staleness
+ *      window without requiring infrastructure changes, at the cost of more DB
+ *      reads.
+ *
+ * Until one of those is implemented, operators who restart only the admin panel
+ * (without restarting the API server) should be aware that the API server may
+ * serve the previous provider for up to 30 seconds after a change.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 export function resetProviderCache(): void {
   _providerCache = null;
