@@ -13,6 +13,8 @@ export interface ProviderHealthResult {
   usingEnvFallback?: boolean;
   /** true when the provider is active but no key has been stored yet */
   noKeyStored?: boolean;
+  /** true when there is no usable provider at all — neither a DB key nor an env-var key */
+  noProvider?: boolean;
   /** Human-readable error when ok === false */
   error?: string;
 }

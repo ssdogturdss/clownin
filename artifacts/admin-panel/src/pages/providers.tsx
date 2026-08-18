@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useListProviders, useUpdateProvider, useTestProvider, getListProvidersQueryKey, useProviderHealth } from "@workspace/api-client-react";
+import { useListProviders, useUpdateProvider, useTestProvider, getListProvidersQueryKey, useProviderHealth, getProviderHealthQueryKey } from "@workspace/api-client-react";
 import type { ProviderTestResult } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -23,6 +23,7 @@ export default function ProvidersPage() {
         onSuccess: () => {
           toast.success("Active provider updated");
           queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getProviderHealthQueryKey() });
         },
         onError: (err: any) => {
           toast.error(err.message || "Failed to update active provider");
@@ -49,6 +50,7 @@ export default function ProvidersPage() {
 
   const activeProviderId = providers?.find(p => p.isActive)?.provider;
   const decryptFailed = health && !health.ok;
+  const noProvider = health?.ok && health.noProvider === true;
 
   return (
     <div className="space-y-6">
@@ -56,6 +58,19 @@ export default function ProvidersPage() {
         <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Providers</h1>
         <p className="text-muted-foreground mt-2">Configure API keys and set the active model provider.</p>
       </div>
+
+      {noProvider && (
+        <Alert variant="destructive" className="flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+          <div>
+            <AlertTitle className="font-semibold">No AI provider is configured</AlertTitle>
+            <AlertDescription>
+              Users will get errors when they try to chat. Add an API key below or set the{" "}
+              <code className="font-mono">OPENAI_API_KEY</code> environment variable to restore service.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
 
       {decryptFailed && (
         <Alert variant="destructive" className="flex items-start gap-3">
@@ -108,6 +123,7 @@ function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFaile
         onSuccess: () => {
           toast.success(`${provider.displayName} API key saved`);
           queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getProviderHealthQueryKey() });
           setApiKey("");
         },
         onError: (err: any) => {
@@ -128,6 +144,7 @@ function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFaile
         onSuccess: () => {
           toast.success(`${provider.displayName} API key cleared`);
           queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getProviderHealthQueryKey() });
         },
         onError: (err: any) => {
           toast.error(err.message || "Failed to clear API key");

@@ -561,15 +561,30 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
     .where(eq(providerConfigsTable.isActive, true))
     .limit(1);
 
+  // Mirror exact semantics of getEnvVarFallback(): ?? (not ||) so that an
+  // empty-string AI_INTEGRATIONS_OPENAI_API_KEY is not skipped over.
+  const envApiKey =
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
+    process.env.OPENAI_API_KEY;
+  const hasEnvKey = !!envApiKey;
+
   if (!active) {
-    // No active DB-sourced provider — env-var fallback is in use, nothing to decrypt.
+    // No active DB-sourced provider — runtime falls back to env-var.
+    if (!hasEnvKey) {
+      res.json({ ok: true, provider: null, usingEnvFallback: false, noProvider: true });
+      return;
+    }
     res.json({ ok: true, provider: null, usingEnvFallback: true });
     return;
   }
 
   if (!active.encryptedApiKey) {
-    // Provider is marked active but has no key stored yet.
-    res.json({ ok: true, provider: active.provider, usingEnvFallback: false, noKeyStored: true });
+    // Provider is active but has no stored key — runtime falls back to env-var.
+    if (!hasEnvKey) {
+      res.json({ ok: true, provider: active.provider, usingEnvFallback: false, noProvider: true });
+      return;
+    }
+    res.json({ ok: true, provider: active.provider, usingEnvFallback: true, noKeyStored: true });
     return;
   }
 
