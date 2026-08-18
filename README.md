@@ -1,6 +1,6 @@
 # Clownin
 
-An AI-powered coding agent mobile app. Users create projects, write code, and run it — all from their phone. An AI agent (backed by OpenAI / Anthropic / Gemini / OpenRouter) assists in real time via a chat interface.
+An AI-powered coding agent mobile app. Users create projects, write code, and run it — all from their phone. An AI agent (backed by OpenAI / Anthropic / Gemini / OpenRouter / xAI Grok) assists in real time via a chat interface.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ clownin/
 │   ├── api-server/        Express.js REST API (TypeScript + Drizzle ORM)
 │   ├── admin-panel/       React + Vite admin dashboard
 │   ├── clownin-mobile/    Expo (React Native) iOS + Android mobile app
-│   └── demo-video/        Animated demo video (Remotion/Vite)
+│   └── demo-video/        Animated demo video (Vite)
 ├── lib/
 │   ├── db/                Drizzle ORM schema + PostgreSQL migrations
 │   ├── api-spec/          OpenAPI 3.1 spec (source of truth)
@@ -25,8 +25,8 @@ clownin/
 - **Framework:** Express.js
 - **ORM:** Drizzle ORM → PostgreSQL
 - **Auth:** JWT (access tokens) + bcrypt password hashing
-- **AI:** Pluggable provider system — OpenAI, Anthropic, Gemini, OpenRouter, configurable per-user
-- **Execution:** Sandboxed code execution on remote Replit Repls
+- **AI:** Pluggable provider system — OpenAI, Anthropic, Gemini, OpenRouter, xAI Grok; configured per-instance from the admin panel
+- **Execution:** Sandboxed code execution on remote servers via SSH
 - **Subscriptions:** RevenueCat webhook listener + server-side sync
 
 ### Frontend — `artifacts/admin-panel`
@@ -37,31 +37,35 @@ clownin/
 
 ### Mobile — `artifacts/clownin-mobile`
 
-- **Framework:** Expo SDK 52 (React Native)
+- **Framework:** Expo SDK 54 (React Native)
 - **Navigation:** Expo Router (file-based)
 - **State:** React Query + context (AuthContext, SubscriptionContext)
 - **Monetization:** RevenueCat (in-app purchases)
-- **Features:** Project management, Monaco-style code editor, AI chat agent, file browser, terminal/output, secrets vault
+- **Features:** Project management, code editor, AI chat agent, file browser, terminal/output, secrets vault
 
 ### Database
 
-- **Engine:** PostgreSQL (Replit managed DB or any Postgres instance)
+- **Engine:** PostgreSQL 14+ (any hosted Postgres instance)
 - **Migrations:** Drizzle Kit — SQL files in `lib/db/migrations/`
-- **Schema:** Users, projects, project files, execution servers, conversation sessions, messages, AI provider configs, promo codes, user secrets (AES-256-GCM encrypted)
+- **Schema:** Users, projects, project files, execution servers, conversation sessions/messages, AI provider configs, promo codes, user secrets (AES-256-GCM encrypted)
 
 ### External Services
 
-| Service | Purpose |
-|---------|---------|
-| OpenAI / Anthropic / Gemini / OpenRouter | AI coding agent |
-| RevenueCat | Subscription management (iOS & Android) |
-| Replit Repls (remote) | Sandboxed code execution servers |
+| Service | Purpose | Required? |
+|---------|---------|-----------|
+| OpenAI / Anthropic / Gemini / OpenRouter / xAI | AI coding agent | At least one |
+| RevenueCat | Subscription management (iOS & Android) | Optional |
+| Remote SSH server | Sandboxed code execution | Optional |
+
+---
 
 ## Requirements
 
 - Node.js 20 LTS
 - pnpm 10+
 - PostgreSQL 14+
+
+---
 
 ## Installation
 
@@ -78,68 +82,186 @@ cp .env.example .env
 # Edit .env and fill in all required values
 ```
 
-See [`.env.example`](.env.example) for the full list of required variables with explanations.
+See [`.env.example`](.env.example) for every variable with inline documentation.
+
+**Minimum required variables to start:**
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `JWT_SECRET` | 48+ char random string (`openssl rand -base64 48`) |
+| `SESSION_SECRET` | 48+ char random string (`openssl rand -base64 48`) |
+| `ADMIN_USER_IDS` | Comma-separated usernames/emails with admin access |
+| `OPENAI_API_KEY` | Fallback AI provider key (or configure one via admin panel) |
+
+---
 
 ## Development
 
-```bash
-# API server (port $PORT, default 8080)
-pnpm --filter @workspace/api-server run dev
+Run each service in a separate terminal:
 
-# Admin panel (port 5173)
-pnpm --filter @workspace/admin-panel run dev
+```bash
+# API server (default port 8080)
+PORT=8080 pnpm --filter @workspace/api-server run dev
+
+# Admin panel (any available port)
+PORT=5174 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run dev
 
 # Mobile app (Expo)
 pnpm --filter @workspace/clownin-mobile run dev
 ```
 
+---
+
 ## Database
 
 ```bash
-# Apply migrations
+# Apply migrations to your database
 cd lib/db && pnpm push
 
 # Generate a new migration after schema changes
 cd lib/db && pnpm generate
+
+# Run pending migrations (production-safe)
+cd lib/db && pnpm migrate
 ```
 
-## Type Checking
-
-```bash
-pnpm typecheck
-```
+---
 
 ## Build
 
 ```bash
-# API server
+# Build shared TypeScript libraries
+pnpm typecheck:libs
+
+# Build the API server
 pnpm --filter @workspace/api-server run build
 
-# Admin panel
-pnpm --filter @workspace/admin-panel run build
+# Build the admin panel (produces static files)
+PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run build
 ```
 
-## API Client Regeneration
+---
 
-After editing `lib/api-spec/openapi.yaml`:
+## Type Checking
 
 ```bash
-cd lib/api-spec && npx orval --config orval.config.ts
-cd lib/api-client-react && npx tsc -p tsconfig.json
+# All packages
+pnpm typecheck
+
+# Individual
+pnpm --filter @workspace/api-server run typecheck
+PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run typecheck
 ```
+
+---
+
+## Testing
+
+```bash
+# API server unit + integration tests
+pnpm --filter @workspace/api-server run test
+
+# Watch mode
+pnpm --filter @workspace/api-server run test:watch
+```
+
+---
+
+## Docker
+
+### Build and run with Docker Compose (recommended)
+
+```bash
+# 1. Configure environment
+cp .env.example .env
+#    Set JWT_SECRET, SESSION_SECRET, ADMIN_USER_IDS, and at least one AI key.
+#    DATABASE_URL is set automatically by docker-compose (points to the db service).
+
+# 2. Build and start
+docker compose up --build
+
+# 3. Apply database migrations (first run only)
+docker compose exec api node -e "
+  const { execSync } = require('child_process');
+  execSync('cd lib/db && npx drizzle-kit push', { stdio: 'inherit' });
+"
+```
+
+The API and admin panel are then available at:
+- API: `http://localhost:8080/api/`
+- Admin panel: `http://localhost:8080/admin-panel/`
+- Health check: `http://localhost:8080/api/healthz`
+
+### Build image only
+
+```bash
+docker build -t clownin .
+docker run -p 8080:8080 \
+  -e DATABASE_URL="postgresql://..." \
+  -e JWT_SECRET="..." \
+  -e SESSION_SECRET="..." \
+  clownin
+```
+
+---
+
+## Production (Ubuntu VPS / bare metal)
+
+See [`deploy/ubuntu/README.md`](deploy/ubuntu/README.md) for a complete guide including:
+
+- One-command setup script (`deploy/ubuntu/setup.sh`)
+- systemd service (`deploy/ubuntu/clownin-api.service`)
+- nginx reverse proxy (`deploy/ubuntu/nginx.conf`)
+- TLS via Certbot
+- Zero-downtime update script
+
+---
 
 ## Deployment
 
-The project is designed to run on Replit:
+The application runs as a standard Node.js process and can be deployed to any environment that supports Node.js 20 and PostgreSQL:
 
-1. Fork / import the repo into Replit
-2. Set all required secrets in Replit's Secrets panel
-3. Run `cd lib/db && pnpm push` to apply the schema
-4. Start the workflows from the Replit UI
+- **Docker / Docker Compose** — see above
+- **Ubuntu VPS** — see `deploy/ubuntu/`
+- **Fly.io** — `fly launch` (uses the `Dockerfile`)
+- **Railway / Render** — point at the repo; set env vars from `.env.example`
+- **Any Node.js host** — build with `pnpm run build`, start with `node artifacts/api-server/dist/index.mjs`
 
-For self-hosting, build the API server (`pnpm build` in `artifacts/api-server`), then run `node dist/app.js` behind a reverse proxy (nginx / Caddy).
+The admin panel is a static Vite build served by the API server at `/admin-panel/` in Docker. In Replit it runs as a separate Vite dev process.
 
-## Backup & Restore
+---
 
-See [RESTORE.md](RESTORE.md) for the full step-by-step restore procedure.
-See [BACKUP_MANIFEST.md](BACKUP_MANIFEST.md) for build metadata.
+## Repository Structure
+
+```
+.github/workflows/ci.yml    Type-check + build on every push/PR (no Replit required)
+Dockerfile                  Multi-stage production image (API + admin panel)
+docker-compose.yml          API server + PostgreSQL for local/server deployment
+deploy/ubuntu/              Systemd + nginx scripts for bare-metal Ubuntu
+.env.example                Every environment variable documented
+```
+
+### CI
+
+GitHub Actions runs on every push and pull request to `main`:
+
+1. Install dependencies (`pnpm install --frozen-lockfile`)
+2. Type-check all packages
+3. Build the API server
+4. Build the admin panel
+
+No Replit account or secrets required to run CI.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `PORT environment variable is required` | Set `PORT=8080` (dev server) or run `vite build` (production build auto-detects) |
+| `DATABASE_URL is required` | Copy `.env.example` → `.env` and fill in a valid Postgres URL |
+| `No AI provider configured` | Set `OPENAI_API_KEY` in `.env`, or add a key in the admin panel |
+| Admin panel shows 404 | In Docker: built-in; in dev: run the admin panel separately on its own port |
+| `Invalid or expired token` | JWT token has expired — log in again; check `JWT_SECRET` hasn't changed |
+| DB migration fails | Ensure `DATABASE_URL` points to a reachable Postgres instance; run `cd lib/db && pnpm push` |

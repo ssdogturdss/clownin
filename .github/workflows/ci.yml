@@ -34,6 +34,9 @@ jobs:
 
       - name: Type check (admin panel)
         run: pnpm --filter @workspace/admin-panel run typecheck
+        env:
+          PORT: '3000'
+          BASE_PATH: '/admin-panel/'
 
       - name: Type check (mobile)
         run: pnpm --filter @workspace/clownin-mobile run typecheck
@@ -63,3 +66,6 @@ jobs:
 
       - name: Build admin panel
         run: pnpm --filter @workspace/admin-panel run build
+        env:
+          PORT: '3000'
+          BASE_PATH: '/admin-panel/'

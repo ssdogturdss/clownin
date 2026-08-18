@@ -1,0 +1,70 @@
+version: "3.9"
+
+# Clownin — Docker Compose (API server + PostgreSQL)
+#
+# Quick start:
+#   cp .env.example .env        # fill in JWT_SECRET, SESSION_SECRET, etc.
+#   docker compose up --build
+#
+# The API server is available at http://localhost:8080/api/
+# The admin panel is available at http://localhost:8080/admin-panel/
+#
+# To apply database migrations:
+#   docker compose exec api node -e "require('./dist/index.mjs')"
+#   # or run the migration container target:
+#   docker compose run --rm migrate
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       clownin
+      POSTGRES_USER:     clownin
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-changeme_in_production}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U clownin -d clownin"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # ── API server ──────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      target:  production
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      # Database — points to the companion db service
+      DATABASE_URL: "postgresql://clownin:${DB_PASSWORD:-changeme_in_production}@db:5432/clownin"
+
+      # Required secrets — set these in your .env file
+      JWT_SECRET:        "${JWT_SECRET}"
+      SESSION_SECRET:    "${SESSION_SECRET}"
+      ADMIN_USER_IDS:    "${ADMIN_USER_IDS:-}"
+
+      # AI providers — set at least one
+      OPENAI_API_KEY:    "${OPENAI_API_KEY:-}"
+
+      # RevenueCat (optional — leave blank to disable subscription features)
+      REVENUECAT_API_KEY:             "${REVENUECAT_API_KEY:-}"
+      REVENUECAT_PRO_ENTITLEMENT_ID:  "${REVENUECAT_PRO_ENTITLEMENT_ID:-pro}"
+      REVENUECAT_WEBHOOK_SECRET:      "${REVENUECAT_WEBHOOK_SECRET:-}"
+      REVENUECAT_WEBHOOK_SECRET_PREV: "${REVENUECAT_WEBHOOK_SECRET_PREV:-}"
+      SYNC_ALERT_WEBHOOK_URL:         "${SYNC_ALERT_WEBHOOK_URL:-}"
+
+      # Server
+      PORT:      "8080"
+      NODE_ENV:  "production"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+
+volumes:
+  pgdata:

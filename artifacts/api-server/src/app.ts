@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
+import fs from "fs";
 import router, { previewRouter } from "./routes";
 import privacyRouter from "./routes/privacy";
 import termsRouter from "./routes/terms";
@@ -47,6 +48,20 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 // Serve static assets (og:image etc.) at /preview/...
 app.use("/preview", express.static(path.join(__dirname, "assets")));
+
+// Serve admin panel static files when present.
+// In Docker / self-hosted deployments the admin-panel/ directory is copied
+// next to the API server dist so both services are served from a single
+// container.  When running under Replit the directory won't exist and this
+// block is a no-op — the admin panel runs as its own Vite dev process.
+const adminPanelDist = path.join(__dirname, "../../admin-panel");
+if (fs.existsSync(adminPanelDist)) {
+  app.use("/admin-panel", express.static(adminPanelDist));
+  // SPA fallback: serve index.html for any unknown /admin-panel/* route
+  app.get("/admin-panel/*path", (_req, res) => {
+    res.sendFile(path.join(adminPanelDist, "index.html"));
+  });
+}
 
 // Public preview pages — mounted outside /api so the URL is /preview/:shortId
 app.use(previewRouter);

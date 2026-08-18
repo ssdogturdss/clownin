@@ -3,19 +3,25 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+// @replit/vite-plugin-runtime-error-modal is a Replit-only dev tool.
+// Import it statically but only activate it when running inside Replit.
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
+// PORT is required by the dev server but not by `vite build`.
+// Outside Replit (Docker, CI, local) NODE_ENV=production is set during build
+// so we fall back to a placeholder rather than throwing.
+const isDevServer = process.env.NODE_ENV !== 'production';
 const rawPort = process.env.PORT;
 
-if (!rawPort) {
+if (isDevServer && !rawPort) {
   throw new Error(
-    'PORT environment variable is required but was not provided.',
+    'PORT environment variable is required for the dev server but was not provided.',
   );
 }
 
-const port = Number(rawPort);
+const port = Number(rawPort ?? '3000');
 
-if (Number.isNaN(port) || port <= 0) {
+if (rawPort && (Number.isNaN(port) || port <= 0)) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
@@ -27,14 +33,16 @@ if (!basePath) {
   );
 }
 
+const isReplit = process.env.REPL_ID !== undefined;
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== 'production' &&
-    process.env.REPL_ID !== undefined
+    // Replit-only dev overlay — no-op outside Replit
+    ...(isReplit ? [runtimeErrorOverlay()] : []),
+    ...(isDevServer && isReplit
       ? [
           await import('@replit/vite-plugin-cartographer').then((m) =>
             m.cartographer({
