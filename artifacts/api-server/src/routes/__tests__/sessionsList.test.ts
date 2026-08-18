@@ -21,19 +21,29 @@ import request from "supertest";
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 
-const { mockDbExecute, mockDbSelect, mockRequireAuth, mockGetUser } =
+const { mockDbExecute, mockDbSelect, mockDbInsert, mockRequireAuth, mockGetUser, nameStore } =
   vi.hoisted(() => {
     const mockDbExecute = vi.fn();
 
+    // Shared in-memory store for conversation session names.
+    // Written by mockDbInsert (simulating the upsert) and read dynamically by
+    // queueDynamicSelect so that PATCH→GET round-trip tests have real state
+    // transitions rather than pre-queued hardcoded values.
+    const nameStore = new Map<string, string>();
+
     // db.select() is called multiple times per request with different query shapes:
     //   1. Project ownership check → .from().where().limit()
-    //   2. Name lookup             → .from().where()           (awaited directly)
-    //   3. Preview per session     → .from().where().orderBy().limit()
+    //   2. Session existence check → .from().where().limit()   (rename route only)
+    //   3. Name lookup             → .from().where()           (awaited directly)
+    //   4. Preview per session     → .from().where().orderBy().limit()
     //
-    // Each call to db.select() pops the next chain factory from selectQueue so
-    // tests can control every response independently.
-    const selectQueue: Array<ReturnType<typeof makeChain>> = [];
-    function makeChain(value: unknown) {
+    // Each call to db.select() pops the next entry from selectQueue.
+    // Entries can be pre-built chains (static) OR zero-argument factory functions
+    // (dynamic — evaluated at query time so they can read from nameStore).
+    type Chain = ReturnType<typeof makeChain>;
+    const selectQueue: Array<Chain | (() => unknown)> = [];
+
+    function makeChain(value: unknown): Chain {
       // A "thenable" object that resolves when awaited directly, and also
       // supports .limit() and .orderBy().limit() for chained calls.
       const thenable = {
@@ -53,14 +63,33 @@ const { mockDbExecute, mockDbSelect, mockRequireAuth, mockGetUser } =
 
     // Expose helpers so tests can queue responses
     const mockDbSelect = vi.fn(() => {
-      const chain = selectQueue.shift();
-      if (!chain) throw new Error("db.select() called more times than expected");
+      const entry = selectQueue.shift();
+      if (!entry) throw new Error("db.select() called more times than expected");
+      // Support factory functions: evaluated at query time → enables stateful lookups
+      const chain = typeof entry === "function" ? makeChain(entry()) : entry;
       return { from: vi.fn(() => ({ where: vi.fn(() => chain) })) };
     });
     (mockDbSelect as unknown as { _queue: typeof selectQueue })._queue =
       selectQueue;
     (mockDbSelect as unknown as { _makeChain: typeof makeChain })._makeChain =
       makeChain;
+
+    // Stateful insert mock: writes { sessionId → name } to nameStore when
+    // .onConflictDoUpdate() is awaited, mirroring what the real upsert does.
+    const mockDbInsert = vi.fn((_table: unknown) => {
+      let capturedVals: { sessionId: string; projectId: number; name: string } | null = null;
+      return {
+        values: vi.fn((vals: { sessionId: string; projectId: number; name: string }) => {
+          capturedVals = vals;
+          return {
+            onConflictDoUpdate: vi.fn(() => {
+              if (capturedVals) nameStore.set(capturedVals.sessionId, capturedVals.name);
+              return Promise.resolve();
+            }),
+          };
+        }),
+      };
+    });
 
     const mockRequireAuth = vi.fn(
       (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -71,7 +100,7 @@ const { mockDbExecute, mockDbSelect, mockRequireAuth, mockGetUser } =
       username: "testuser",
     }));
 
-    return { mockDbExecute, mockDbSelect, mockRequireAuth, mockGetUser };
+    return { mockDbExecute, mockDbSelect, mockDbInsert, mockRequireAuth, mockGetUser, nameStore };
   });
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -81,7 +110,7 @@ vi.mock("@workspace/db", () => ({
     select: mockDbSelect,
     execute: mockDbExecute,
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn() })) })),
-    insert: vi.fn(() => ({ values: vi.fn() })),
+    insert: mockDbInsert,
     transaction: vi.fn(),
     delete: vi.fn(() => ({ where: vi.fn() })),
   },
@@ -163,6 +192,18 @@ function queueSelect(value: unknown) {
   );
 }
 
+/**
+ * Push a lazy factory onto the db.select() queue.
+ * The factory is called at query-execution time, not at queue time.
+ * Use this when the response depends on state written by a prior request
+ * (e.g. what PATCH's upsert wrote to nameStore).
+ */
+function queueDynamicSelect(factory: () => unknown) {
+  (mockDbSelect as unknown as SelectMock)._queue.push(
+    factory as unknown as ReturnType<(typeof mockDbSelect extends { _makeChain: infer F } ? F : never)>,
+  );
+}
+
 const NOW = new Date("2024-01-15T12:00:00Z");
 const LATER = new Date("2024-01-15T13:00:00Z");
 
@@ -184,6 +225,8 @@ function makeSessionRow(
 beforeEach(() => {
   vi.clearAllMocks();
   (mockDbSelect as unknown as SelectMock)._queue.length = 0;
+  // Clear the stateful name store so round-trip tests start with a clean slate.
+  nameStore.clear();
 
   mockRequireAuth.mockImplementation(
     (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -489,5 +532,241 @@ describe("GET /api/projects/:id/conversations", () => {
     expect(res.status).toBe(200);
     expect(res.body[0].startedAt).toBe(start.toISOString());
     expect(res.body[0].lastAt).toBe(last.toISOString());
+  });
+});
+
+// ── PATCH /api/projects/:id/conversations/:sessionId/name ──────────────────────
+
+describe("PATCH /api/projects/:id/conversations/:sessionId/name", () => {
+  // ── Validation guards ────────────────────────────────────────────────────────
+
+  it("returns 400 for a non-numeric project id", async () => {
+    const res = await request(app)
+      .patch("/api/projects/not-a-number/conversations/sess-abc/name")
+      .set(AUTH)
+      .send({ name: "My session" });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when name is missing", async () => {
+    // No db calls needed — validation short-circuits before any query.
+    const res = await request(app)
+      .patch("/api/projects/5/conversations/sess-abc/name")
+      .set(AUTH)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "name is required" });
+  });
+
+  it("returns 400 when name is an empty string", async () => {
+    const res = await request(app)
+      .patch("/api/projects/5/conversations/sess-abc/name")
+      .set(AUTH)
+      .send({ name: "   " });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "name is required" });
+  });
+
+  // ── 404 guards ───────────────────────────────────────────────────────────────
+
+  it("returns 404 when the project does not belong to the requesting user", async () => {
+    // Ownership check returns no rows → 404
+    queueSelect([]);
+
+    const res = await request(app)
+      .patch("/api/projects/99/conversations/sess-abc/name")
+      .set(AUTH)
+      .send({ name: "My session" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: "project not found" });
+  });
+
+  it("returns 404 when the session does not belong to the project", async () => {
+    // Ownership check → found; session check → no matching message row
+    queueSelect([{ id: 5 }]);
+    queueSelect([]);
+
+    const res = await request(app)
+      .patch("/api/projects/5/conversations/sess-unknown/name")
+      .set(AUTH)
+      .send({ name: "My session" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: "session not found" });
+  });
+
+  // ── Happy path: rename an existing session ────────────────────────────────────
+
+  it("renames a session that already has a conversation_sessions row", async () => {
+    const SESSION_ID = "sess-already-named";
+
+    // 1. Project ownership → found
+    queueSelect([{ id: 5 }]);
+    // 2. Session existence check → found
+    queueSelect([{ sessionId: SESSION_ID }]);
+    // db.insert().values().onConflictDoUpdate() is mocked globally and resolves
+
+    const res = await request(app)
+      .patch(`/api/projects/5/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "Updated Name" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, name: "Updated Name" });
+  });
+
+  // ── Happy path: first-time name for a previously unnamed session ─────────────
+
+  it("gives a first-time name to a session that had no conversation_sessions row", async () => {
+    // This exercises the INSERT path of the upsert.
+    // The route only checks that a conversation_messages row exists for the
+    // session — it does not require a prior conversation_sessions row.
+    const SESSION_ID = "sess-never-named";
+
+    // 1. Project ownership → found
+    queueSelect([{ id: 5 }]);
+    // 2. Session existence check → found (message row exists)
+    queueSelect([{ sessionId: SESSION_ID }]);
+    // db.insert().values().onConflictDoUpdate() → succeeds (no prior row to conflict with)
+
+    const res = await request(app)
+      .patch(`/api/projects/5/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "Brand New Name" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, name: "Brand New Name" });
+  });
+
+  it("trims leading/trailing whitespace from the name", async () => {
+    const SESSION_ID = "sess-trim-test";
+
+    queueSelect([{ id: 5 }]);
+    queueSelect([{ sessionId: SESSION_ID }]);
+
+    const res = await request(app)
+      .patch(`/api/projects/5/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "  Trimmed Name  " });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, name: "Trimmed Name" });
+  });
+
+  // ── End-to-end: rename then list ─────────────────────────────────────────────
+
+  it("persists the new name so the next GET /conversations returns it", async () => {
+    // This is the genuine stateful round-trip test.
+    //
+    // mockDbInsert writes the upserted name into `nameStore` when
+    // .onConflictDoUpdate() is awaited.  The GET name-lookup queue entry is a
+    // lazy factory that reads from `nameStore` at query-execution time — so
+    // the value GET returns is exactly what PATCH wrote, not a hardcoded fixture.
+    //
+    // If PATCH stored the wrong name, wrote nothing, or used the wrong table,
+    // the factory returns [] → name: null → the final assertion fails.
+    const SESSION_ID = "sess-rename-then-list";
+    const PROJECT_ID = 5;
+
+    // ── PATCH: rename the session ──────────────────────────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // 1. Project ownership
+    queueSelect([{ sessionId: SESSION_ID }]);   // 2. Session existence check
+
+    const patchRes = await request(app)
+      .patch(`/api/projects/${PROJECT_ID}/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "Renamed Session" });
+
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body).toMatchObject({ ok: true, name: "Renamed Session" });
+
+    // Assert the upsert was called with the correct arguments
+    expect(mockDbInsert).toHaveBeenCalledTimes(1);
+    const valuesFn = mockDbInsert.mock.results[0]!.value.values;
+    expect(valuesFn).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      projectId: PROJECT_ID,
+      name: "Renamed Session",
+    });
+
+    // ── GET: list sessions — the renamed session must appear with the new name ──
+    queueSelect([{ id: PROJECT_ID }]);          // 1. Project ownership
+    mockDbExecute.mockResolvedValueOnce({ rows: [makeSessionRow(SESSION_ID)] });
+    // 2. Name lookup: factory reads from nameStore at query time.
+    //    nameStore was populated by the PATCH upsert above.
+    //    If PATCH wrote the wrong name (or nothing), the GET will return name: null
+    //    and the assertion below will fail — proving the test is genuinely stateful.
+    queueDynamicSelect(() => {
+      const name = nameStore.get(SESSION_ID);
+      return name ? [{ sessionId: SESSION_ID, name }] : [];
+    });
+    queueSelect([{ content: "Hello world" }]);  // 3. Preview message
+
+    const getRes = await request(app)
+      .get(`/api/projects/${PROJECT_ID}/conversations`)
+      .set(AUTH);
+
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toHaveLength(1);
+    expect(getRes.body[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      name: "Renamed Session",
+    });
+  });
+
+  it("persists a first-time name for a previously unnamed session and surfaces it in GET", async () => {
+    // Edge case: the session has never been renamed — no prior conversation_sessions row.
+    // The upsert performs an INSERT (no conflict to update).
+    // The GET name-lookup must return the newly written name, not null.
+    //
+    // nameStore starts empty (cleared in beforeEach).  PATCH writes to it via
+    // onConflictDoUpdate.  The queueDynamicSelect factory for the GET name-lookup
+    // reads from nameStore at query time — so a missing or incorrect write would
+    // return [] → name: null → assertion fails.
+    const SESSION_ID = "sess-first-name-then-list";
+    const PROJECT_ID = 5;
+
+    // ── PATCH ─────────────────────────────────────────────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // ownership
+    queueSelect([{ sessionId: SESSION_ID }]);   // session existence
+
+    const patchRes = await request(app)
+      .patch(`/api/projects/${PROJECT_ID}/conversations/${SESSION_ID}/name`)
+      .set(AUTH)
+      .send({ name: "First Ever Name" });
+
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body).toMatchObject({ ok: true, name: "First Ever Name" });
+
+    // Assert the upsert was called with the correct arguments
+    expect(mockDbInsert).toHaveBeenCalledTimes(1);
+    const valuesFn = mockDbInsert.mock.results[0]!.value.values;
+    expect(valuesFn).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      projectId: PROJECT_ID,
+      name: "First Ever Name",
+    });
+
+    // ── GET ───────────────────────────────────────────────────────────────────
+    queueSelect([{ id: PROJECT_ID }]);          // ownership
+    mockDbExecute.mockResolvedValueOnce({ rows: [makeSessionRow(SESSION_ID)] });
+    // Name lookup reads from nameStore — populated by PATCH's insert above
+    queueDynamicSelect(() => {
+      const name = nameStore.get(SESSION_ID);
+      return name ? [{ sessionId: SESSION_ID, name }] : [];
+    });
+    queueSelect([{ content: "First message" }]); // preview
+
+    const getRes = await request(app)
+      .get(`/api/projects/${PROJECT_ID}/conversations`)
+      .set(AUTH);
+
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toHaveLength(1);
+    expect(getRes.body[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      name: "First Ever Name",
+    });
   });
 });
