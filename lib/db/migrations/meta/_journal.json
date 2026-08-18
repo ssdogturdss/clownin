@@ -71,6 +71,13 @@
       "when": 1755993700000,
       "tag": "0009_promo_code_redemptions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1755993800000,
+      "tag": "0010_provider_model",
+      "breakpoints": true
     }
   ]
 }

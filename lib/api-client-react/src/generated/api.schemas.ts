@@ -287,6 +287,8 @@ export interface ProviderConfig {
   isActive: boolean;
   hasApiKey: boolean;
   /** @nullable */
+  model?: string | null;
+  /** @nullable */
   updatedAt?: string | null;
 }
 
@@ -312,6 +314,8 @@ export interface ProviderConfigUpdate {
   apiKey?: string;
   isActive?: boolean;
   clearKey?: boolean;
+  /** @nullable */
+  model?: string | null;
 }
 
 export interface VaultSecret {

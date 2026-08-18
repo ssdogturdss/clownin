@@ -132,7 +132,8 @@ export async function getProviderClient(): Promise<ProviderClientResult> {
       }
 
       const baseURL = PROVIDER_BASE_URLS[active.provider] ?? "https://api.openai.com/v1";
-      const model   = PROVIDER_DEFAULT_MODELS[active.provider] ?? "gpt-5.6-terra";
+      const storedModel = active.model?.trim();
+      const model = storedModel || PROVIDER_DEFAULT_MODELS[active.provider] || "gpt-5.6-terra";
       _providerCache = {
         provider: active.provider,
         apiKey,

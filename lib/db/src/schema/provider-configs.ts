@@ -9,6 +9,8 @@ export const providerConfigsTable = pgTable("provider_configs", {
   /** AES-256-GCM encrypted API key: base64(iv).base64(tag).base64(ciphertext) */
   encryptedApiKey: text("encrypted_api_key"),
   isActive: boolean("is_active").notNull().default(false),
+  /** Optional model override; when null the server uses PROVIDER_DEFAULT_MODELS. */
+  model: text("model"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

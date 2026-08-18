@@ -1534,6 +1534,7 @@ components:
         displayName: { type: string }
         isActive: { type: boolean }
         hasApiKey: { type: boolean }
+        model: { type: ["string", "null"] }
         updatedAt: { type: ["string", "null"] }
       required: [provider, displayName, isActive, hasApiKey]
 
@@ -1564,6 +1565,7 @@ components:
         apiKey: { type: string }
         isActive: { type: boolean }
         clearKey: { type: boolean }
+        model: { type: ["string", "null"] }
 
     VaultSecret:
       type: object

@@ -5,7 +5,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Cpu, KeyRound, CheckCircle2, XCircle, Bot, BrainCircuit, FlaskConical, AlertTriangle } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Loader2, Cpu, KeyRound, CheckCircle2, XCircle, Bot, BrainCircuit, FlaskConical, AlertTriangle, Wand2 } from "lucide-react";
+
+// Default model names per provider — mirrors PROVIDER_DEFAULT_MODELS on the server.
+const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  openai:     "gpt-5.6-terra",
+  anthropic:  "claude-opus-4-5",
+  gemini:     "gemini-2.0-flash",
+  openrouter: "openai/gpt-4o",
+  xai:        "grok-3",
+};
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -123,6 +133,8 @@ function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFaile
   const [apiKey, setApiKey] = useState("");
   const [isSettingKey, setIsSettingKey] = useState(false);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
+  const [model, setModel] = useState(provider.model ?? "");
+  const [isSavingModel, setIsSavingModel] = useState(false);
 
   const getProviderIcon = (name: string) => {
     const n = name.toLowerCase();
@@ -167,6 +179,26 @@ function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFaile
         },
         onError: (err: any) => {
           toast.error(err.message || "Failed to clear API key");
+        }
+      }
+    );
+  };
+
+  const handleSaveModel = () => {
+    setIsSavingModel(true);
+    updateMutation.mutate(
+      { provider: provider.provider, data: { model: model.trim() || null } },
+      {
+        onSuccess: () => {
+          toast.success(`${provider.displayName} model saved`);
+          queryClient.invalidateQueries({ queryKey: getListProvidersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getProviderHealthQueryKey() });
+        },
+        onError: (err: any) => {
+          toast.error(err.message || "Failed to save model");
+        },
+        onSettled: () => {
+          setIsSavingModel(false);
         }
       }
     );
@@ -248,6 +280,37 @@ function ProviderCard({ provider, decryptFailed }: { provider: any; decryptFaile
             </Button>
           </div>
         )}
+
+        {/* Model override field — always visible */}
+        <div className="space-y-1.5">
+          <Label htmlFor={`model-${provider.provider}`} className="text-xs text-muted-foreground">
+            Model override
+          </Label>
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Wand2 className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id={`model-${provider.provider}`}
+                type="text"
+                placeholder={PROVIDER_DEFAULT_MODELS[provider.provider] ?? "default"}
+                className="pl-9 font-mono text-sm"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                data-testid={`input-model-${provider.provider}`}
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSaveModel}
+              disabled={isSavingModel}
+              data-testid={`button-save-model-${provider.provider}`}
+            >
+              {isSavingModel && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+              Save
+            </Button>
+          </div>
+        </div>
 
         {provider.hasApiKey && (
           <div className="space-y-2">

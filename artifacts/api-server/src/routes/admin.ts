@@ -407,6 +407,7 @@ router.get("/admin/providers", requireAuth, requireAdmin, async (_req, res): Pro
       displayName: kp.displayName,
       isActive: row?.isActive ?? false,
       hasApiKey: !!row?.encryptedApiKey,
+      model: row?.model ?? null,
       updatedAt: row?.updatedAt ?? null,
     };
   });
@@ -419,10 +420,11 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
   if (!knownProvider) {
     res.status(400).json({ error: "unknown provider" }); return;
   }
-  const { apiKey, isActive, clearKey } = req.body as {
+  const { apiKey, isActive, clearKey, model } = req.body as {
     apiKey?: string;
     isActive?: boolean;
     clearKey?: boolean;
+    model?: string | null;
   };
 
   const { encrypt } = await import("../lib/envCrypto.js");
@@ -446,6 +448,7 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
     if (typeof apiKey === "string" && apiKey.trim()) set.encryptedApiKey = encrypt(apiKey.trim());
     if (clearKey === true) set.encryptedApiKey = null;
     if (typeof isActive === "boolean") set.isActive = isActive;
+    if ("model" in req.body) set.model = (typeof model === "string" && model.trim()) ? model.trim() : null;
     await db.update(providerConfigsTable).set(set).where(eq(providerConfigsTable.provider, providerKey));
   } else {
     const vals: typeof providerConfigsTable.$inferInsert = {
@@ -455,6 +458,7 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
       updatedAt: now,
     };
     if (typeof apiKey === "string" && apiKey.trim()) vals.encryptedApiKey = encrypt(apiKey.trim());
+    if ("model" in req.body) vals.model = (typeof model === "string" && model.trim()) ? model.trim() : null;
     await db.insert(providerConfigsTable).values(vals);
   }
 
@@ -473,6 +477,7 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
     displayName: row!.displayName,
     isActive: row!.isActive,
     hasApiKey: !!row!.encryptedApiKey,
+    model: row!.model ?? null,
     updatedAt: row!.updatedAt,
   });
 });
