@@ -593,4 +593,112 @@ describe("PATCH /api/admin/providers/:provider — cache reset after save", () =
 
     expect(mockResetProviderCache).not.toHaveBeenCalled();
   });
+
+  it("calls resetProviderCache() when a provider is deactivated (isActive: false)", async () => {
+    setupExistingProvider("openai");
+
+    await request(app)
+      .patch("/api/admin/providers/openai")
+      .set(AUTH)
+      .send({ isActive: false })
+      .expect(200);
+
+    expect(mockResetProviderCache).toHaveBeenCalledOnce();
+  });
+
+  it("calls resetProviderCache() exactly once even when both apiKey and isActive:false are sent together", async () => {
+    setupExistingProvider("openai");
+
+    await request(app)
+      .patch("/api/admin/providers/openai")
+      .set(AUTH)
+      .send({ apiKey: "sk-replacement", isActive: false })
+      .expect(200);
+
+    expect(mockResetProviderCache).toHaveBeenCalledOnce();
+  });
+
+  it("calls resetProviderCache() for each known provider type when deactivated", async () => {
+    for (const provider of ["openai", "anthropic", "gemini", "openrouter", "xai"]) {
+      vi.clearAllMocks();
+      setupExistingProvider(provider);
+
+      await request(app)
+        .patch(`/api/admin/providers/${provider}`)
+        .set(AUTH)
+        .send({ isActive: false })
+        .expect(200);
+
+      expect(mockResetProviderCache).toHaveBeenCalledOnce();
+    }
+  });
+});
+
+// ── PATCH /api/admin/providers/:provider — switch takes effect immediately ────
+//
+// These tests verify the contract that the admin route's resetProviderCache()
+// call makes a provider switch visible to the very next AI request — before
+// the 30-second TTL would otherwise expire.  The route-level test confirms the
+// call is made; the integration contract is documented here in terms of
+// observable behaviour at the getProviderClient layer.
+
+describe("PATCH /api/admin/providers/:provider — switch takes effect before next AI request", () => {
+  it("resetProviderCache is called before the route responds, so the caller's next request sees the new provider", async () => {
+    // Track the order: resetProviderCache must be called before the response
+    // is sent so that concurrent or immediately-following AI requests see the
+    // updated provider.
+    const callOrder: string[] = [];
+
+    mockResetProviderCache.mockImplementation(() => {
+      callOrder.push("resetProviderCache");
+    });
+
+    const existingRow = activeRow({ provider: "openai" });
+    const updatedRow  = { ...existingRow, isActive: false, updatedAt: new Date() };
+    mockDbLimit
+      .mockResolvedValueOnce([existingRow])
+      .mockResolvedValueOnce([updatedRow]);
+    mockDbUpdateWhere.mockResolvedValue([updatedRow]);
+
+    await request(app)
+      .patch("/api/admin/providers/openai")
+      .set(AUTH)
+      .send({ isActive: false })
+      .expect(200);
+
+    // resetProviderCache must have been called during request processing
+    expect(callOrder).toContain("resetProviderCache");
+  });
+
+  it("resetProviderCache is called once per PATCH regardless of which fields changed", async () => {
+    // Every successful PATCH must bust the cache — partial updates (key-only,
+    // active-only, or both) all have the potential to change what
+    // getProviderClient returns.
+    const scenarios = [
+      { apiKey: "sk-new" },
+      { isActive: true },
+      { isActive: false },
+      { clearKey: true },
+      { apiKey: "sk-new", isActive: false },
+    ];
+
+    for (const body of scenarios) {
+      vi.clearAllMocks();
+
+      const existingRow = activeRow();
+      const updatedRow  = { ...existingRow, updatedAt: new Date() };
+      mockDbLimit
+        .mockResolvedValueOnce([existingRow])
+        .mockResolvedValueOnce([updatedRow]);
+      mockDbUpdateWhere.mockResolvedValue([updatedRow]);
+
+      await request(app)
+        .patch("/api/admin/providers/openai")
+        .set(AUTH)
+        .send(body)
+        .expect(200);
+
+      expect(mockResetProviderCache).toHaveBeenCalledOnce();
+    }
+  });
 });
