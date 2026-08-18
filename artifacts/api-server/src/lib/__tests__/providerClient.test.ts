@@ -465,6 +465,114 @@ describe("getProviderClient — admin deactivates provider mid-session", () => {
   });
 });
 
+// ── (f) Key revoked mid-session (cache valid → key nulled/corrupt → failover) ──
+//
+// Scenario: a valid DB key is cached, the admin revokes it
+// (encryptedApiKey set to null, or re-encrypted with a different secret),
+// and then calls resetProviderCache() so the stale cache entry is discarded.
+// The very next AI request must fall back to env-var without throwing, and
+// the cache must NOT be repopulated on fallback so subsequent requests
+// continue to re-query the DB.
+
+describe("getProviderClient — key revoked mid-session", () => {
+  it("falls back to env-var immediately after cache reset + key nulled in DB", async () => {
+    // Step 1: populate the cache with a valid DB key.
+    mockDecrypt.mockReturnValue("sk-valid-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-valid")]);
+    await getProviderClient(); // cache is now warm
+
+    // Step 2: admin nulls the encryptedApiKey in DB and calls resetProviderCache().
+    mockLimit.mockResolvedValue([{ provider: "openai", encryptedApiKey: null, isActive: true }]);
+    _resetProviderCacheForTests(); // simulates resetProviderCache() called by admin route
+
+    // Step 3: next AI request — must use env-var fallback without throwing.
+    const result = await getProviderClient();
+
+    expect(result.provider).toBe("openai");
+    expect(result.openaiClient).toBeDefined();
+  });
+
+  it("uses the env-var key (not the revoked DB key) after mid-session revocation", async () => {
+    mockDecrypt.mockReturnValue("sk-valid-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-valid")]);
+    await getProviderClient(); // cache warm with "sk-valid-key"
+    MockOpenAI.mockClear();
+
+    // Admin nulls the key and resets cache.
+    mockLimit.mockResolvedValue([{ provider: "openai", encryptedApiKey: null, isActive: true }]);
+    _resetProviderCacheForTests();
+
+    await getProviderClient();
+
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "env-key" }),
+    );
+    expect(MockOpenAI).not.toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-valid-key" }),
+    );
+  });
+
+  it("falls back to env-var immediately after cache reset + key re-encrypted with wrong secret", async () => {
+    // Step 1: populate cache.
+    mockDecrypt.mockReturnValue("sk-valid-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-valid")]);
+    await getProviderClient();
+
+    // Step 2: admin re-encrypts with a different secret — decrypt now throws.
+    mockDecrypt.mockImplementation(() => { throw new Error("bad decrypt — wrong secret"); });
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-new-secret")]);
+    _resetProviderCacheForTests();
+
+    // Step 3: next request — decrypt fails, must fall back to env-var without throwing.
+    const result = await getProviderClient();
+
+    expect(result.provider).toBe("openai");
+    expect(result.openaiClient).toBeDefined();
+  });
+
+  it("does NOT re-populate the cache on env-var fallback after revocation — next call re-queries DB", async () => {
+    // Populate cache.
+    mockDecrypt.mockReturnValue("sk-valid-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-valid")]);
+    await getProviderClient(); // call 1 — cache warm
+
+    // Admin nulls the key and resets cache.
+    mockLimit.mockResolvedValue([{ provider: "openai", encryptedApiKey: null, isActive: true }]);
+    _resetProviderCacheForTests();
+
+    await getProviderClient(); // call 2 — env-var fallback (null key in DB)
+    await getProviderClient(); // call 3 — must re-query DB, not serve from cache
+
+    // DB queried on calls 1, 2, and 3 (fallback must never re-populate the cache).
+    expect(mockSelect).toHaveBeenCalledTimes(3);
+  });
+
+  it("picks up a freshly fixed key on the very next request after revocation + re-provision", async () => {
+    // Populate cache.
+    mockDecrypt.mockReturnValue("sk-valid-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-valid")]);
+    await getProviderClient(); // cache warm
+
+    // Admin revokes key → cache reset → env-var fallback.
+    mockLimit.mockResolvedValue([{ provider: "openai", encryptedApiKey: null, isActive: true }]);
+    _resetProviderCacheForTests();
+    await getProviderClient(); // env-var fallback
+
+    MockOpenAI.mockClear();
+
+    // Admin provisions a new valid key.
+    mockDecrypt.mockReturnValue("sk-replacement-key");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-replacement")]);
+
+    const result = await getProviderClient(); // must pick up new DB key immediately
+
+    expect(result.provider).toBe("openai");
+    expect(MockOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-replacement-key" }),
+    );
+  });
+});
+
 // ── No provider configured at all ────────────────────────────────────────────
 
 describe("getProviderClient — no provider configured", () => {
