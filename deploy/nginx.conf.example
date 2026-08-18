@@ -1,0 +1,81 @@
+# ─── Clownin — Nginx reverse-proxy example ────────────────────────────────────
+#
+# This file is an annotated example for running Clownin behind Nginx on a VPS.
+# It is NOT required — the API server (and admin panel in Docker) can be reached
+# directly on port 8080.  Nginx is useful when you want:
+#   • TLS termination (HTTPS) via Certbot / Let's Encrypt
+#   • A single entry point on port 80/443 for multiple services
+#   • Request buffering and gzip compression
+#
+# Usage:
+#   1. Copy this file: sudo cp nginx.conf.example /etc/nginx/sites-available/clownin
+#   2. Edit every <placeholder> below.
+#   3. Enable: sudo ln -s /etc/nginx/sites-available/clownin /etc/nginx/sites-enabled/
+#   4. Test:   sudo nginx -t
+#   5. Reload: sudo systemctl reload nginx
+#   6. Add TLS: sudo certbot --nginx -d <your-domain>
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Rate-limit zone — 10 requests/second per IP, burst of 20
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
+server {
+    listen 80;
+    server_name <your-domain.com> www.<your-domain.com>;
+
+    # Redirect HTTP → HTTPS (Certbot adds this automatically)
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name <your-domain.com> www.<your-domain.com>;
+
+    # ── TLS — managed by Certbot ─────────────────────────────────────────────
+    # ssl_certificate     /etc/letsencrypt/live/<your-domain.com>/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/<your-domain.com>/privkey.pem;
+    # include             /etc/letsencrypt/options-ssl-nginx.conf;
+    # ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    # ── Security headers ──────────────────────────────────────────────────────
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options    "nosniff"                                       always;
+    add_header X-Frame-Options           "SAMEORIGIN"                                    always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"               always;
+
+    # ── Compression ───────────────────────────────────────────────────────────
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+    gzip_min_length 1024;
+
+    # ── API + admin panel (proxied to the Express server) ────────────────────
+    location / {
+        limit_req zone=api burst=20 nodelay;
+
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+
+        # WebSocket support (needed for the serve-proxy feature)
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Allow large file uploads (matches the 100 MB server-side limit)
+        client_max_body_size 110m;
+
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # ── Static assets — long cache for hashed filenames ──────────────────────
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot)$ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}

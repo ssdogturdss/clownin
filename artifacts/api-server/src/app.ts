@@ -32,7 +32,20 @@ app.use(
     },
   }),
 );
-app.use(cors());
+// CORS — defaults to permissive (*) for development.
+// Set CORS_ORIGIN to a comma-separated list of allowed origins in production,
+// e.g. CORS_ORIGIN=https://clownin.app,https://www.clownin.app
+const corsOrigins = process.env.CORS_ORIGIN;
+app.use(
+  cors(
+    corsOrigins
+      ? {
+          origin: corsOrigins.split(",").map((o) => o.trim()),
+          credentials: true,
+        }
+      : undefined,
+  ),
+);
 
 // ⚠️  The serve proxy MUST be mounted before express.json() / express.urlencoded().
 // Body parsers consume req as a stream; the proxy needs to pipe it raw to the

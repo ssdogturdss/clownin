@@ -69,3 +69,50 @@ jobs:
         env:
           PORT: '3000'
           BASE_PATH: '/admin-panel/'
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: build
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clownin
+          POSTGRES_PASSWORD: clownin
+          POSTGRES_DB: clownin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API server (tests import from dist)
+        run: pnpm --filter @workspace/api-server run build
+
+      - name: Run API server tests
+        run: pnpm --filter @workspace/api-server run test
+        env:
+          DATABASE_URL: postgresql://clownin:clownin@localhost:5432/clownin_test
+          JWT_SECRET: ci-test-jwt-secret-not-for-production
+          SESSION_SECRET: ci-test-session-secret-not-for-production
+          ADMIN_USER_IDS: ci-admin
+          NODE_ENV: test

@@ -93,6 +93,7 @@ See [`.env.example`](.env.example) for every variable with inline documentation.
 | `SESSION_SECRET` | 48+ char random string (`openssl rand -base64 48`) |
 | `ADMIN_USER_IDS` | Comma-separated usernames/emails with admin access |
 | `OPENAI_API_KEY` | Fallback AI provider key (or configure one via admin panel) |
+| `CORS_ORIGIN` | *(Production)* Comma-separated allowed origins, e.g. `https://clownin.app` |
 
 ---
 
@@ -182,10 +183,7 @@ cp .env.example .env
 docker compose up --build
 
 # 3. Apply database migrations (first run only)
-docker compose exec api node -e "
-  const { execSync } = require('child_process');
-  execSync('cd lib/db && npx drizzle-kit push', { stdio: 'inherit' });
-"
+docker compose exec api sh -c "cd lib/db && pnpm push"
 ```
 
 The API and admin panel are then available at:
@@ -208,13 +206,53 @@ docker run -p 8080:8080 \
 
 ## Production (Ubuntu VPS / bare metal)
 
-See [`deploy/ubuntu/README.md`](deploy/ubuntu/README.md) for a complete guide including:
+Run the API server as a standard Node.js process behind an Nginx reverse proxy.
 
-- One-command setup script (`deploy/ubuntu/setup.sh`)
-- systemd service (`deploy/ubuntu/clownin-api.service`)
-- nginx reverse proxy (`deploy/ubuntu/nginx.conf`)
-- TLS via Certbot
-- Zero-downtime update script
+```bash
+# 1. Install Node.js 20, pnpm, PostgreSQL, and Nginx on your server
+# 2. Clone the repo and install deps
+git clone https://github.com/<owner>/clownin.git
+cd clownin && pnpm install
+
+# 3. Set environment variables
+cp .env.example .env && nano .env
+
+# 4. Apply database migrations
+cd lib/db && pnpm migrate && cd ../..
+
+# 5. Build
+pnpm --filter @workspace/api-server run build
+PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run build
+
+# 6. Copy admin panel dist next to the API server dist so it is served at /admin-panel/
+cp -r artifacts/admin-panel/dist artifacts/api-server/dist/admin-panel
+
+# 7. Start
+PORT=8080 node artifacts/api-server/dist/index.mjs
+```
+
+**Nginx:** copy [`deploy/nginx.conf.example`](deploy/nginx.conf.example) to
+`/etc/nginx/sites-available/clownin`, fill in your domain, and obtain a free
+TLS certificate with `sudo certbot --nginx -d <your-domain>`.
+
+A `systemd` service unit keeps the process alive across reboots:
+
+```ini
+# /etc/systemd/system/clownin.service
+[Unit]
+Description=Clownin API Server
+After=network.target
+
+[Service]
+EnvironmentFile=/opt/clownin/.env
+WorkingDirectory=/opt/clownin
+ExecStart=/usr/bin/node artifacts/api-server/dist/index.mjs
+Restart=always
+User=clownin
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ---
 
@@ -235,10 +273,10 @@ The admin panel is a static Vite build served by the API server at `/admin-panel
 ## Repository Structure
 
 ```
-.github/workflows/ci.yml    Type-check + build on every push/PR (no Replit required)
+.github/workflows/ci.yml    CI: type-check → build → test (no Replit required)
 Dockerfile                  Multi-stage production image (API + admin panel)
 docker-compose.yml          API server + PostgreSQL for local/server deployment
-deploy/ubuntu/              Systemd + nginx scripts for bare-metal Ubuntu
+deploy/nginx.conf.example   Annotated Nginx reverse-proxy config with TLS notes
 .env.example                Every environment variable documented
 ```
 
@@ -247,9 +285,9 @@ deploy/ubuntu/              Systemd + nginx scripts for bare-metal Ubuntu
 GitHub Actions runs on every push and pull request to `main`:
 
 1. Install dependencies (`pnpm install --frozen-lockfile`)
-2. Type-check all packages
-3. Build the API server
-4. Build the admin panel
+2. Type-check all packages (API server, admin panel, mobile)
+3. Build the API server and admin panel
+4. Run the full test suite (258 tests) against a real PostgreSQL instance
 
 No Replit account or secrets required to run CI.
 
