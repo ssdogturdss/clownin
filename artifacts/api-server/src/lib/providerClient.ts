@@ -53,9 +53,18 @@ interface CachedProvider {
 
 let _providerCache: CachedProvider | null = null;
 
+/**
+ * Clears the in-process provider cache so the next request re-reads the DB.
+ * Called by the admin routes after a provider config change so a newly saved
+ * key (or deactivation) takes effect immediately instead of after the 30s TTL.
+ */
+export function resetProviderCache(): void {
+  _providerCache = null;
+}
+
 /** Exposed only for unit tests — resets the in-process cache between test cases. */
 export function _resetProviderCacheForTests(): void {
-  _providerCache = null;
+  resetProviderCache();
 }
 
 /**

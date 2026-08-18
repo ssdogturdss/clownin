@@ -10,6 +10,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, promoCodeRedemptionsTable, providerConfigsTable, conversationSessionsTable } from "@workspace/db";
 import { eq, desc, count, sql, and, isNotNull } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
+import { getProviderClient, resetProviderCache } from "../lib/providerClient.js";
 import { randomBytes } from "crypto";
 import { z } from "zod";
 
@@ -456,6 +457,10 @@ router.patch("/admin/providers/:provider", requireAuth, requireAdmin, async (req
     await db.insert(providerConfigsTable).values(vals);
   }
 
+  // Bust the provider cache so the change (new key, cleared key, or active
+  // switch) is live immediately — both for user requests and the health badge.
+  resetProviderCache();
+
   const [row] = await db
     .select()
     .from(providerConfigsTable)
@@ -547,10 +552,13 @@ router.post("/admin/providers/:provider/test", requireAuth, requireAdmin, async 
 /**
  * GET /admin/provider-health
  *
- * Checks whether the active provider's stored key can be decrypted without
- * actually calling the AI API. Returns:
- *   { ok: true,  provider: string }            — key decrypts fine (or no active key in DB)
- *   { ok: false, provider: string, error: string } — key is corrupt / wrong secret
+ * Live provider status: resolves the client exactly the way user requests do
+ * (via getProviderClient), plus a decrypt inspection of the active DB key so
+ * silent env-var fallback is surfaced. Returns:
+ *   ok            — false when no provider is reachable OR the stored key is corrupt
+ *   provider      — the active DB provider (or null)
+ *   activeProvider — the provider actually serving requests right now (or null)
+ *   decryptError / noProvider / usingEnvFallback / noKeyStored / error — detail flags
  */
 router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   const { decrypt } = await import("../lib/envCrypto.js");
@@ -561,43 +569,62 @@ router.get("/admin/provider-health", requireAuth, requireAdmin, async (_req, res
     .where(eq(providerConfigsTable.isActive, true))
     .limit(1);
 
-  // Mirror exact semantics of getEnvVarFallback(): ?? (not ||) so that an
-  // empty-string AI_INTEGRATIONS_OPENAI_API_KEY is not skipped over.
-  const envApiKey =
-    process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
-    process.env.OPENAI_API_KEY;
-  const hasEnvKey = !!envApiKey;
-
-  if (!active) {
-    // No active DB-sourced provider — runtime falls back to env-var.
-    if (!hasEnvKey) {
-      res.json({ ok: true, provider: null, usingEnvFallback: false, noProvider: true });
-      return;
-    }
-    res.json({ ok: true, provider: null, usingEnvFallback: true });
-    return;
-  }
-
-  if (!active.encryptedApiKey) {
-    // Provider is active but has no stored key — runtime falls back to env-var.
-    if (!hasEnvKey) {
-      res.json({ ok: true, provider: active.provider, usingEnvFallback: false, noProvider: true });
-      return;
-    }
-    res.json({ ok: true, provider: active.provider, usingEnvFallback: true, noKeyStored: true });
-    return;
-  }
-
+  // Resolve the client the same way user requests do. Throws only when there
+  // is no usable provider anywhere (no DB key and no env-var key).
+  let liveProvider: string | null = null;
+  let liveError: string | null = null;
   try {
-    decrypt(active.encryptedApiKey);
-    res.json({ ok: true, provider: active.provider, usingEnvFallback: false });
-  } catch {
+    const client = await getProviderClient();
+    liveProvider = client.provider;
+  } catch (err: any) {
+    liveError = err?.message ?? String(err);
+  }
+
+  // Inspect the active DB key separately — getProviderClient silently falls
+  // back to env vars on decrypt failure, which admins need to know about.
+  let decryptError = false;
+  if (active?.encryptedApiKey) {
+    try {
+      decrypt(active.encryptedApiKey);
+    } catch {
+      decryptError = true;
+    }
+  }
+
+  if (liveError) {
     res.json({
       ok: false,
-      provider: active.provider,
+      provider: active?.provider ?? null,
+      activeProvider: null,
+      noProvider: true,
+      decryptError,
+      error: liveError,
+    });
+    return;
+  }
+
+  if (decryptError) {
+    res.json({
+      ok: false,
+      provider: active!.provider,
+      activeProvider: liveProvider,
+      usingEnvFallback: true,
+      decryptError: true,
       error: "The stored key could not be decrypted — re-enter it below",
     });
+    return;
   }
+
+  // Healthy. usingEnvFallback is true when there is no decryptable DB key and
+  // requests are being served by the env-var provider.
+  const usingDbKey = !!active?.encryptedApiKey;
+  res.json({
+    ok: true,
+    provider: active?.provider ?? null,
+    activeProvider: liveProvider,
+    usingEnvFallback: !usingDbKey,
+    ...(active && !active.encryptedApiKey ? { noKeyStored: true } : {}),
+  });
 });
 
 // ── API key-style generation endpoint ─────────────────────────────────────────

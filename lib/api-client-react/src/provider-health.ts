@@ -8,7 +8,12 @@ import { customFetch, type ErrorType } from "./custom-fetch";
 
 export interface ProviderHealthResult {
   ok: boolean;
+  /** The active DB-configured provider (or null) */
   provider: string | null;
+  /** The provider actually serving requests right now (or null when unreachable) */
+  activeProvider?: string | null;
+  /** true when the stored key for the active provider failed to decrypt */
+  decryptError?: boolean;
   /** true when falling back to env-var provider (no DB key to decrypt) */
   usingEnvFallback?: boolean;
   /** true when the provider is active but no key has been stored yet */

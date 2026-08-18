@@ -49,14 +49,33 @@ export default function ProvidersPage() {
   }
 
   const activeProviderId = providers?.find(p => p.isActive)?.provider;
-  const decryptFailed = health && !health.ok;
-  const noProvider = health?.ok && health.noProvider === true;
+  const decryptFailed = health?.decryptError === true;
+  const noProvider = health?.noProvider === true;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Providers</h1>
-        <p className="text-muted-foreground mt-2">Configure API keys and set the active model provider.</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">AI Providers</h1>
+          <p className="text-muted-foreground mt-2">Configure API keys and set the active model provider.</p>
+        </div>
+        {health && (
+          <div
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-medium ${
+              health.ok
+                ? "bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400"
+                : "bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400"
+            }`}
+            data-testid="badge-provider-status"
+          >
+            <span className={`h-2 w-2 rounded-full ${health.ok ? "bg-green-500" : "bg-red-500"}`} />
+            {health.ok
+              ? `Live: ${health.activeProvider ?? health.provider ?? "env fallback"}`
+              : health.noProvider
+                ? "No provider reachable"
+                : "Provider key error"}
+          </div>
+        )}
       </div>
 
       {noProvider && (

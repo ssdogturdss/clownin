@@ -8,7 +8,7 @@ setupApiClient();
 async function ensureLoggedIn() {
   if (localStorage.getItem('admin_token')) return;
   try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'ss@clownin.dev', password: '1211' }),
