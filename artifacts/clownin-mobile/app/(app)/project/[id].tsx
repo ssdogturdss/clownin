@@ -1172,7 +1172,7 @@ export default function ProjectEditorScreen() {
                     textAlignVertical="top"
                     scrollEnabled
                     onScroll={(e) => {
-                      const y = e.nativeEvent.contentOffset.y;
+                      const y = e.nativeEvent?.contentOffset?.y ?? 0;
                       sharedScrollY.current = y;
                       if (selectedFileId) saveScrollOffset(selectedFileId, y);
                     }}

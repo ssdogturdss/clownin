@@ -257,7 +257,7 @@ export const SyntaxHighlighter = memo(function SyntaxHighlighter({
       style={[styles.scroll, style]}
       contentContainerStyle={styles.content}
       contentOffset={initialScrollY ? { x: 0, y: initialScrollY } : undefined}
-      onScroll={onScrollY ? (e) => onScrollY(e.nativeEvent.contentOffset.y) : undefined}
+      onScroll={onScrollY ? (e) => onScrollY(e.nativeEvent?.contentOffset?.y ?? 0) : undefined}
       scrollEventThrottle={16}
       scrollEnabled
       showsVerticalScrollIndicator
