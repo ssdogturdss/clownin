@@ -1,0 +1,74 @@
+Build me a full-stack app called `replit-autopilot` that autonomously converts any Replit project into a true, production-ready GitHub repo and deploys it to an Ubuntu 20.04 server.
+
+CONTEXT:
+- I have an old Toshiba laptop running Ubuntu 20.04 server named `swervin`, connected to WiFi SSID `SEVEN` on wlp4s0.
+- My test repo is https://github.com/ssdogturdss/red-carpet-inventory.git
+- I need both a CLI and a Web Dashboard that run on swervin.
+
+REQUIREMENTS - THE APP MUST HAVE 2 INTERFACES:
+
+1. CLI TOOL: `autopilot <path-to-replit.zip> <github-url>`
+   Example: `./cli.js ./my-app.zip https://github.com/ssdogturdss/red-carpet-inventory.git`
+
+2. WEB DASHBOARD: Express server on port 4000
+   - GET / shows a simple HTML form: File upload for Replit ZIP + text input for GitHub URL + Deploy button
+   - POST /deploy takes the ZIP and GitHub URL, runs the autonomous pipeline, and shows live logs
+   - Dashboard must be accessible via http://<swervin-ip>:4000 from any device on SEVEN WiFi
+
+CORE AUTONOMOUS PIPELINE (shared by both CLI and Web):
+
+Step 1 - Ingest:
+- Accept a Replit project as a ZIP file (downloaded from Replit > 3 dots > Download as ZIP)
+- Unzip to /tmp/autopilot-<timestamp>
+
+Step 2 - Audit & Clean:
+- Delete Replit-specific files: .replit, replit.nix, .config, .cache, .upm, .replit*
+- Extract any env vars or secrets referenced in .replit or code that mentions REPL_ or secrets, save them to .env.example
+- Remove unused dependencies, detect stack (Node if package.json exists, Python if requirements.txt or pyproject.toml exists)
+
+Step 3 - Productionize:
+- If Node: Create production Dockerfile (node:20-alpine, npm ci, EXPOSE 3000, CMD npm start), docker-compose.yml with restart: unless-stopped, and .gitignore for node_modules, .env, dist
+- If Python: Create Dockerfile (python:3.11-slim, pip install -r requirements.txt, EXPOSE 8000, CMD python main.py), docker-compose.yml, .gitignore for __pycache__, venv, .env
+- Ensure package.json has a valid "start" script, fix if missing (try src/index.js, index.js, server.js)
+- Create .env.example, README.md with instructions for local run (docker compose up) and Ubuntu deploy
+
+Step 4 - GitHub Ready:
+- git init if needed, git add ., git commit -m "autopilot: convert replit to prod"
+- Add remote origin <github-url> if not exists
+- Force push to main: git push -f origin HEAD:main
+- Ensure git status is clean, no secrets leaked
+
+Step 5 - Deploy:
+- On the same Ubuntu server, run: docker compose up -d --build
+- Print the live URL: http://localhost:3000 or :8000 and http://<wifi-ip>:3000
+- For web dashboard, stream logs to the browser via SSE or simple polling
+
+TECH STACK:
+- Node.js, type: module
+- Express 4.x for web server
+- multer for file uploads
+- simple-git for git operations
+- fs-extra for file ops
+- child_process execSync for unzip and docker compose
+- No database needed, filesystem only
+
+PROJECT STRUCTURE:
+replit-autopilot/
+├── package.json (with bin: { "autopilot": "./cli.js" })
+├── cli.js (#!/usr/bin/env node, full pipeline)
+├── server.js (express dashboard on 4000)
+├── public/ (optional static)
+├── README.md (how to install and use both CLI and web)
+└── .gitignore
+
+OUTPUT:
+- The app must run with: npm install && node server.js (for web) and ./cli.js <zip> <github-url> (for CLI)
+- It must work on Ubuntu 20.04 with docker.io and docker-compose
+- It must be able to convert and deploy https://github.com/ssdogturdss/red-carpet-inventory.git autonomously
+- Provide final instructions for: git clone, npm install, pm2 start server.js --name autopilot
+
+RULES:
+- No Replit magic - must work outside Replit on any Linux server
+- No hardcoded secrets
+- Robust error handling with clear console logs [1/5], [2/5], etc.
+- Clean, production code
