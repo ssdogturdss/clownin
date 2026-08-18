@@ -1,0 +1,604 @@
+# Build and Push a True Portable GitHub Repository
+
+Take the existing project in this Replit workspace and transform it into a complete, production-ready, portable software repository that can run independently of Replit.
+
+This is NOT a request to simply download or export the current Replit project.
+
+The objective is to inspect the entire application, fix its architecture where necessary, remove Replit-specific dependencies, make the application reproducible anywhere, and push the resulting source code to a real GitHub repository.
+
+## PRIMARY REQUIREMENT
+
+The finished project must be able to run outside Replit on:
+
+- Local development machines
+- Windows
+- macOS
+- Linux
+- Ubuntu Server
+- Docker
+- Docker Compose
+- VPS servers
+- Cloud VMs
+- GitHub Actions
+- CI/CD systems
+- Common hosting platforms
+- Other compatible Node.js/Python/etc. environments appropriate for the project's actual technology
+
+Do not make Replit a requirement.
+
+The application must not depend on a Replit URL, Replit filesystem, Replit-only environment variables, Replit database, Replit deployment runtime, or Replit-specific services unless that dependency is explicitly required by the application's purpose.
+
+---
+
+# 1. AUDIT THE ENTIRE PROJECT FIRST
+
+Before changing anything, inspect the complete project.
+
+Analyze:
+
+- Source code
+- Frontend
+- Backend
+- API routes
+- Database layer
+- Authentication
+- Environment variables
+- Configuration
+- Build system
+- Package dependencies
+- Scripts
+- Assets
+- Static files
+- File uploads
+- Storage
+- Background workers
+- WebSockets
+- AI integrations
+- External APIs
+- Database migrations
+- Deployment configuration
+- Existing tests
+- Existing documentation
+- Replit-specific configuration
+
+Identify anything that would prevent the project from running outside Replit.
+
+Do not blindly rewrite working code.
+
+Preserve existing functionality while making the architecture portable.
+
+---
+
+# 2. REMOVE REPLIT LOCK-IN
+
+Search the entire repository for Replit-specific dependencies and assumptions.
+
+Look for things such as:
+
+- Replit environment variables
+- Replit filesystem paths
+- Replit deployment assumptions
+- Replit database integrations
+- Replit authentication
+- Replit-specific packages
+- Replit URLs
+- Replit-specific API endpoints
+- .replit
+- replit.nix
+- Replit-only startup commands
+- Hardcoded /home/runner/... paths
+- Hardcoded workspace paths
+- Replit-specific secrets
+- Replit-specific ports
+- Replit-specific proxy behavior
+
+Replace them with portable implementations where appropriate.
+
+If a Replit configuration file is useful for development, it may remain, but the application must not require it.
+
+---
+
+# 3. MAKE CONFIGURATION PORTABLE
+
+Create a proper environment configuration system.
+
+Provide:
+
+.env.example
+
+with every required environment variable documented.
+
+Never commit:
+
+- API keys
+- passwords
+- private keys
+- database credentials
+- tokens
+- secrets
+- production credentials
+
+Use environment variables for secrets.
+
+Provide clear validation for required environment variables.
+
+The application should fail with a useful error explaining which configuration is missing rather than crashing mysteriously.
+
+---
+
+# 4. CREATE REAL DEVELOPMENT AND PRODUCTION SCRIPTS
+
+The repository must have clear commands for:
+
+- Installing dependencies
+- Starting development
+- Running production
+- Building
+- Testing
+- Linting
+- Formatting
+- Database migrations
+- Database seeding where applicable
+
+Use standard package scripts or the appropriate equivalent for the project's language.
+
+For example:
+
+text install dev build start test lint format db:migrate db:seed 
+
+Only create scripts that actually correspond to the project's technology.
+
+Do not create fake commands.
+
+Every documented command must actually work.
+
+---
+
+# 5. MAKE THE PROJECT SELF-CONTAINED
+
+The repository must contain everything required to reproduce the application except external secrets and services.
+
+Include appropriate:
+
+- package.json
+- lockfile
+- source code
+- configuration
+- database migrations
+- schemas
+- scripts
+- Docker configuration
+- documentation
+- tests
+- CI configuration
+
+Do not leave important code hidden inside Replit configuration.
+
+Do not rely on files that exist only inside the Replit workspace.
+
+---
+
+# 6. DATABASE PORTABILITY
+
+If the project uses a database:
+
+Make the database architecture portable.
+
+Prefer a standard database such as PostgreSQL when appropriate.
+
+Include:
+
+- Database schema
+- Migrations
+- Seed scripts if needed
+- Connection configuration
+- Development setup
+- Production configuration
+
+If Docker is appropriate, provide a development database through Docker Compose.
+
+Never hardcode database credentials.
+
+The application must be capable of connecting to an externally hosted production database through environment variables.
+
+---
+
+# 7. FILE STORAGE
+
+If the application stores uploaded files or generated assets, inspect how storage currently works.
+
+Do not depend on Replit's temporary filesystem.
+
+Implement a configurable storage abstraction where appropriate.
+
+Support a sensible local filesystem option for development and an appropriate persistent/object-storage option for production when required.
+
+Document the configuration.
+
+---
+
+# 8. DOCKERIZE THE APPLICATION
+
+Create a production-quality:
+
+Dockerfile
+
+and, when useful:
+
+docker-compose.yml
+
+Docker should be capable of starting the application without Replit.
+
+The container should:
+
+- Install dependencies
+- Build the application
+- Start the actual production server
+- Expose the correct port
+- Use environment variables
+- Avoid development-only dependencies in the production image when practical
+- Run as a non-root user when practical
+- Use a sensible health check where appropriate
+
+Do not create a fake Docker setup that merely runs Replit.
+
+---
+
+# 9. PORT CONFIGURATION
+
+The application must respect a configurable PORT environment variable.
+
+Do not hardcode a Replit port.
+
+The server should listen appropriately for containerized and remote environments.
+
+For web servers, make sure the application can bind to the appropriate host interface instead of only localhost when deployed inside a container or VPS.
+
+---
+
+# 10. FRONTEND AND BACKEND
+
+If the project contains both frontend and backend:
+
+Clearly separate their responsibilities.
+
+Make sure:
+
+- API URLs are configurable
+- Production URLs are not hardcoded
+- CORS is configurable
+- Authentication works outside Replit
+- API requests work from another host
+- WebSocket URLs are configurable if applicable
+- Static assets work correctly
+- Production builds work independently
+
+If the project is a monolith, preserve the architecture unless separation provides a meaningful benefit.
+
+Do not rewrite the application unnecessarily.
+
+---
+
+# 11. AUTHENTICATION
+
+Inspect the existing authentication system.
+
+Remove any Replit-only authentication dependency unless absolutely necessary.
+
+Use a portable authentication architecture appropriate for the application.
+
+Ensure:
+
+- Passwords are never stored in plaintext
+- Secrets come from environment variables
+- Sessions/tokens work outside Replit
+- Production security settings are configurable
+- Authentication URLs are configurable
+
+Do not create fake authentication.
+
+---
+
+# 12. API AND EXTERNAL SERVICES
+
+Audit every external API.
+
+For every integration:
+
+- Put credentials in environment variables
+- Document the required key
+- Create clear configuration
+- Handle API failures
+- Handle timeouts
+- Handle rate limits
+- Avoid hardcoded development URLs
+
+If an API is optional, the application should clearly indicate that it is not configured rather than pretending it worked.
+
+---
+
+# 13. TESTING
+
+Run the existing test suite.
+
+If meaningful tests are missing, add tests for critical functionality.
+
+At minimum, verify:
+
+- Application starts
+- Application builds
+- Main routes load
+- API endpoints respond
+- Database connection works when configured
+- Authentication works when applicable
+- Critical application functionality works
+
+Do not mark tests as passing without actually running them.
+
+---
+
+# 14. LINTING AND TYPE CHECKING
+
+Run the project's appropriate:
+
+- Linter
+- Formatter
+- Type checker
+- Build process
+- Tests
+
+Fix legitimate errors.
+
+Do not disable linting or type checking simply to make the build pass.
+
+Do not hide errors with excessive any, ignored errors, disabled rules, or fake test results.
+
+---
+
+# 15. SECURITY AUDIT
+
+Perform a basic production security review.
+
+Check for:
+
+- Exposed secrets
+- Hardcoded credentials
+- Dangerous debug settings
+- Insecure CORS
+- SQL injection risks
+- Command injection risks
+- Path traversal
+- Unsafe file uploads
+- Authentication bypasses
+- Missing authorization checks
+- Sensitive information in logs
+- Dependency vulnerabilities
+- Insecure default passwords
+
+Fix real issues you discover.
+
+Never place real credentials into GitHub.
+
+---
+
+# 16. GITHUB REPOSITORY
+
+Create or use the appropriate GitHub repository.
+
+The repository must contain the actual source code and complete project history from this conversion.
+
+Initialize Git if necessary.
+
+Create:
+
+.gitignore
+
+appropriate to the technology.
+
+Do not commit:
+
+- .env
+- Secrets
+- Credentials
+- Private keys
+- Build artifacts
+- Temporary files
+- Replit workspace junk
+- Node modules
+- Large generated files unless intentionally required
+
+Create meaningful commits.
+
+Example:
+
+text Initial portable production conversion Remove Replit runtime dependencies Add Docker deployment Add environment configuration Add CI pipeline Fix production build Add documentation 
+
+Push the completed repository to GitHub.
+
+---
+
+# 17. GITHUB ACTIONS
+
+Create a GitHub Actions workflow when appropriate.
+
+For example:
+
+.github/workflows/ci.yml
+
+The workflow should automatically:
+
+1. Check out the repository
+2. Install dependencies
+3. Run linting
+4. Run type checking when applicable
+5. Run tests
+6. Build the application
+
+The workflow must use GitHub Actions normally and must not depend on Replit.
+
+Do not add fake CI.
+
+---
+
+# 18. DOCUMENTATION
+
+Create a professional README.md.
+
+The README must explain:
+
+## Project
+
+What the application does.
+
+## Requirements
+
+What needs to be installed.
+
+## Installation
+
+Exact commands for setting up the project locally.
+
+## Environment Variables
+
+Explain every required environment variable.
+
+## Development
+
+Exact command to run development mode.
+
+## Production
+
+Exact commands to build and run production.
+
+## Docker
+
+Exact Docker commands.
+
+## Database
+
+How to configure and migrate the database.
+
+## Testing
+
+How to run tests.
+
+## Deployment
+
+Explain how the application can be deployed to a normal Linux VPS/cloud VM or other supported environment.
+
+## GitHub
+
+Explain the repository structure and CI process.
+
+## Troubleshooting
+
+Include common startup and configuration problems.
+
+Do not write documentation for imaginary functionality.
+
+---
+
+# 19. CREATE DEPLOYMENT FILES
+
+Where appropriate, include:
+
+text Dockerfile docker-compose.yml .env.example .gitignore .github/workflows/ci.yml README.md 
+
+If the application would benefit from NGINX, include an example configuration such as:
+
+text deploy/nginx.conf.example 
+
+Do not make NGINX mandatory unless the architecture requires it.
+
+---
+
+# 20. NO FAKE IMPLEMENTATIONS
+
+This requirement is critical.
+
+Do NOT:
+
+- Simulate API responses
+- Pretend commands executed
+- Create fake cloud infrastructure
+- Create fake databases
+- Create fake authentication
+- Create fake deployment success
+- Add placeholder implementations where real functionality already exists
+- Claim something works without testing it
+- Leave "TODO" implementations pretending to be finished
+
+If something genuinely requires an external service, document the required service and configuration.
+
+---
+
+# 21. VERIFY OUTSIDE REPLIT
+
+Before declaring the conversion complete, perform a clean-room verification.
+
+Pretend this repository was cloned onto a completely different Linux machine.
+
+Use the repository itself to determine how to install and run it.
+
+Verify:
+
+text git clone install dependencies configure .env build test start 
+
+Also verify the Docker path if Docker was added.
+
+The project should not require opening Replit to function.
+
+If possible, perform the verification in a clean environment/container.
+
+---
+
+# 22. FINAL GITHUB CHECK
+
+Before pushing, inspect the final Git repository.
+
+Confirm:
+
+- Source code is present
+- README is present
+- .gitignore is present
+- .env.example is present
+- No secrets are committed
+- No Replit-only dependency is required
+- Dependencies are reproducible
+- Build works
+- Tests work
+- Docker works when provided
+- GitHub Actions configuration is valid
+- Production startup works
+- No important files remain outside the repository
+
+Then commit and push everything to GitHub.
+
+---
+
+# 23. FINAL REPORT
+
+After the repository has actually been pushed, report:
+
+1. GitHub repository URL
+2. Repository name
+3. Branch used
+4. Commit hash
+5. Technology stack
+6. How to run locally
+7. How to run with Docker
+8. Required environment variables
+9. Database requirements
+10. Deployment requirements
+11. Tests performed
+12. Build status
+13. Any remaining external dependencies
+14. Any issues that could not be automatically resolved
+
+Do not say "complete" unless the repository was actually created/updated, committed, pushed, and verified.
+
+The final goal is:
+
+A real GitHub repository containing the complete application, capable of being cloned and run independently of Replit.
+
+Replit is only the development environment used to perform this conversion. It must NOT become a runtime dependency of the finished product.
