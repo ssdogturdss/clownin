@@ -16,7 +16,7 @@
  *   - `@anthropic-ai/sdk`  → vi.mock (no real HTTP; constructor-safe stub)
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 // vi.hoisted() runs before module resolution so these refs are safe to use
@@ -267,6 +267,107 @@ describe("getProviderClient — anthropic provider", () => {
     expect(MockAnthropic).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "sk-ant-key" }),
     );
+  });
+});
+
+// ── (d) TTL expiry re-queries DB and reflects provider switch ────────────────
+
+describe("getProviderClient — TTL expiry re-queries DB", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("re-queries DB after the 30-second TTL expires", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-openai");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // call 1: populates cache
+
+    vi.advanceTimersByTime(31_000); // advance past 30-second TTL
+
+    await getProviderClient(); // call 2: cache expired → re-queries DB
+
+    expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT re-query DB before the TTL expires", async () => {
+    vi.useFakeTimers();
+    mockDecrypt.mockReturnValue("sk-openai");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // populates cache
+
+    vi.advanceTimersByTime(29_000); // still within 30-second window
+
+    await getProviderClient(); // served from cache
+
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up the new provider after TTL expires (openai → anthropic)", async () => {
+    vi.useFakeTimers();
+
+    // Initial state: openai is the active provider
+    mockDecrypt.mockReturnValue("sk-openai");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    const result1 = await getProviderClient();
+    expect(result1.provider).toBe("openai");
+    expect(result1.openaiClient).toBeDefined();
+
+    // Admin switches active provider to anthropic in the DB
+    mockDecrypt.mockReturnValue("sk-ant-key");
+    mockLimit.mockResolvedValue([activeRow("anthropic", "enc-ant")]);
+
+    vi.advanceTimersByTime(31_000); // TTL expires
+
+    const result2 = await getProviderClient();
+
+    expect(result2.provider).toBe("anthropic");
+    expect(result2.anthropicClient).toBeDefined();
+    expect(result2.openaiClient).toBeUndefined();
+  });
+
+  it("constructs the Anthropic SDK (not OpenAI) after switching provider past TTL", async () => {
+    vi.useFakeTimers();
+
+    mockDecrypt.mockReturnValue("sk-openai");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+    await getProviderClient(); // openai cached
+
+    MockOpenAI.mockClear();
+    MockAnthropic.mockClear();
+
+    // Switch to anthropic in DB
+    mockDecrypt.mockReturnValue("sk-anthropic-key");
+    mockLimit.mockResolvedValue([activeRow("anthropic", "enc-ant")]);
+
+    vi.advanceTimersByTime(31_000); // expire cache
+
+    await getProviderClient();
+
+    expect(MockAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "sk-anthropic-key" }),
+    );
+    expect(MockOpenAI).not.toHaveBeenCalled();
+  });
+
+  it("re-queries DB exactly twice when TTL elapses once between calls", async () => {
+    vi.useFakeTimers();
+
+    mockDecrypt.mockReturnValue("sk-openai");
+    mockLimit.mockResolvedValue([activeRow("openai", "enc-openai")]);
+
+    await getProviderClient(); // call 1 — cache populated
+    await getProviderClient(); // call 2 — cache hit (no re-query)
+
+    vi.advanceTimersByTime(31_000); // TTL expires
+
+    await getProviderClient(); // call 3 — cache miss → re-query
+    await getProviderClient(); // call 4 — fresh cache hit (no re-query)
+
+    expect(mockSelect).toHaveBeenCalledTimes(2); // calls 1 and 3
   });
 });
 
