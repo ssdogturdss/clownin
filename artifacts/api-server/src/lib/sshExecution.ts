@@ -20,6 +20,7 @@ export interface SshServerConfig {
 
 const REMOTE_BASE = "~/.clownin";
 const EXEC_TIMEOUT_MS = 15_000;
+const PGID_DISCOVERY_GRACE_MS = 1_000;
 
 export function buildRemoteProcessGroupStopCommand(pgid: number): string {
   if (!Number.isSafeInteger(pgid) || pgid <= 1) {
@@ -28,6 +29,67 @@ export function buildRemoteProcessGroupStopCommand(pgid: number): string {
   // A negative PID targets the process group. TERM gives HTTP servers a chance
   // to close cleanly; KILL handles children that ignore it.
   return `if kill -0 -${pgid} 2>/dev/null; then kill -TERM -${pgid} 2>/dev/null; sleep 1; kill -KILL -${pgid} 2>/dev/null || true; fi`;
+}
+
+/**
+ * Coordinates cancellation when the remote process-group ID arrives after the
+ * executable SSH channel is already available. Closing that channel immediately
+ * stops output, while the process-group kill is deferred until its ID is known.
+ */
+export function createRemoteProcessAborter(
+  stopProcessGroup: (pgid: number) => void,
+  closeStream: () => void,
+  pgidDiscoveryGraceMs = PGID_DISCOVERY_GRACE_MS,
+): { abort: () => void; setProcessGroup: (pgid: number) => void; dispose: () => void } {
+  let pgid: number | null = null;
+  let abortRequested = false;
+  let streamCloseStarted = false;
+  let processGroupStopStarted = false;
+  let fallbackTimer: NodeJS.Timeout | null = null;
+
+  const stopProcessGroupIfReady = () => {
+    if (pgid === null || processGroupStopStarted) return;
+    processGroupStopStarted = true;
+    stopProcessGroup(pgid);
+  };
+
+  const closeStreamOnce = () => {
+    if (streamCloseStarted) return;
+    streamCloseStarted = true;
+    closeStream();
+  };
+
+  const clearFallbackTimer = () => {
+    if (!fallbackTimer) return;
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  };
+
+  return {
+    abort: () => {
+      abortRequested = true;
+      stopProcessGroupIfReady();
+      if (pgid !== null) {
+        closeStreamOnce();
+        return;
+      }
+      // The PGID marker is emitted on this stream's stderr. Keep the stream
+      // open briefly after cancellation so a marker already in flight can be
+      // consumed and its detached process group can still be killed.
+      if (!fallbackTimer) {
+        fallbackTimer = setTimeout(closeStreamOnce, pgidDiscoveryGraceMs);
+      }
+    },
+    setProcessGroup: (nextPgid: number) => {
+      pgid = nextPgid;
+      if (abortRequested) {
+        clearFallbackTimer();
+        stopProcessGroupIfReady();
+        closeStreamOnce();
+      }
+    },
+    dispose: clearFallbackTimer,
+  };
 }
 
 function base64Shell(script: string): string {
@@ -606,6 +668,10 @@ export function streamRemoteProcess(
     }
 
     if (signal?.aborted) { conn.end(); return; }
+    // Until the main exec channel opens, closing the SSH connection is the
+    // only process handle available. It cancels in-progress SFTP and package
+    // setup when the browser disconnects instead of waiting for setup to end.
+    if (signal) signal.onAbort = () => conn.end();
 
     const remoteDir = `${REMOTE_BASE}/${projectId}`;
 
@@ -686,9 +752,11 @@ export function streamRemoteProcess(
             let streamErrored = false;
             stream.on("error", () => { streamErrored = true; });
 
-            // Expose stdin write — returns false when the channel has errored
-            // or the underlying write fails.
-            handlers.onStreamReady?.((data: string): boolean => {
+             // Expose stdin write — returns false when the channel has errored
+             // or the underlying write fails. The callback is emitted once the
+             // process group is known, so an explicit Stop always has a PGID
+             // available to terminate rather than racing the stderr marker.
+             const writeStdin = (data: string): boolean => {
               if (streamErrored) return false;
               try {
                 stream.write(data);
@@ -697,22 +765,22 @@ export function streamRemoteProcess(
                 streamErrored = true;
                 return false;
               }
-            });
-
-             let pgid: number | null = null;
-             const abortRemote = () => {
-               if (pgid) void stopSshServerBackground(srv, pgid);
-               try { stream.close(); } catch { /* already closed */ }
              };
-             if (signal) signal.onAbort = abortRemote;
+
+              const remoteAborter = createRemoteProcessAborter(
+                (pgid) => { void stopSshServerBackground(srv, pgid); },
+                () => { try { stream.close(); } catch { /* already closed */ } },
+              );
+             if (signal) signal.onAbort = remoteAborter.abort;
 
              const timer = setTimeout(() => {
-               abortRemote();
+                remoteAborter.abort();
               onStderr("\n[Execution timed out after 15 seconds]");
             }, EXEC_TIMEOUT_MS);
 
              stream.on("data", (d: Buffer) => onStdout(d.toString("utf8")));
              let stderrBuffer = "";
+              let streamReady = false;
              stream.stderr.on("data", (d: Buffer) => {
                stderrBuffer += d.toString("utf8");
                const lines = stderrBuffer.split("\n");
@@ -722,9 +790,12 @@ export function streamRemoteProcess(
                  if (match) {
                    const candidate = Number.parseInt(match[1], 10);
                    if (Number.isSafeInteger(candidate) && candidate > 1) {
-                     pgid = candidate;
+                      remoteAborter.setProcessGroup(candidate);
                      handlers.onProcessGroupReady?.(candidate);
-                     if (signal?.aborted) abortRemote();
+                      if (!streamReady && !signal?.aborted) {
+                        streamReady = true;
+                        handlers.onStreamReady?.(writeStdin);
+                      }
                    }
                  } else {
                    onStderr(`${line}\n`);
@@ -733,6 +804,7 @@ export function streamRemoteProcess(
              });
             stream.on("close", (code: number) => {
               clearTimeout(timer);
+               remoteAborter.dispose();
                if (signal) signal.onAbort = undefined;
                if (stderrBuffer) onStderr(stderrBuffer);
               conn.end();

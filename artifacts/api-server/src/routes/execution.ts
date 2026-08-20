@@ -34,6 +34,8 @@ type ActiveRun = {
   /** Write data to the process stdin. Returns false when stdin is unavailable
    *  (process closed fd 0, broken pipe, or stream errored). */
   writeStdin: (data: string) => boolean;
+  /** Stop the process and any remote descendants. Safe to call more than once. */
+  cancel: () => void;
 };
 const activeRuns = new Map<string, ActiveRun>();
 
@@ -173,9 +175,13 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
     }
 
     const abortSignal: { aborted: boolean; onAbort?: () => void } = { aborted: false };
-    req.on("close", () => {
+    const cancelRemoteRun = () => {
+      if (abortSignal.aborted) return;
       abortSignal.aborted = true;
       abortSignal.onAbort?.();
+    };
+    req.on("close", () => {
+      if (!res.writableEnded) cancelRemoteRun();
       activeRuns.delete(runToken);
     });
 
@@ -190,7 +196,7 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
         // ready to receive input — register THEN emit the token so the
         // client cannot send stdin before the channel exists.
         onStreamReady: (writeStdin) => {
-          activeRuns.set(runToken, { projectId, userId, writeStdin });
+          activeRuns.set(runToken, { projectId, userId, writeStdin, cancel: cancelRemoteRun });
           sendEvent("token", runToken);
         },
         onSystem: (chunk) => sendEvent("system", chunk),
@@ -291,6 +297,9 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
         return false;
       }
     },
+    cancel: () => {
+      child.kill();
+    },
   });
   sendEvent("token", runToken);
 
@@ -327,8 +336,39 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
   req.on("close", () => {
     clearTimeout(timeout);
     activeRuns.delete(runToken);
-    child.kill();
+    if (!res.writableEnded) child.kill();
   });
+});
+
+// ── Cancel execution ──────────────────────────────────────────────────────────
+// Stop an active run through its server-side handle rather than waiting for
+// transport teardown. For SSH, that handle terminates the remote process group.
+router.post("/projects/:id/execute/cancel", requireAuth, (req, res): void => {
+  const { userId } = getUser(req);
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const projectId = parseInt(rawId, 10);
+  const { token } = req.body ?? {};
+
+  if (isNaN(projectId) || typeof token !== "string" || !token) {
+    res.status(400).json({ error: "project id and run token are required" });
+    return;
+  }
+
+  const run = activeRuns.get(token);
+  if (!run) {
+    // Stopping twice is harmless. Treat an already-finished run as stopped.
+    res.status(204).end();
+    return;
+  }
+
+  if (run.projectId !== projectId || run.userId !== userId) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
+  activeRuns.delete(token);
+  run.cancel();
+  res.status(204).end();
 });
 
 // ── Clean install ──────────────────────────────────────────────────────────────

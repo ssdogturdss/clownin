@@ -67,6 +67,8 @@ export default function WorkspacePage() {
   const queryClient = useQueryClient();
   const projectId = Number(params && "id" in params ? params.id : Number.NaN);
   const runAbortRef = useRef<AbortController | null>(null);
+  const runTokenRef = useRef<string | null>(null);
+  const stoppedRunControllersRef = useRef(new WeakSet<AbortController>());
   const serveAbortRef = useRef<AbortController | null>(null);
 
   const projectQuery = useQuery({
@@ -216,6 +218,7 @@ export default function WorkspacePage() {
     runAbortRef.current?.abort();
     const controller = new AbortController();
     runAbortRef.current = controller;
+    runTokenRef.current = null;
     setIsRunning(true);
     setIsBottomPanelOpen(true);
     setTerminalLines([]);
@@ -229,22 +232,52 @@ export default function WorkspacePage() {
       });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Run failed");
       await consumeSse(response, (event) => {
-        if (event.type === "exit") appendLine(setTerminalLines, "system", `[Process exited with code ${event.payload}]`);
-        else if (event.type !== "token") appendLine(setTerminalLines, event.type, event.payload);
+        if (event.type === "token") {
+          runTokenRef.current = event.payload;
+        } else if (event.type === "exit") {
+          runTokenRef.current = null;
+          appendLine(setTerminalLines, "system", `[Process exited with code ${event.payload}]`);
+        } else {
+          appendLine(setTerminalLines, event.type, event.payload);
+        }
       });
     } catch (error) {
-      if ((error as DOMException).name === "AbortError") appendLine(setTerminalLines, "system", "[Run cancelled]");
+      if ((error as DOMException).name === "AbortError") {
+        if (!stoppedRunControllersRef.current.has(controller)) {
+          appendLine(setTerminalLines, "system", "[Run cancelled]");
+        }
+      }
       else appendLine(setTerminalLines, "stderr", error instanceof Error ? error.message : "Run failed");
     } finally {
-      if (runAbortRef.current === controller) runAbortRef.current = null;
+      if (runAbortRef.current === controller) {
+        runAbortRef.current = null;
+        runTokenRef.current = null;
+      }
       setIsRunning(false);
     }
   }, [projectId, saveFile, selectedFile]);
 
   const stopRun = useCallback(() => {
-    runAbortRef.current?.abort();
+    const controller = runAbortRef.current;
+    const token = runTokenRef.current;
+    if (!controller) return;
+
+    // Trigger server-side cleanup before closing the stream. The request is
+    // deliberately fire-and-forget: closing the stream immediately keeps the
+    // terminal responsive, while the server kills the remote process group.
+    if (token) {
+      void workspaceFetch(`/projects/${projectId}/execute/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      }).catch(() => {});
+    }
+    stoppedRunControllersRef.current.add(controller);
+    appendLine(setTerminalLines, "system", "[Run cancelled]");
+    runTokenRef.current = null;
+    controller.abort();
     runAbortRef.current = null;
-  }, []);
+  }, [projectId]);
 
   const listenForServeLogs = useCallback(async (controller: AbortController) => {
     try {
