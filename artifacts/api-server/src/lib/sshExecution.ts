@@ -21,6 +21,20 @@ export interface SshServerConfig {
 const REMOTE_BASE = "~/.clownin";
 const EXEC_TIMEOUT_MS = 15_000;
 
+export function buildRemoteProcessGroupStopCommand(pgid: number): string {
+  if (!Number.isSafeInteger(pgid) || pgid <= 1) {
+    throw new Error("Invalid remote process group");
+  }
+  // A negative PID targets the process group. TERM gives HTTP servers a chance
+  // to close cleanly; KILL handles children that ignore it.
+  return `if kill -0 -${pgid} 2>/dev/null; then kill -TERM -${pgid} 2>/dev/null; sleep 1; kill -KILL -${pgid} 2>/dev/null || true; fi`;
+}
+
+function base64Shell(script: string): string {
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  return `sh -c "$(printf %s '${encoded}' | base64 -d)"`;
+}
+
 /** Build the SSH ConnectConfig from a server row. */
 function connectConfig(srv: SshServerConfig): ConnectConfig {
   const cfg: ConnectConfig = {
@@ -337,10 +351,12 @@ export async function startSshServerBackground(
           // avoiding all quoting conflicts while leaving no persistent file on the remote.
           // Values are only in memory for the lifetime of the server process.
           const envSetup = buildBase64EnvSetup(envVars ?? {});
-          // cd first so the server's cwd is the project dir (relative asset paths work);
-          // then decode env vars in-memory; then exec replaces sh with the server process.
-          const shellCmd =
-            `nohup sh -c 'cd "${absDir}" && ${envSetup}exec env PORT=${port} ${cmd}' </dev/null >"${logFile}" 2>&1 & echo $!`;
+           // Start a new session/process group. The returned PID is therefore
+           // also the PGID, allowing Stop to terminate the server and every
+           // child it spawned instead of leaving remote work behind.
+           const program = `cd "${absDir}" && ${envSetup}exec env PORT=${port} ${cmd}`;
+           const shellCmd =
+             `nohup setsid ${base64Shell(program)} </dev/null >"${logFile}" 2>&1 & echo $!`;
 
           conn.exec(shellCmd, (execErr, stream) => {
             if (execErr) { conn.end(); reject(new Error(`Exec failed: ${execErr.message}`)); return; }
@@ -441,8 +457,9 @@ export function startSshPidMonitor(
       return;
     }
 
-    // Loop until kill -0 fails (process has exited), then return.
-    conn.exec(`while kill -0 ${pid} 2>/dev/null; do sleep 2; done`, (execErr, stream) => {
+    // A negative PID checks the whole process group, so descendants keep the
+    // preview visible until they are actually gone.
+    conn.exec(`while kill -0 -${pid} 2>/dev/null; do sleep 2; done`, (execErr, stream) => {
       if (execErr) { conn.end(); reject(execErr); return; }
       stream.resume();
       stream.stderr?.resume();
@@ -538,15 +555,21 @@ export async function cleanRemotePackages(
 export async function stopSshServerBackground(
   srv: SshServerConfig,
   pid: number,
-): Promise<void> {
+): Promise<boolean> {
+  let command: string;
+  try {
+    command = buildRemoteProcessGroupStopCommand(pid);
+  } catch {
+    return false;
+  }
   let conn: SshClient;
   try { conn = await openConnection(srv); }
-  catch { return; } // can't connect — nothing to do
+  catch { return false; } // can't connect — nothing to do
   return new Promise((resolve) => {
-    conn.exec(`kill ${pid} 2>/dev/null; sleep 1; kill -9 ${pid} 2>/dev/null; true`, (err, stream) => {
-      if (err) { conn.end(); resolve(); return; }
+    conn.exec(command, (err, stream) => {
+      if (err) { conn.end(); resolve(false); return; }
       stream.resume(); stream.stderr?.resume();
-      stream.on("close", () => { conn.end(); resolve(); });
+      stream.on("close", () => { conn.end(); resolve(true); });
     });
   });
 }
@@ -559,6 +582,7 @@ export function streamRemoteProcess(
   language: string,
   handlers: {
     onStreamReady?: (writeStdin: (data: string) => boolean) => void;
+    onProcessGroupReady?: (pgid: number) => void;
     /** System-phase output (install logs). Falls back to onStdout if not provided. */
     onSystem?: (chunk: string) => void;
     onStdout: (chunk: string) => void;
@@ -566,7 +590,7 @@ export function streamRemoteProcess(
     onExit: (code: number) => void;
     onError: (msg: string) => void;
   },
-  signal?: { aborted: boolean },
+  signal?: { aborted: boolean; onAbort?: () => void },
   envVars?: Record<string, string>
 ): void {
   const { onStdout, onStderr, onExit, onError } = handlers;
@@ -643,8 +667,14 @@ export function streamRemoteProcess(
             if (signal?.aborted) { conn.end(); return; }
           }
 
-          const envPrefix = buildShellEnvPrefix(envVars ?? {});
-          conn.exec(`cd "${absDir}" && ${envPrefix}${cmd}`, (execErr, stream) => {
+           const envPrefix = buildShellEnvPrefix(envVars ?? {});
+           // Emit the session leader as an internal stderr marker. The client
+           // never sees this marker; it lets abort/disconnect terminate the
+           // full remote process group through a separate SSH connection.
+           const program =
+             `printf '__CLOWNIN_PGID=%s\\n' "$$" >&2; ` +
+             `cd "${absDir}" && ${envPrefix}exec ${cmd}`;
+           conn.exec(`setsid ${base64Shell(program)}`, (execErr, stream) => {
             if (execErr) {
               conn.end();
               onError(`Exec failed: ${execErr.message}`);
@@ -669,17 +699,42 @@ export function streamRemoteProcess(
               }
             });
 
-            const timer = setTimeout(() => {
-              stream.close();
+             let pgid: number | null = null;
+             const abortRemote = () => {
+               if (pgid) void stopSshServerBackground(srv, pgid);
+               try { stream.close(); } catch { /* already closed */ }
+             };
+             if (signal) signal.onAbort = abortRemote;
+
+             const timer = setTimeout(() => {
+               abortRemote();
               onStderr("\n[Execution timed out after 15 seconds]");
             }, EXEC_TIMEOUT_MS);
 
-            if (signal?.aborted) { stream.close(); conn.end(); return; }
-
-            stream.on("data", (d: Buffer) => onStdout(d.toString("utf8")));
-            stream.stderr.on("data", (d: Buffer) => onStderr(d.toString("utf8")));
+             stream.on("data", (d: Buffer) => onStdout(d.toString("utf8")));
+             let stderrBuffer = "";
+             stream.stderr.on("data", (d: Buffer) => {
+               stderrBuffer += d.toString("utf8");
+               const lines = stderrBuffer.split("\n");
+               stderrBuffer = lines.pop() ?? "";
+               for (const line of lines) {
+                 const match = line.match(/^__CLOWNIN_PGID=(\d+)$/);
+                 if (match) {
+                   const candidate = Number.parseInt(match[1], 10);
+                   if (Number.isSafeInteger(candidate) && candidate > 1) {
+                     pgid = candidate;
+                     handlers.onProcessGroupReady?.(candidate);
+                     if (signal?.aborted) abortRemote();
+                   }
+                 } else {
+                   onStderr(`${line}\n`);
+                 }
+               }
+             });
             stream.on("close", (code: number) => {
               clearTimeout(timer);
+               if (signal) signal.onAbort = undefined;
+               if (stderrBuffer) onStderr(stderrBuffer);
               conn.end();
               onExit(code ?? -1);
             });

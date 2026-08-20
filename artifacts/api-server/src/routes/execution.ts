@@ -172,9 +172,10 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
       return;
     }
 
-    const abortSignal = { aborted: false };
+    const abortSignal: { aborted: boolean; onAbort?: () => void } = { aborted: false };
     req.on("close", () => {
       abortSignal.aborted = true;
+      abortSignal.onAbort?.();
       activeRuns.delete(runToken);
     });
 

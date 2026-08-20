@@ -281,6 +281,17 @@ export interface PromoCodeUpdate {
   isActive?: boolean;
 }
 
+export interface PromoCodeRedemption {
+  id: number;
+  userId: number;
+  /** @nullable */
+  username?: string | null;
+  /** @nullable */
+  email?: string | null;
+  tier: string;
+  redeemedAt: string;
+}
+
 export interface ProviderConfig {
   provider: string;
   displayName: string;
@@ -318,6 +329,21 @@ export interface ProviderConfigUpdate {
   model?: string | null;
 }
 
+export interface ProviderHealthResult {
+  ok: boolean;
+  /** @nullable */
+  provider: string | null;
+  /** @nullable */
+  activeProvider?: string | null;
+  /** @nullable */
+  model?: string | null;
+  decryptError?: boolean;
+  usingEnvFallback?: boolean;
+  noKeyStored?: boolean;
+  noProvider?: boolean;
+  error?: string;
+}
+
 export interface VaultSecret {
   id: number;
   name: string;
@@ -332,17 +358,6 @@ export interface UpsertSecretBody {
   value: string;
   /** @nullable */
   description?: string | null;
-}
-
-export interface PromoCodeRedemption {
-  id: number;
-  userId: number;
-  /** @nullable */
-  username?: string | null;
-  /** @nullable */
-  email?: string | null;
-  tier: string;
-  redeemedAt: string;
 }
 
 export type ListAdminProjectsParams = {

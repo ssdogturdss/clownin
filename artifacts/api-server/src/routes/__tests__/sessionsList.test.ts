@@ -40,13 +40,20 @@ const { mockDbExecute, mockDbSelect, mockDbInsert, mockDbDelete, mockRequireAuth
     // Each call to db.select() pops the next entry from selectQueue.
     // Entries can be pre-built chains (static) OR zero-argument factory functions
     // (dynamic — evaluated at query time so they can read from nameStore).
-    type Chain = ReturnType<typeof makeChain>;
-    const selectQueue: Array<Chain | (() => unknown)> = [];
+    type Chain = {
+      then: (
+        resolve: (value: unknown) => unknown,
+        reject?: (reason: unknown) => unknown,
+      ) => Promise<unknown>;
+      catch: (reject: (reason: unknown) => unknown) => Promise<unknown>;
+      limit: (...args: unknown[]) => Promise<unknown>;
+      orderBy: (...args: unknown[]) => { limit: (...args: unknown[]) => Promise<unknown> };
+    };
 
     function makeChain(value: unknown): Chain {
       // A "thenable" object that resolves when awaited directly, and also
       // supports .limit() and .orderBy().limit() for chained calls.
-      const thenable = {
+      const thenable: Chain = {
         then: (
           resolve: (v: unknown) => unknown,
           reject?: (e: unknown) => unknown,
@@ -60,6 +67,8 @@ const { mockDbExecute, mockDbSelect, mockDbInsert, mockDbDelete, mockRequireAuth
       };
       return thenable;
     }
+
+    const selectQueue: Array<Chain | (() => unknown)> = [];
 
     // Expose helpers so tests can queue responses
     const mockDbSelect = vi.fn(() => {

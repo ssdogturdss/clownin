@@ -70,7 +70,8 @@ router.post("/secrets", requireAuth, async (req, res): Promise<void> => {
 // ── DELETE /secrets/:id — delete ─────────────────────────────────────────────
 router.delete("/secrets/:id", requireAuth, async (req, res): Promise<void> => {
   const { userId } = getUser(req);
-  const id = parseInt(req.params.id, 10);
+  const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(rawId, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid id" });
     return;
@@ -90,8 +91,10 @@ router.post(
   async (req, res): Promise<void> => {
     const { userId } = getUser(req);
 
-    const projectId = parseInt(req.params.id, 10);
-    const secretId = parseInt(req.params.secretId, 10);
+    const rawProjectId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const rawSecretId = Array.isArray(req.params.secretId) ? req.params.secretId[0] : req.params.secretId;
+    const projectId = parseInt(rawProjectId, 10);
+    const secretId = parseInt(rawSecretId, 10);
     if (isNaN(projectId) || isNaN(secretId)) {
       res.status(400).json({ error: "Invalid id" });
       return;

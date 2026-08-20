@@ -151,18 +151,19 @@ function parseProjectId(req: Request): number {
   return parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 }
 
-function killEntry(entry: ActiveServer) {
+async function killEntry(entry: ActiveServer): Promise<void> {
   if (entry.stopped) return;
   entry.stopped = true;
   if (entry.kind === "local") {
     entry.logProcess.kill();
     entry.waitProcess.kill();
     stopSandbox(entry.containerId, entry.broker);
+    return;
   } else {
     entry.killTail?.();
     entry.killMonitor?.();
     entry.killTunnel?.();
-    stopSshServerBackground(entry.srvConfig, entry.remotePid).catch(() => {});
+    await stopSshServerBackground(entry.srvConfig, entry.remotePid);
   }
 }
 
@@ -361,7 +362,7 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
 
   // Stop any existing server for this project, then remove it
   const existing = activeServers.get(projectId);
-  if (existing) { killEntry(existing); activeServers.delete(projectId); }
+  if (existing) { await killEntry(existing); activeServers.delete(projectId); }
 
   const allFiles = await db.select().from(projectFilesTable)
     .where(eq(projectFilesTable.projectId, projectId));
@@ -411,7 +412,7 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
       killTunnel = await startSshTunnel(srvConfig, port);
     } catch (err: unknown) {
       // Tunnel failed — kill the remote process and bail
-      stopSshServerBackground(srvConfig, remotePid).catch(() => {});
+      await stopSshServerBackground(srvConfig, remotePid);
       res.status(502).json({
         error: `SSH tunnel failed: ${err instanceof Error ? err.message : String(err)}`,
       });
@@ -550,7 +551,7 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
 });
 
 // ── DELETE /projects/:id/serve — stop ────────────────────────────────────────
-router.delete("/projects/:id/serve", requireAuth, (req, res): void => {
+router.delete("/projects/:id/serve", requireAuth, async (req, res): Promise<void> => {
   const { userId } = getUser(req);
   const projectId = parseProjectId(req);
   const entry = activeServers.get(projectId);
@@ -559,7 +560,7 @@ router.delete("/projects/:id/serve", requireAuth, (req, res): void => {
   }
 
   broadcast(entry, { type: "system", text: "[Server stopped by user]", ts: Date.now() });
-  killEntry(entry);
+  await killEntry(entry);
   evictIfCurrent(entry);
   broadcastExit(entry, 0);
 
@@ -575,7 +576,7 @@ router.delete("/projects/:id/serve", requireAuth, (req, res): void => {
  */
 export function cleanupAllServers(): void {
   for (const entry of activeServers.values()) {
-    killEntry(entry);
+    void killEntry(entry);
   }
   activeServers.clear();
 }
@@ -598,7 +599,7 @@ export type AuthorizedServerTarget =
 export function stopPreviewForRelayFailure(projectId: number): void {
   const entry = activeServers.get(projectId);
   if (!entry || entry.kind !== "local") return;
-  killEntry(entry);
+  void killEntry(entry);
   evictIfCurrent(entry);
   broadcastExit(entry, null);
 }

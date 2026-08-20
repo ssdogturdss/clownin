@@ -641,6 +641,24 @@ export const DeletePromoCodeResponse = zod.unknown()
 
 
 /**
+ * @summary Get redemption history for a promo code
+ */
+export const GetPromoCodeRedemptionsParams = zod.object({
+  "id": zod.coerce.number().int()
+})
+
+export const GetPromoCodeRedemptionsResponseItem = zod.object({
+  "id": zod.number(),
+  "userId": zod.number(),
+  "username": zod.string().nullish(),
+  "email": zod.string().nullish(),
+  "tier": zod.string(),
+  "redeemedAt": zod.coerce.date()
+})
+export const GetPromoCodeRedemptionsResponse = zod.array(GetPromoCodeRedemptionsResponseItem)
+
+
+/**
  * @summary List AI provider configs
  */
 export const ListProvidersResponseItem = zod.object({
@@ -648,6 +666,7 @@ export const ListProvidersResponseItem = zod.object({
   "displayName": zod.string(),
   "isActive": zod.boolean(),
   "hasApiKey": zod.boolean(),
+  "model": zod.string().nullish(),
   "updatedAt": zod.string().nullish()
 })
 export const ListProvidersResponse = zod.array(ListProvidersResponseItem)
@@ -663,7 +682,8 @@ export const UpdateProviderParams = zod.object({
 export const UpdateProviderBody = zod.object({
   "apiKey": zod.string().optional(),
   "isActive": zod.boolean().optional(),
-  "clearKey": zod.boolean().optional()
+  "clearKey": zod.boolean().optional(),
+  "model": zod.string().nullish()
 })
 
 export const UpdateProviderResponse = zod.object({
@@ -671,7 +691,24 @@ export const UpdateProviderResponse = zod.object({
   "displayName": zod.string(),
   "isActive": zod.boolean(),
   "hasApiKey": zod.boolean(),
+  "model": zod.string().nullish(),
   "updatedAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Check active AI provider health
+ */
+export const GetProviderHealthResponse = zod.object({
+  "ok": zod.boolean(),
+  "provider": zod.string().nullable(),
+  "activeProvider": zod.string().nullish(),
+  "model": zod.string().nullish(),
+  "decryptError": zod.boolean().optional(),
+  "usingEnvFallback": zod.boolean().optional(),
+  "noKeyStored": zod.boolean().optional(),
+  "noProvider": zod.boolean().optional(),
+  "error": zod.string().optional()
 })
 
 
