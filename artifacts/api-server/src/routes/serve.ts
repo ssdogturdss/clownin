@@ -15,9 +15,17 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { db, projectsTable, projectFilesTable, serversTable, projectEnvVarsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { requireAuth, getUser } from "../lib/auth";
+import { requireAuth, getUser, signPreviewToken, verifyPreviewToken } from "../lib/auth";
 import { syncProjectFiles } from "../lib/projectWorkspace";
 import { decrypt, filterUserEnv } from "../lib/envCrypto";
+import {
+  cleanupSandboxBroker,
+  startSandboxServer,
+  stopSandbox,
+  waitForSandboxExit,
+  type SandboxBroker,
+  type SandboxRuntime,
+} from "../lib/sandbox";
 import {
   startSshServerBackground,
   startSshLogTail,
@@ -47,8 +55,12 @@ type BaseServer = {
 };
 type LocalServer = BaseServer & {
   kind: "local";
-  child: ChildProcess;
-  /** Set to true in close/error handlers; used to decide whether SIGKILL is needed. */
+  containerId: string;
+  runtime: SandboxRuntime;
+  broker: SandboxBroker;
+  logProcess: ChildProcess;
+  waitProcess: ChildProcess;
+  /** Set to true when Docker reports that the container has exited. */
   childExited: boolean;
 };
 type SshServer   = BaseServer & {
@@ -143,13 +155,9 @@ function killEntry(entry: ActiveServer) {
   if (entry.stopped) return;
   entry.stopped = true;
   if (entry.kind === "local") {
-    // child.killed is set when the signal is *sent*, not when the process *exits*.
-    // We track the actual exit with childExited and clear the timer on normal close.
-    entry.child.kill("SIGTERM");
-    const escalateTimer = setTimeout(() => {
-      if (!entry.childExited) entry.child.kill("SIGKILL");
-    }, 3_000);
-    entry.child.once("close", () => clearTimeout(escalateTimer));
+    entry.logProcess.kill();
+    entry.waitProcess.kill();
+    stopSandbox(entry.containerId, entry.broker);
   } else {
     entry.killTail?.();
     entry.killMonitor?.();
@@ -163,12 +171,61 @@ function killEntry(entry: ActiveServer) {
 // Body parsers consume req as a stream; the proxy must pipe it raw to the upstream
 // server before any body-parser has had a chance to consume the stream.
 // ══════════════════════════════════════════════════════════════════════════════
+function parseCookie(header: string | undefined, name: string): string | null {
+  const match = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match.slice(name.length + 1));
+  } catch {
+    return null;
+  }
+}
+
+function withoutPreviewCookie(header: string | undefined, projectId: number): string | undefined {
+  const name = `clownin_preview_${projectId}=`;
+  const retained = header?.split(";").map((part) => part.trim()).filter((part) => !part.startsWith(name));
+  return retained?.length ? retained.join("; ") : undefined;
+}
+
 function proxyHandler(req: Request, res: Response): void {
   const projectId = parseProjectId(req);
   if (isNaN(projectId)) { res.status(400).send("Invalid project id"); return; }
 
   const entry = activeServers.get(projectId);
   if (!entry) { res.status(503).send("No server running for this project"); return; }
+
+  // The start endpoint returns immediately after spawning the user's process.
+  // Give a freshly-spawned server a brief chance to bind its assigned port
+  // rather than turning the first iframe load into a transient 502.
+  if (Date.now() - entry.startedAt.getTime() < 150) {
+    setTimeout(() => proxyHandler(req, res), 150);
+    return;
+  }
+
+  const url = new URL(req.originalUrl, "http://preview.local");
+  const cookieName = `clownin_preview_${projectId}`;
+  const oneTimeToken = url.searchParams.get("preview_token");
+  const previewToken = oneTimeToken ?? parseCookie(req.headers.cookie, cookieName);
+  try {
+    const preview = previewToken ? verifyPreviewToken(previewToken) : null;
+    if (!preview || preview.projectId !== projectId || preview.userId !== entry.userId) throw new Error("Unauthorized preview");
+  } catch {
+    res.status(401).send("Preview authorization required");
+    return;
+  }
+
+  // Turn the query capability into an HTTP-only path-limited cookie before
+  // forwarding to user code, so the user app never sees or can read the token.
+  if (oneTimeToken) {
+    url.searchParams.delete("preview_token");
+    // A sandbox without allow-same-origin has an opaque (cross-site) origin.
+    // The preview service is always reached through the HTTPS artifact domain,
+    // including in development, so scoped preview cookies must be cross-site
+    // and secure for iframe assets and WebSockets to retain the capability.
+    res.setHeader("Set-Cookie", `${cookieName}=${encodeURIComponent(oneTimeToken)}; Max-Age=300; Path=/api/projects/${projectId}/serve/proxy; HttpOnly; SameSite=None; Secure`);
+    res.redirect(302, `${url.pathname}${url.search}`);
+    return;
+  }
 
   // When mounted via router.use(), req.url is relative to the mount point —
   // it's already the sub-path the upstream server should receive.
@@ -178,15 +235,25 @@ function proxyHandler(req: Request, res: Response): void {
   const headers = { ...req.headers };
   delete headers["accept-encoding"];
   delete headers["host"];
+  const safeCookie = withoutPreviewCookie(headers.cookie, projectId);
+  if (safeCookie) headers.cookie = safeCookie;
+  else delete headers.cookie;
 
   const proxyReq = httpRequest(
-    {
-      hostname: "127.0.0.1",
-      port: entry.port,   // SSH entries use the local tunnel port; local entries use the direct port
-      path: proxyPath,
-      method: req.method,
-      headers: { ...headers, host: `localhost:${entry.port}` },
-    },
+    entry.kind === "local"
+      ? {
+          agent: entry.broker.createHttpAgent(),
+          path: proxyPath,
+          method: req.method,
+          headers: { ...headers, host: `localhost:${entry.port}` },
+        }
+      : {
+          hostname: "127.0.0.1",
+          port: entry.port,   // SSH entries use the local tunnel port
+          path: proxyPath,
+          method: req.method,
+          headers: { ...headers, host: `localhost:${entry.port}` },
+        },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
       proxyRes.pipe(res, { end: true });
@@ -221,6 +288,16 @@ router.get("/projects/:id/serve", requireAuth, (req, res): void => {
   const entry = activeServers.get(projectId);
   if (!entry || entry.userId !== userId) { res.json({ running: false }); return; }
   res.json({ running: true, url: entry.url, port: entry.port, startedAt: entry.startedAt });
+});
+
+router.get("/projects/:id/serve/preview-token", requireAuth, (req, res): void => {
+  const { userId } = getUser(req);
+  const projectId = parseProjectId(req);
+  const entry = activeServers.get(projectId);
+  if (!entry || entry.userId !== userId) {
+    res.status(404).json({ error: "No active server for this project" }); return;
+  }
+  res.json({ token: signPreviewToken(projectId, userId) });
 });
 
 // ── GET /projects/:id/serve/logs — SSE stream ─────────────────────────────────
@@ -390,7 +467,7 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
   }
 
   const absFilePath = join(projDir, file.path);
-  const { cmd, args } = getCmd(file.language, absFilePath)!;
+  const { args } = getCmd(file.language, absFilePath)!;
 
   const safeEnv: NodeJS.ProcessEnv = {
     // Reserved keys (PATH, IFS, LD_PRELOAD, etc.) stripped before merge
@@ -405,25 +482,49 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
     PYTHONHOME: undefined,
   };
 
-  const child: ChildProcess = spawn(cmd, args, { env: safeEnv, cwd: projDir, stdio: "pipe" });
-  child.stdin?.on("error", () => {}); // suppress unhandled EPIPE
+  const runtime: SandboxRuntime =
+    file.language === "typescript" || file.language === "ts"
+      ? "bun"
+      : file.language === "python" || file.language === "python3" || file.language === "py"
+        ? "python"
+        : "node";
+
+  let sandbox: Awaited<ReturnType<typeof startSandboxServer>>;
+  try {
+    sandbox = await startSandboxServer({
+      projectDir: projDir,
+      runtime,
+      args: ["/workspace/" + file.path.replace(/^\/+/, "").replace(/\.\.\//g, "")],
+      env: safeEnv,
+    });
+  } catch (err: unknown) {
+    res.status(503).json({
+      error: `Preview sandbox unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
 
   const entry: LocalServer = {
-    kind: "local", projectId, userId, port, url, startedAt: new Date(),
+    kind: "local", projectId, userId, port: sandbox.port, url, startedAt: new Date(),
     logBuffer: [], logListeners: new Set(),
     stopped: false, exitEmitted: false,
-    child, childExited: false,
+    containerId: sandbox.containerId,
+    runtime,
+    broker: sandbox.broker,
+    logProcess: spawn("docker", ["logs", "--follow", sandbox.containerId], { stdio: "pipe" }),
+    waitProcess: waitForSandboxExit(sandbox.containerId),
+    childExited: false,
   };
   activeServers.set(projectId, entry);
 
   broadcast(entry, { type: "system", text: `[Server starting on port ${port}…]`, ts: Date.now() });
 
-  child.stdout?.on("data", (chunk: Buffer) => {
+  entry.logProcess.stdout?.on("data", (chunk: Buffer) => {
     chunk.toString("utf8").split("\n").filter(Boolean).forEach((line) =>
       broadcast(entry, { type: "stdout", text: line, ts: Date.now() }),
     );
   });
-  child.stderr?.on("data", (chunk: Buffer) => {
+  entry.logProcess.stderr?.on("data", (chunk: Buffer) => {
     chunk.toString("utf8").split("\n").filter(Boolean).forEach((line) =>
       broadcast(entry, { type: "stderr", text: line, ts: Date.now() }),
     );
@@ -431,19 +532,21 @@ router.post("/projects/:id/serve", requireAuth, async (req, res): Promise<void> 
 
   // Identity-aware cleanup: only evict this entry if it is still the current
   // one — a replace-start may have already registered a newer server.
-  child.on("close", (code) => {
+  entry.waitProcess.stdout?.on("data", (chunk: Buffer) => {
     entry.childExited = true;   // used by the SIGKILL escalation timer
     evictIfCurrent(entry);
-    broadcastExit(entry, code);
+    cleanupSandboxBroker(entry.broker);
+    const code = Number.parseInt(chunk.toString("utf8").trim(), 10);
+    broadcastExit(entry, Number.isFinite(code) ? code : -1);
   });
-  child.on("error", (err) => {
+  entry.waitProcess.on("error", (err) => {
     entry.childExited = true;
     broadcast(entry, { type: "stderr", text: `[Process error: ${err.message}]`, ts: Date.now() });
     evictIfCurrent(entry);
     broadcastExit(entry, -1);
   });
 
-  res.json({ url, port, startedAt: entry.startedAt });
+  res.json({ url, port: sandbox.port, startedAt: entry.startedAt });
 });
 
 // ── DELETE /projects/:id/serve — stop ────────────────────────────────────────
@@ -483,6 +586,39 @@ export function cleanupAllServers(): void {
  */
 export function getActiveServerPort(projectId: number): number | null {
   return activeServers.get(projectId)?.port ?? null;
+}
+
+/** Validate the short-lived, owner-bound preview cookie used by WS upgrades. */
+export type AuthorizedServerTarget =
+  | { kind: "sandbox"; broker: SandboxBroker; port: number }
+  | { kind: "unavailable" }
+  | { kind: "tcp"; port: number };
+
+/** Stop and remove a local preview whose reverse relay is no longer usable. */
+export function stopPreviewForRelayFailure(projectId: number): void {
+  const entry = activeServers.get(projectId);
+  if (!entry || entry.kind !== "local") return;
+  killEntry(entry);
+  evictIfCurrent(entry);
+  broadcastExit(entry, null);
+}
+
+/** Return only an authorized preview transport target for WS upgrades. */
+export function getAuthorizedServerTarget(projectId: number, previewToken: string | null): AuthorizedServerTarget | null {
+  const entry = activeServers.get(projectId);
+  if (!entry || !previewToken) return null;
+  try {
+    const preview = verifyPreviewToken(previewToken);
+    if (preview.projectId !== projectId || preview.userId !== entry.userId) return null;
+    if (entry.kind === "local") {
+      return entry.broker.isConnected()
+        ? { kind: "sandbox", broker: entry.broker, port: entry.port }
+        : { kind: "unavailable" };
+    }
+    return { kind: "tcp", port: entry.port };
+  } catch {
+    return null;
+  }
 }
 
 export default router;

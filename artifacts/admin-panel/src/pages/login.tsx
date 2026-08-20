@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, ADMIN_TOKEN_KEY } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const res = await fetch(API_BASE + "/auth/login", {
+      const res = await fetch(API_BASE + "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -30,7 +30,7 @@ export default function Login() {
       }
 
       const data = await res.json();
-      localStorage.setItem("admin_token", data.token);
+      localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
       toast.success("Welcome to Clownin Admin");
       setLocation("/");
     } catch (err: any) {

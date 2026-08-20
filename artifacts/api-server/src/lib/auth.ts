@@ -17,12 +17,39 @@ export interface AuthPayload {
   username: string;
 }
 
+interface PreviewPayload {
+  scope: "preview";
+  projectId: number;
+  userId: number;
+}
+
 export function signToken(payload: AuthPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
+export function signPreviewToken(projectId: number, userId: number): string {
+  return jwt.sign({ scope: "preview", projectId, userId } satisfies PreviewPayload, JWT_SECRET, { expiresIn: "5m" });
+}
+
 export function verifyToken(token: string): AuthPayload {
-  return jwt.verify(token, JWT_SECRET) as AuthPayload;
+  const payload = jwt.verify(token, JWT_SECRET) as Partial<AuthPayload> & { scope?: unknown };
+  if (
+    payload.scope !== undefined ||
+    !Number.isInteger(payload.userId) ||
+    typeof payload.email !== "string" ||
+    typeof payload.username !== "string"
+  ) {
+    throw new Error("Invalid authentication token");
+  }
+  return payload as AuthPayload;
+}
+
+export function verifyPreviewToken(token: string): PreviewPayload {
+  const payload = jwt.verify(token, JWT_SECRET) as Partial<PreviewPayload>;
+  if (payload.scope !== "preview" || !Number.isInteger(payload.projectId) || !Number.isInteger(payload.userId)) {
+    throw new Error("Invalid preview token");
+  }
+  return payload as PreviewPayload;
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {

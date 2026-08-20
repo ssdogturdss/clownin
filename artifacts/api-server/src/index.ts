@@ -3,7 +3,7 @@ import net from "net";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedDemoData } from "./lib/seed";
-import { cleanupAllServers, getActiveServerPort } from "./routes/serve";
+import { cleanupAllServers, getAuthorizedServerTarget, stopPreviewForRelayFailure } from "./routes/serve";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) {
@@ -23,6 +23,23 @@ const server = createServer(app);
 // handled here at the raw TCP layer.
 const WS_RE = /^\/api\/projects\/(\d+)\/serve\/proxy(\/.*)?$/;
 
+function previewCookie(req: { headers: { cookie?: string | undefined } }, projectId: number): string | null {
+  const name = `clownin_preview_${projectId}=`;
+  const cookie = req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith(name));
+  if (!cookie) return null;
+  try {
+    return decodeURIComponent(cookie.slice(name.length));
+  } catch {
+    return null;
+  }
+}
+
+function withoutPreviewCookie(header: string | undefined, projectId: number): string | undefined {
+  const name = `clownin_preview_${projectId}=`;
+  const retained = header?.split(";").map((part) => part.trim()).filter((part) => !part.startsWith(name));
+  return retained?.length ? retained.join("; ") : undefined;
+}
+
 server.on("upgrade", (req, socket: net.Socket, head: Buffer) => {
   const match = req.url?.match(WS_RE);
   if (!match) {
@@ -32,29 +49,64 @@ server.on("upgrade", (req, socket: net.Socket, head: Buffer) => {
 
   const projectId = parseInt(match[1], 10);
   const subPath = match[2] || "/";
-  const projectPort = getActiveServerPort(projectId);
+  const target = getAuthorizedServerTarget(projectId, previewCookie(req, projectId));
 
-  if (!projectPort) {
-    socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+  if (!target) {
+    socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    return;
+  }
+  if (target.kind === "unavailable") {
+    stopPreviewForRelayFailure(projectId);
+    socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
     return;
   }
 
-  const upstream = net.connect(projectPort, "127.0.0.1", () => {
-    // Reconstruct the HTTP/1.1 upgrade request for the upstream port,
-    // replacing host so the child process sees its own address.
-    const filteredHeaders = Object.entries(req.headers)
-      .filter(([k]) => k !== "host")
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
-      .join("\r\n");
+  // Reconstruct the HTTP/1.1 upgrade request for the upstream server,
+  // replacing host so preview code sees its own local address.
+  const headers = { ...req.headers };
+  const safeCookie = withoutPreviewCookie(headers.cookie, projectId);
+  if (safeCookie) headers.cookie = safeCookie;
+  else delete headers.cookie;
+  const filteredHeaders = Object.entries(headers)
+    .filter(([k]) => k !== "host")
+    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+    .join("\r\n");
+  const rawUpgrade = (
+    `GET ${subPath} HTTP/1.1\r\n` +
+    `host: localhost:${target.port}\r\n` +
+    filteredHeaders +
+    "\r\n\r\n"
+  );
 
-    upstream.write(
-      `GET ${subPath} HTTP/1.1\r\n` +
-        `host: localhost:${projectPort}\r\n` +
-        filteredHeaders +
-        "\r\n\r\n",
-    );
+  if (target.kind === "sandbox") {
+    let relay: ReturnType<typeof target.broker.createStream>;
+    try {
+      relay = target.broker.createStream();
+    } catch (err) {
+      logger.warn({ err, projectId }, "Sandbox WS relay unavailable");
+      stopPreviewForRelayFailure(projectId);
+      socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    relay.once("connect", () => {
+      relay.write(rawUpgrade);
+      if (head?.length) relay.write(head);
+      socket.pipe(relay);
+      relay.pipe(socket);
+    });
+    relay.on("error", (err) => {
+      logger.warn({ err, projectId }, "Sandbox WS relay error");
+      socket.destroy();
+    });
+    relay.on("close", () => socket.destroy());
+    socket.on("error", () => relay.destroy());
+    socket.on("close", () => relay.destroy());
+    return;
+  }
+
+  const upstream = net.connect(target.port, "127.0.0.1", () => {
+    upstream.write(rawUpgrade);
     if (head?.length) upstream.write(head);
-
     upstream.pipe(socket);
     socket.pipe(upstream);
   });

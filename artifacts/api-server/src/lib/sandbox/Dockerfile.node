@@ -1,0 +1,6 @@
+FROM node:20-bookworm-slim
+COPY entrypoint.sh relay.js /opt/sandbox/
+RUN chmod 0555 /opt/sandbox/entrypoint.sh
+ENV SANDBOX_RELAY_EXECUTABLE=/usr/local/bin/node
+ENV SANDBOX_RELAY_SCRIPT=/opt/sandbox/relay.js
+ENTRYPOINT ["/opt/sandbox/entrypoint.sh"]

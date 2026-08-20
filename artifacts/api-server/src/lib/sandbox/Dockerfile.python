@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+COPY entrypoint.sh relay.py /opt/sandbox/
+RUN chmod 0555 /opt/sandbox/entrypoint.sh
+ENV SANDBOX_RELAY_EXECUTABLE=/usr/local/bin/python3
+ENV SANDBOX_RELAY_SCRIPT=/opt/sandbox/relay.py
+ENTRYPOINT ["/opt/sandbox/entrypoint.sh"]

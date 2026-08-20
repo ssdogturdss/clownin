@@ -20,6 +20,11 @@ async function buildAll() {
   await mkdir(distAssets, { recursive: true });
   await cp(srcAssets, distAssets, { recursive: true });
 
+  // The preview sandbox image is built locally from this scratch Dockerfile at
+  // runtime. Keep it beside the bundled server so production has the same
+  // trusted container definition as development.
+  await cp(path.resolve(artifactDir, "src/lib/sandbox"), path.resolve(distDir, "sandbox"), { recursive: true });
+
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",

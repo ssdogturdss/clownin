@@ -245,3 +245,24 @@
     inset: -1px;
   }
 }
+
+/* The project explorer is a drawer on phones/tablets rather than a pane that
+   steals editing width. These explicit rules avoid depending on dynamically
+   composed utility classes in the persisted IDE layout. */
+@media (max-width: 1023px) {
+  .workspace-file-explorer {
+    position: fixed !important;
+    inset: 3.5rem auto 1.75rem 0;
+    z-index: 50 !important;
+    width: min(16rem, 85vw) !important;
+  }
+
+  .workspace-drawer-backdrop {
+    position: fixed !important;
+    inset: 3.5rem 0 1.75rem;
+    z-index: 40 !important;
+    display: block !important;
+    background: rgb(0 0 0 / 0.5) !important;
+    backdrop-filter: blur(1px);
+  }
+}
