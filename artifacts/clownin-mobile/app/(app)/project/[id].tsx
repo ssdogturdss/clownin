@@ -686,6 +686,25 @@ export default function ProjectEditorScreen() {
     return process.env.EXPO_PUBLIC_DOMAIN ?? '';
   }, []);
 
+  // The serve proxy intentionally requires a short-lived, project-bound
+  // capability. Exchange the authenticated workspace session for that
+  // capability before opening a preview in a browser or WebView; the proxy
+  // immediately trades it for a restricted HTTP-only cookie.
+  const getAuthorizedServeUrl = useCallback(async (url: string): Promise<string> => {
+    if (!token) throw new Error('Sign in to open the live preview');
+
+    const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve/preview-token`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error(`Could not authorize preview (${response.status})`);
+
+    const data = (await response.json()) as { token?: string };
+    if (!data.token) throw new Error('Could not authorize preview');
+
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}preview_token=${encodeURIComponent(data.token)}`;
+  }, [token, projectId, getApiHost]);
+
   // ── Clean install ──────────────────────────────────────────────────────────
   // Wipes node_modules / .venv so the next run reinstalls from scratch.
   const handleCleanInstall = useCallback(async () => {
@@ -727,10 +746,11 @@ export default function ProjectEditorScreen() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
-      .then((data: { running: boolean; url?: string }) => {
+      .then(async (data: { running: boolean; url?: string }) => {
         if (data.running && data.url) {
+          const authorizedUrl = await getAuthorizedServeUrl(data.url);
           setIsServing(true);
-          setServeUrl(data.url);
+          setServeUrl(authorizedUrl);
           setActivePane('preview');
           openTerminal();
         }
@@ -772,9 +792,18 @@ export default function ProjectEditorScreen() {
               try {
                 const event = JSON.parse(rawLine.slice(6)) as { type: string; payload: string };
                 if (event.type === 'url') {
-                  setServeUrl(event.payload);
-                  setActivePane('preview');
-                  openTerminal();
+                  void getAuthorizedServeUrl(event.payload)
+                    .then((authorizedUrl) => {
+                      if (aborted) return;
+                      setServeUrl(authorizedUrl);
+                      setActivePane('preview');
+                      openTerminal();
+                    })
+                    .catch((err: unknown) => {
+                      if (!aborted) {
+                        addLine('stderr', `[Preview authorization failed: ${err instanceof Error ? err.message : String(err)}]`);
+                      }
+                    });
                 } else if (event.type === 'stdout') {
                   const s = event.payload.replace(/\n$/, '');
                   if (s) addLine('stdout', s);
@@ -801,7 +830,7 @@ export default function ProjectEditorScreen() {
     })();
 
     return () => { aborted = true; };
-  }, [isServing, token, projectId, getApiHost, addLine]);
+  }, [isServing, token, projectId, getApiHost, addLine, getAuthorizedServeUrl, openTerminal]);
 
   // ── Start a long-lived server process ─────────────────────────────────────
   const handleServe = useCallback(async () => {
@@ -822,15 +851,16 @@ export default function ProjectEditorScreen() {
         return;
       }
       const data = (await response.json()) as { url: string; port: number };
+      const authorizedUrl = await getAuthorizedServeUrl(data.url);
       setIsServing(true);
-      setServeUrl(data.url);
+      setServeUrl(authorizedUrl);
       setActivePane('preview');
     } catch (err: unknown) {
       addLine('stderr', `[Serve error: ${err instanceof Error ? err.message : String(err)}]`);
     } finally {
       setIsServeLaunching(false);
     }
-  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine]);
+  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine, getAuthorizedServeUrl]);
 
   // ── Stop the running server ────────────────────────────────────────────────
   const handleStopServe = useCallback(async () => {
