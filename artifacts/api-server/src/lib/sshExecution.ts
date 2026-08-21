@@ -5,7 +5,7 @@
  * appropriate interpreter over an SSH exec channel.
  */
 
-import { Client as SshClient, type ConnectConfig } from "ssh2";
+import { Client as SshClient, type ConnectConfig, type SFTPWrapper } from "ssh2";
 import { createHash } from "crypto";
 import type { ProjectFile } from "@workspace/db";
 import { buildShellEnvPrefix, buildBase64EnvSetup } from "./envCrypto";
@@ -121,6 +121,34 @@ function openConnection(srv: SshServerConfig): Promise<SshClient> {
     conn.on("ready", () => resolve(conn));
     conn.on("error", reject);
     conn.connect(connectConfig(srv));
+  });
+}
+
+/**
+ * Create a remote directory if needed. Some SFTP servers report an existing
+ * directory as a generic "Failure" rather than EEXIST, so verify it after a
+ * failed mkdir instead of trusting the error code.
+ */
+function ensureRemoteDirectory(sftp: SFTPWrapper, dir: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    sftp.stat(dir, (statErr) => {
+      if (!statErr) {
+        resolve();
+        return;
+      }
+      sftp.mkdir(dir, (mkdirErr) => {
+        if (!mkdirErr) {
+          resolve();
+          return;
+        }
+        // A competing setup or an SFTP implementation without an EEXIST code
+        // may have created the directory. Confirm before treating it as fatal.
+        sftp.stat(dir, (verifyErr) => {
+          if (verifyErr) reject(mkdirErr);
+          else resolve();
+        });
+      });
+    });
   });
 }
 
@@ -275,10 +303,7 @@ export function runRemoteProcess(
         return;
       }
 
-      const ensureDir = (dir: string) =>
-        new Promise<void>((res, rej) =>
-          sftp.mkdir(dir, (e) => (e && (e as NodeJS.ErrnoException).code !== "EEXIST" ? rej(e) : res()))
-        );
+      const ensureDir = (dir: string) => ensureRemoteDirectory(sftp, dir);
 
       const uploadFile = (remotePath: string, content: string) =>
         new Promise<void>((res, rej) => {
@@ -378,10 +403,7 @@ export async function startSshServerBackground(
     conn.sftp((sftpErr, sftp) => {
       if (sftpErr) { conn.end(); reject(new Error(`SFTP init failed: ${sftpErr.message}`)); return; }
 
-      const ensureDir = (dir: string) =>
-        new Promise<void>((res, rej) =>
-          sftp.mkdir(dir, (e) => (e && (e as NodeJS.ErrnoException).code !== "EEXIST" ? rej(e) : res()))
-        );
+      const ensureDir = (dir: string) => ensureRemoteDirectory(sftp, dir);
       const uploadFile = (remotePath: string, content: string) =>
         new Promise<void>((res, rej) => {
           const s = sftp.createWriteStream(remotePath);
@@ -682,10 +704,7 @@ export function streamRemoteProcess(
         return;
       }
 
-      const ensureDir = (dir: string) =>
-        new Promise<void>((res, rej) =>
-          sftp.mkdir(dir, (e) => (e && (e as NodeJS.ErrnoException).code !== "EEXIST" ? rej(e) : res()))
-        );
+      const ensureDir = (dir: string) => ensureRemoteDirectory(sftp, dir);
 
       const uploadFile = (remotePath: string, content: string) =>
         new Promise<void>((res, rej) => {

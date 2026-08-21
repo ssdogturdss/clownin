@@ -180,10 +180,15 @@ router.post("/projects/:id/execute", requireAuth, async (req, res): Promise<void
       abortSignal.aborted = true;
       abortSignal.onAbort?.();
     };
-    req.on("close", () => {
+    const handleRemoteClientClose = () => {
       if (!res.writableEnded) cancelRemoteRun();
       activeRuns.delete(runToken);
-    });
+    };
+    // A browser ends an SSE stream by closing the response socket. Depending on
+    // the HTTP transport, that does not always emit "close" on the completed
+    // request object, so listen to both sides of the stream.
+    req.on("close", handleRemoteClientClose);
+    res.on("close", handleRemoteClientClose);
 
     streamRemoteProcess(
       { host: server.host, port: server.port, username: server.username, password: server.password, privateKey: server.privateKey },

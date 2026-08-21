@@ -5,3 +5,4 @@
 - [API server static assets](api-server-static-assets.md) — esbuild drops non-JS files; copy src/assets/ → dist/assets/ in build.mjs and serve via express.static().
 - [Portable preview isolation](portable-preview-isolation.md) — Local previews must use Docker network-none sandboxes so the same security model works on Replit and Ubuntu hosts.
 - [SSH process-group cancellation](ssh-process-group-cancellation.md) — Keep the exec channel open until its PGID marker arrives; closing it first can orphan detached remote work.
+- [SSH SFTP directory creation](ssh-sftp-directory-creation.md) — Existing directories may be reported as generic SFTP failures; verify the path after a failed mkdir.

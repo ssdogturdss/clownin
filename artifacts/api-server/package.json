@@ -9,6 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude '**/dockerSmoke*'",
+    "test:ssh": "SSH_INTEGRATION=1 vitest run src/lib/__tests__/sshExecution.test.ts --reporter verbose",
     "test:docker": "DOCKER_SMOKE=1 vitest run src/lib/__tests__/dockerSmoke.test.ts --reporter verbose"
   },
   "dependencies": {
