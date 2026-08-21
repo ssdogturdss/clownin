@@ -1056,11 +1056,13 @@ export default function ProjectEditorScreen() {
         </Pressable>
 
         <Pressable
-          style={[styles.headerIconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          testID="build-and-deploy-button"
+          style={[styles.buildDeployBtn, { backgroundColor: colors.primary, borderColor: colors.primary }]}
           onPress={() => setDeployOpen(true)}
           hitSlop={4}
         >
-          <MaterialCommunityIcons name="rocket-launch-outline" size={17} color={colors.primary} />
+          <MaterialCommunityIcons name="rocket-launch-outline" size={15} color={colors.primaryForeground} />
+          <Text style={[styles.buildDeployText, { color: colors.primaryForeground }]}>Build</Text>
         </Pressable>
 
         <Pressable
@@ -1490,6 +1492,19 @@ export default function ProjectEditorScreen() {
         onClose={() => setDeployOpen(false)}
         projectId={projectId}
         projectName={project?.name ?? 'my-project'}
+        hasUbuntuServer={!!project?.serverId}
+        canDeployToUbuntu={canServe && !!selectedFileId}
+        onDeployToUbuntu={handleServe}
+        onOpenUbuntuSetup={() => {
+          if (project?.serverId) {
+            Alert.alert(
+              'Choose a server file',
+              'Select a JavaScript, TypeScript, or Python file that starts your web server, then try again.',
+            );
+            return;
+          }
+          router.push('/(app)/servers');
+        }}
         onDeploySuccess={(url) => setDeployedUrl(url)}
       />
 
@@ -1632,6 +1647,11 @@ const styles = StyleSheet.create({
   },
   autoRunLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   headerIconBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  buildDeployBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, borderWidth: 1,
+    paddingHorizontal: 9, height: 34,
+  },
+  buildDeployText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   runBtn: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
   // Split layout
