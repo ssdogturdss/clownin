@@ -78,6 +78,19 @@ type ActiveServer = LocalServer | SshServer;
 
 const activeServers = new Map<number, ActiveServer>();
 
+/** Internal test seam for exercising the unauthenticated preview proxy with a real upstream server. */
+export const __serveTest = {
+  setActiveServer(entry: ActiveServer): void {
+    activeServers.set(entry.projectId, entry);
+  },
+  removeActiveServer(projectId: number): void {
+    activeServers.delete(projectId);
+  },
+  clearActiveServers(): void {
+    activeServers.clear();
+  },
+};
+
 function broadcast(entry: ActiveServer, line: LogLine) {
   entry.logBuffer.push(line);
   if (entry.logBuffer.length > LOG_BUFFER_MAX) entry.logBuffer.shift();
