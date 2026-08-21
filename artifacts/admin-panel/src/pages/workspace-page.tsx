@@ -298,6 +298,35 @@ export default function WorkspacePage() {
     }
   }, [projectId]);
 
+  const restoreRunningPreview = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
+    // Starting a sandbox can outlive the browser proxy's request window. When
+    // that happens the POST may fail client-side even though the server is
+    // already running, so briefly poll the owner-authenticated status endpoint
+    // before showing a failure.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (signal?.aborted) return false;
+      try {
+        const status = await readJson<{ running: boolean; url?: string }>(workspaceFetch(`/projects/${projectId}/serve`, { signal }));
+        if (!signal?.aborted && status.running && status.url) {
+          setServeUrl(await previewUrlFor(status.url));
+          if (signal?.aborted) return false;
+          setIsServing(true);
+          setPreviewMode(window.innerWidth >= 1280 ? "split" : "preview");
+          serveAbortRef.current?.abort();
+          const controller = new AbortController();
+          serveAbortRef.current = controller;
+          void listenForServeLogs(controller);
+          return true;
+        }
+      } catch {
+        // The sandbox may still be registering after a timed-out start request.
+      }
+      if (signal?.aborted) return false;
+      if (attempt < 5) await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+    }
+    return false;
+  }, [listenForServeLogs, previewUrlFor, projectId]);
+
   const startServe = useCallback(async () => {
     if (!selectedFile) { toast.error("Choose an entry file to serve"); return; }
     if (!(await saveFile())) return;
@@ -317,10 +346,11 @@ export default function WorkspacePage() {
       serveAbortRef.current = controller;
       void listenForServeLogs(controller);
     } catch (error) {
+      if (await restoreRunningPreview()) return;
       appendLine(setTerminalLines, "stderr", error instanceof Error ? error.message : "Could not start the server");
       toast.error(error instanceof Error ? error.message : "Could not start the server");
     }
-  }, [listenForServeLogs, previewUrlFor, projectId, saveFile, selectedFile]);
+  }, [listenForServeLogs, previewUrlFor, projectId, restoreRunningPreview, saveFile, selectedFile]);
 
   const stopServe = useCallback(async () => {
     serveAbortRef.current?.abort();
@@ -341,14 +371,7 @@ export default function WorkspacePage() {
     const controller = new AbortController();
     void (async () => {
       try {
-        const status = await readJson<{ running: boolean; url?: string }>(workspaceFetch(`/projects/${projectId}/serve`, { signal: controller.signal }));
-        if (status.running && status.url) {
-          setIsServing(true);
-          setServeUrl(await previewUrlFor(status.url));
-          const logsController = new AbortController();
-          serveAbortRef.current = logsController;
-          void listenForServeLogs(logsController);
-        }
+        await restoreRunningPreview(controller.signal);
       } catch { /* The workspace can still be used if status is unavailable. */ }
     })();
     return () => {
@@ -356,7 +379,7 @@ export default function WorkspacePage() {
       runAbortRef.current?.abort();
       serveAbortRef.current?.abort();
     };
-  }, [listenForServeLogs, previewUrlFor, projectId]);
+  }, [restoreRunningPreview]);
 
   const state: WorkspaceState = {
     selectedFileId, editorContent, isSaving, isRunning, isServing, serveUrl, previewMode,

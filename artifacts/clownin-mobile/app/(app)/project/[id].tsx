@@ -705,6 +705,33 @@ export default function ProjectEditorScreen() {
     return `${url}${separator}preview_token=${encodeURIComponent(data.token)}`;
   }, [token, projectId, getApiHost]);
 
+  const recoverStartedServe = useCallback(async (): Promise<boolean> => {
+    // The API can finish launching a sandbox after a browser proxy has already
+    // closed the original start request. Check the owner-authenticated status
+    // briefly so a live preview is not reported as a failed start.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.ok) {
+          const status = (await response.json()) as { running: boolean; url?: string };
+          if (status.running && status.url) {
+            setServeUrl(await getAuthorizedServeUrl(status.url));
+            setIsServing(true);
+            setActivePane('preview');
+            openTerminal();
+            return true;
+          }
+        }
+      } catch {
+        // A launch still registering is retried below.
+      }
+      if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+    return false;
+  }, [token, projectId, getApiHost, getAuthorizedServeUrl, openTerminal]);
+
   // ── Clean install ──────────────────────────────────────────────────────────
   // Wipes node_modules / .venv so the next run reinstalls from scratch.
   const handleCleanInstall = useCallback(async () => {
@@ -847,6 +874,7 @@ export default function ProjectEditorScreen() {
       });
       if (!response.ok) {
         const err = (await response.json()) as { error?: string };
+        if (await recoverStartedServe()) return;
         addLine('stderr', `[Serve failed: ${err.error ?? response.status}]`);
         return;
       }
@@ -856,11 +884,12 @@ export default function ProjectEditorScreen() {
       setServeUrl(authorizedUrl);
       setActivePane('preview');
     } catch (err: unknown) {
+      if (await recoverStartedServe()) return;
       addLine('stderr', `[Serve error: ${err instanceof Error ? err.message : String(err)}]`);
     } finally {
       setIsServeLaunching(false);
     }
-  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine, getAuthorizedServeUrl]);
+  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine, getAuthorizedServeUrl, recoverStartedServe]);
 
   // ── Stop the running server ────────────────────────────────────────────────
   const handleStopServe = useCallback(async () => {
