@@ -22,6 +22,14 @@ interface DeployModalProps {
   onClose: () => void;
   projectId: number;
   projectName: string;
+  /** Whether this project is attached to a configured Ubuntu/SSH server. */
+  hasUbuntuServer?: boolean;
+  /** Whether the current project file can be started as a remote web server. */
+  canDeployToUbuntu?: boolean;
+  /** Starts the existing authenticated remote preview/server flow. */
+  onDeployToUbuntu?: () => void;
+  /** Opens the server setup screen when no Ubuntu target is configured. */
+  onOpenUbuntuSetup?: () => void;
   /** Called when a deploy succeeds so the caller can persist and show the URL. */
   onDeploySuccess?: (url: string, platform: string) => void;
 }
@@ -72,7 +80,8 @@ function siteIdKey(p: Platform, id: number) { return `clownin_${p}_site_${id}`; 
 export { deployedUrlKey };
 
 export function DeployModal({
-  visible, onClose, projectId, projectName, onDeploySuccess,
+  visible, onClose, projectId, projectName, hasUbuntuServer = false,
+  canDeployToUbuntu = false, onDeployToUbuntu, onOpenUbuntuSetup, onDeploySuccess,
 }: DeployModalProps) {
   const colors = useColors();
   const { token } = useAuth();
@@ -89,6 +98,7 @@ export function DeployModal({
   // "quick" = token already saved, skip the form and deploy on one tap
   const [quickMode, setQuickMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showBuildTargets, setShowBuildTargets] = useState(true);
 
   // Reset and load saved tokens + site IDs whenever the modal opens
   useEffect(() => {
@@ -97,6 +107,7 @@ export function DeployModal({
     setResult(null);
     setError("");
     setShowSettings(false);
+    setShowBuildTargets(true);
     Promise.all([
       AsyncStorage.getItem(tokenKey("netlify")),
       AsyncStorage.getItem(tokenKey("vercel")),
@@ -174,6 +185,13 @@ export function DeployModal({
     } catch { /* user dismissed */ }
   }, [result]);
 
+  const openExpoPublishing = useCallback(() => {
+    // Expo Launch is managed by Replit's Publishing tool, not an app API.
+    // Opening Replit keeps the action honest while taking the user to the
+    // place where the current workspace can start the signed mobile build.
+    Linking.openURL("https://replit.com/").catch(() => {});
+  }, []);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={s.overlay} onPress={onClose}>
@@ -181,7 +199,7 @@ export function DeployModal({
           {/* Header */}
           <View style={s.header}>
             <MaterialCommunityIcons name="rocket-launch-outline" size={22} color={colors.primary} />
-            <Text style={s.title}>Deploy</Text>
+            <Text style={s.title}>Build & Deploy</Text>
             <Pressable onPress={onClose} hitSlop={12}>
               <MaterialCommunityIcons name="close" size={20} color={colors.mutedForeground} />
             </Pressable>
@@ -219,6 +237,73 @@ export function DeployModal({
                 </View>
                 <Pressable onPress={() => setResult(null)} style={s.deployAgainRow}>
                   <Text style={[s.deployAgainText, { color: colors.mutedForeground }]}>Deploy again</Text>
+                </Pressable>
+              </View>
+            ) : showBuildTargets ? (
+              <View style={s.targetList}>
+                <Text style={[s.targetIntro, { color: colors.mutedForeground }]}>
+                  Choose where to take this project next.
+                </Text>
+
+                <Pressable
+                  testID="expo-launch-button"
+                  style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                  onPress={openExpoPublishing}
+                >
+                  <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
+                    <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color={colors.primary} />
+                  </View>
+                  <View style={s.targetCopy}>
+                    <Text style={[s.targetTitle, { color: colors.foreground }]}>Expo Launch</Text>
+                    <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
+                      Build and publish the Clownin mobile app from Replit’s Publishing tool.
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons name="open-in-new" size={17} color={colors.mutedForeground} />
+                </Pressable>
+
+                <Pressable
+                  testID="ubuntu-deploy-button"
+                  style={[
+                    s.targetCard,
+                    { backgroundColor: colors.card, borderColor: hasUbuntuServer ? colors.primary : colors.border },
+                  ]}
+                  onPress={() => {
+                    if (hasUbuntuServer && canDeployToUbuntu) {
+                      onClose();
+                      onDeployToUbuntu?.();
+                    } else {
+                      onOpenUbuntuSetup?.();
+                    }
+                  }}
+                >
+                  <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
+                    <MaterialCommunityIcons name="server-network" size={21} color={colors.primary} />
+                  </View>
+                  <View style={s.targetCopy}>
+                    <Text style={[s.targetTitle, { color: colors.foreground }]}>
+                      {hasUbuntuServer ? "Deploy on Ubuntu" : "Connect an Ubuntu server"}
+                    </Text>
+                    <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
+                      {hasUbuntuServer
+                        ? canDeployToUbuntu
+                          ? "Start this project on your configured Ubuntu server over SSH."
+                          : "Select a runnable server file before deploying remotely."
+                        : "Add an Ubuntu 20.04+ host to run this project remotely over SSH."}
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons name="chevron-right" size={19} color={colors.mutedForeground} />
+                </Pressable>
+
+                <Pressable
+                  testID="web-hosting-button"
+                  style={[s.webTargetButton, { borderColor: colors.border }]}
+                  onPress={() => setShowBuildTargets(false)}
+                >
+                  <MaterialCommunityIcons name="web" size={17} color={colors.mutedForeground} />
+                  <Text style={[s.webTargetText, { color: colors.mutedForeground }]}>
+                    Deploy to Netlify or Vercel
+                  </Text>
                 </Pressable>
               </View>
             ) : quickMode && !showSettings ? (
@@ -260,6 +345,10 @@ export function DeployModal({
                   )}
                 </Pressable>
 
+                <Pressable onPress={() => setShowBuildTargets(true)} style={s.backRow}>
+                  <MaterialCommunityIcons name="arrow-left" size={16} color={colors.primary} />
+                  <Text style={[s.backText, { color: colors.primary }]}>Back to deployment targets</Text>
+                </Pressable>
                 <Pressable onPress={() => setShowSettings(true)} style={s.changeSettings}>
                   <Text style={[s.changeSettingsText, { color: colors.mutedForeground }]}>
                     Change platform or token
@@ -273,6 +362,13 @@ export function DeployModal({
                   <Pressable onPress={() => setShowSettings(false)} style={s.backRow}>
                     <MaterialCommunityIcons name="arrow-left" size={16} color={colors.primary} />
                     <Text style={[s.backText, { color: colors.primary }]}>Back</Text>
+                  </Pressable>
+                )}
+
+                {!showSettings && (
+                  <Pressable onPress={() => setShowBuildTargets(true)} style={s.backRow}>
+                    <MaterialCommunityIcons name="arrow-left" size={16} color={colors.primary} />
+                    <Text style={[s.backText, { color: colors.primary }]}>Back to deployment targets</Text>
                   </Pressable>
                 )}
 
@@ -406,6 +502,23 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     changeSettingsText: { fontSize: 12, textDecorationLine: "underline" },
     backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
     backText: { fontSize: 14, fontWeight: "500" },
+    targetList: { gap: 12, paddingVertical: 8 },
+    targetIntro: { fontSize: 13, lineHeight: 19, marginBottom: 2 },
+    targetCard: {
+      flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1,
+      borderRadius: 14, padding: 14,
+    },
+    targetIcon: {
+      width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center",
+    },
+    targetCopy: { flex: 1, gap: 3 },
+    targetTitle: { fontSize: 15, fontWeight: "700" },
+    targetDescription: { fontSize: 12, lineHeight: 17 },
+    webTargetButton: {
+      flexDirection: "row", alignItems: "center", justifyContent: "center",
+      gap: 8, borderWidth: 1, borderRadius: 10, paddingVertical: 11, marginTop: 2,
+    },
+    webTargetText: { fontSize: 13, fontWeight: "600" },
 
     // Full form
     platformRow: { flexDirection: "row", gap: 10, marginBottom: 8 },
