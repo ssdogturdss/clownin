@@ -27,7 +27,9 @@ export interface WorkspaceState {
   isSaving: boolean;
   isRunning: boolean;
   isServing: boolean;
+  isServeStarting: boolean;
   serveUrl: string | null;
+  serveError: string | null;
   previewMode: PreviewMode;
   isLeftPanelOpen: boolean;
   isBottomPanelOpen: boolean;

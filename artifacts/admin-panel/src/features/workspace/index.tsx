@@ -93,7 +93,12 @@ export function WorkspaceContainer({
             {/* Preview Area */}
             {(state.previewMode === 'preview' || state.previewMode === 'split') && (
               <div className={`flex flex-col h-full ${state.previewMode === 'split' ? 'w-1/2' : 'w-full'}`}>
-                <PreviewPane serveUrl={state.serveUrl} />
+                <PreviewPane
+                  serveUrl={state.serveUrl}
+                  isStarting={state.isServeStarting}
+                  error={state.serveError}
+                  onRetry={actions.onServe}
+                />
               </div>
             )}
           </div>

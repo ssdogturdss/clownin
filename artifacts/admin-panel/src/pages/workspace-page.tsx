@@ -83,7 +83,9 @@ export default function WorkspacePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isServing, setIsServing] = useState(false);
+  const [isServeStarting, setIsServeStarting] = useState(false);
   const [serveUrl, setServeUrl] = useState<string | null>(null);
+  const [serveError, setServeError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState<PreviewMode>(() => window.innerWidth >= 1280 ? "split" : "code");
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
   const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(false);
@@ -290,7 +292,9 @@ export default function WorkspacePage() {
         if (event.type === "exit") {
           appendLine(setTerminalLines, "system", `[Server stopped (exit ${event.payload})]`);
           setIsServing(false);
+          setIsServeStarting(false);
           setServeUrl(null);
+          setServeError(null);
         } else if (event.type !== "token") appendLine(setTerminalLines, event.type, event.payload);
       });
     } catch (error) {
@@ -311,6 +315,8 @@ export default function WorkspacePage() {
           setServeUrl(await previewUrlFor(status.url));
           if (signal?.aborted) return false;
           setIsServing(true);
+          setIsServeStarting(false);
+          setServeError(null);
           setPreviewMode(window.innerWidth >= 1280 ? "split" : "preview");
           serveAbortRef.current?.abort();
           const controller = new AbortController();
@@ -330,6 +336,9 @@ export default function WorkspacePage() {
   const startServe = useCallback(async () => {
     if (!selectedFile) { toast.error("Choose an entry file to serve"); return; }
     if (!(await saveFile())) return;
+    setIsServeStarting(true);
+    setServeError(null);
+    setPreviewMode(window.innerWidth >= 1280 ? "split" : "preview");
     setIsBottomPanelOpen(true);
     appendLine(setTerminalLines, "system", `$ Starting ${selectedFile.path}`);
     try {
@@ -340,6 +349,8 @@ export default function WorkspacePage() {
       }));
       setServeUrl(await previewUrlFor(result.url));
       setIsServing(true);
+      setIsServeStarting(false);
+      setServeError(null);
       setPreviewMode(window.innerWidth >= 1280 ? "split" : "preview");
       serveAbortRef.current?.abort();
       const controller = new AbortController();
@@ -347,8 +358,10 @@ export default function WorkspacePage() {
       void listenForServeLogs(controller);
     } catch (error) {
       if (await restoreRunningPreview()) return;
-      appendLine(setTerminalLines, "stderr", error instanceof Error ? error.message : "Could not start the server");
-      toast.error(error instanceof Error ? error.message : "Could not start the server");
+      const message = error instanceof Error ? error.message : "Could not start the server. Try again.";
+      appendLine(setTerminalLines, "stderr", message);
+      setIsServeStarting(false);
+      setServeError(message);
     }
   }, [listenForServeLogs, previewUrlFor, projectId, restoreRunningPreview, saveFile, selectedFile]);
 
@@ -363,7 +376,9 @@ export default function WorkspacePage() {
       toast.error(error instanceof Error ? error.message : "Could not stop the server");
     } finally {
       setIsServing(false);
+      setIsServeStarting(false);
       setServeUrl(null);
+      setServeError(null);
     }
   }, [projectId]);
 
@@ -382,7 +397,7 @@ export default function WorkspacePage() {
   }, [restoreRunningPreview]);
 
   const state: WorkspaceState = {
-    selectedFileId, editorContent, isSaving, isRunning, isServing, serveUrl, previewMode,
+    selectedFileId, editorContent, isSaving, isRunning, isServing, isServeStarting, serveUrl, serveError, previewMode,
     isLeftPanelOpen, isBottomPanelOpen,
   };
   const actions: WorkspaceActions = {

@@ -17,12 +17,47 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 
 interface ServePreviewProps {
-  url: string;
+  url?: string | null;
+  isStarting?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   /** Increment to force a full reload of the embedded preview. */
   reloadKey?: number;
 }
 
-export function ServePreview({ url, reloadKey = 0 }: ServePreviewProps) {
+export function ServePreview({ url, isStarting = false, error = null, onRetry, reloadKey = 0 }: ServePreviewProps) {
+  const [loaded, setLoaded] = React.useState(false);
+  const [webViewError, setWebViewError] = React.useState<string | null>(null);
+  const displayError = error ?? webViewError;
+
+  if (isStarting) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color="#3fb950" />
+        <Text style={styles.loadingTitle}>Starting live preview</Text>
+        <Text style={styles.loadingText}>Your server is coming online. This can take a few seconds.</Text>
+      </View>
+    );
+  }
+
+  if (displayError) {
+    return (
+      <View style={styles.loading}>
+        <Ionicons name="alert-circle-outline" size={36} color="#f85149" />
+        <Text style={styles.loadingTitle}>Preview couldn’t start</Text>
+        <Text style={styles.loadingText}>{displayError}</Text>
+        {onRetry && (
+          <Pressable style={styles.openBtn} onPress={onRetry}>
+            <Ionicons name="refresh-outline" size={14} color="#fff" />
+            <Text style={styles.openBtnText}>Try again</Text>
+          </Pressable>
+        )}
+      </View>
+    );
+  }
+
+  if (!url) return null;
+
   if (Platform.OS === "web") {
     return (
       <View style={styles.fallback}>
@@ -43,27 +78,33 @@ export function ServePreview({ url, reloadKey = 0 }: ServePreviewProps) {
   const { WebView } = require("react-native-webview") as { WebView: React.ComponentType<Record<string, unknown>> };
 
   return (
-    <WebView
-      key={reloadKey}
-      source={{ uri: url }}
-      style={styles.webview}
-      startInLoadingState
-      renderLoading={() => (
+    <View style={styles.webviewContainer}>
+      {!loaded && (
         <View style={styles.loading}>
           <ActivityIndicator size="large" color="#3fb950" />
-          <Text style={styles.loadingText}>Loading preview…</Text>
+          <Text style={styles.loadingText}>Loading live preview…</Text>
         </View>
       )}
-      javaScriptEnabled
-      domStorageEnabled
-      allowsInlineMediaPlayback
-      mediaPlaybackRequiresUserAction={false}
-    />
+      <WebView
+        key={reloadKey}
+        source={{ uri: url }}
+        style={[styles.webview, !loaded && styles.hiddenWebview]}
+        onLoadStart={() => { setLoaded(false); setWebViewError(null); }}
+        onLoad={() => setLoaded(true)}
+        onError={() => setWebViewError("The preview connection was lost. Try starting it again.")}
+        javaScriptEnabled
+        domStorageEnabled
+        allowsInlineMediaPlayback
+        mediaPlaybackRequiresUserAction={false}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   webview: { flex: 1, backgroundColor: "#fff" },
+  webviewContainer: { flex: 1, backgroundColor: "#0a0f14" },
+  hiddenWebview: { opacity: 0 },
   loading: {
     position: "absolute",
     top: 0, left: 0, right: 0, bottom: 0,
@@ -72,6 +113,7 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "#0a0f14",
   },
+  loadingTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#e6edf3", textAlign: "center" },
   loadingText: { fontSize: 13, fontFamily: "Inter_400Regular", color: "#8b949e" },
   fallback: {
     flex: 1,

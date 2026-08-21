@@ -371,6 +371,7 @@ export default function ProjectEditorScreen() {
   const [isServing, setIsServing] = useState(false);
   const [serveUrl, setServeUrl] = useState<string | null>(null);
   const [isServeLaunching, setIsServeLaunching] = useState(false);
+  const [serveError, setServeError] = useState<string | null>(null);
   // Which pane is active inside the terminal panel when a server is running
   const [activePane, setActivePane] = useState<'terminal' | 'preview'>('terminal');
   // Key for the embedded serve preview — increment to force a reload
@@ -719,6 +720,8 @@ export default function ProjectEditorScreen() {
           if (status.running && status.url) {
             setServeUrl(await getAuthorizedServeUrl(status.url));
             setIsServing(true);
+            setIsServeLaunching(false);
+            setServeError(null);
             setActivePane('preview');
             openTerminal();
             return true;
@@ -863,6 +866,9 @@ export default function ProjectEditorScreen() {
   const handleServe = useCallback(async () => {
     if (!selectedFileId || !token || isServeLaunching || isServing) return;
     setIsServeLaunching(true);
+    setServeUrl(null);
+    setServeError(null);
+    setActivePane('preview');
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     openTerminal();
     addLine('system', '$ Starting server…');
@@ -882,10 +888,13 @@ export default function ProjectEditorScreen() {
       const authorizedUrl = await getAuthorizedServeUrl(data.url);
       setIsServing(true);
       setServeUrl(authorizedUrl);
+      setServeError(null);
       setActivePane('preview');
     } catch (err: unknown) {
       if (await recoverStartedServe()) return;
-      addLine('stderr', `[Serve error: ${err instanceof Error ? err.message : String(err)}]`);
+      const message = err instanceof Error ? err.message : 'Could not start the server. Try again.';
+      addLine('stderr', `[Serve error: ${message}]`);
+      setServeError(message);
     } finally {
       setIsServeLaunching(false);
     }
@@ -895,7 +904,9 @@ export default function ProjectEditorScreen() {
   const handleStopServe = useCallback(async () => {
     if (!token) return;
     setIsServing(false);
+    setIsServeLaunching(false);
     setServeUrl(null);
+    setServeError(null);
     setActivePane('terminal');
     addLine('system', '[Stopping server…]');
     try {
@@ -1376,9 +1387,12 @@ export default function ProjectEditorScreen() {
               )}
 
               {/* ── Embedded preview WebView ── */}
-              {activePane === 'preview' && isServing && serveUrl && (
+              {activePane === 'preview' && (isServeLaunching || Boolean(serveError) || (isServing && serveUrl)) && (
                 <ServePreview
                   url={serveUrl}
+                  isStarting={isServeLaunching}
+                  error={serveError}
+                  onRetry={handleServe}
                   reloadKey={previewReloadKey}
                 />
               )}
