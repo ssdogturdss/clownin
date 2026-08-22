@@ -123,6 +123,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [detail,      setDetail]      = useState<BuildDetail | null>(null);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState('');
+  /** Non-empty when a poll tick fails but we already have log lines to show. */
+  const [pollError,   setPollError]   = useState('');
   const [logCount,    setLogCount]    = useState(0);
   const [toastText,   setToastText]   = useState('');
 
@@ -136,13 +138,20 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const accLogsRef    = useRef<string[]>([]);
   // Absolute offset into the full server log stream (= total lines received so far).
   const logOffsetRef  = useRef(0);
+  // AbortController for the in-flight fetch — cancelled when the build changes.
+  const abortRef      = useRef<AbortController | null>(null);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
   const fetchLogs = useCallback(async (silent = false) => {
     if (!build) return;
+
+    // Cancel any previous in-flight request before starting a new one.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     if (!silent) setLoading(true);
-    setError('');
 
     try {
       const base = resolveApiBaseUrl();
@@ -152,6 +161,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       const url = `${base}/api/eas/builds/${build.id}/logs${offset > 0 ? `?offset=${offset}` : ''}`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${authToken}` },
+        signal: controller.signal,
       });
       const json = await res.json() as BuildDetail & { error?: string };
       if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
@@ -171,12 +181,26 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       setDetail({ ...json, logs: merged });
       setLogCount(merged.length);
 
+      // Connection restored — clear any inline retry banner.
+      setError('');
+      setPollError('');
+
       // Auto-scroll to bottom only when the user hasn't manually scrolled up.
       if (!userScrolled.current && isActive(json.status) && newLines.length > 0) {
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load logs');
+      // Ignore aborted requests — they are intentional cancellations.
+      if (err instanceof Error && err.name === 'AbortError') return;
+      const msg = err instanceof Error ? err.message : 'Failed to load logs';
+      // If we already have accumulated log lines, keep them visible and only
+      // show an inline banner.  Otherwise surface a full-screen error so the
+      // user knows the initial load failed.
+      if (silent && accLogsRef.current.length > 0) {
+        setPollError(msg);
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -186,12 +210,22 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
 
   useEffect(() => {
     if (!build) {
+      // Abort any in-flight request for the previous build.
+      abortRef.current?.abort();
       setDetail(null);
       setError('');
       setLoading(false);
       return;
     }
-    // Reset all accumulated state for the new build.
+    // Abort the previous build's in-flight request immediately so its response
+    // cannot overwrite the reset state below.
+    abortRef.current?.abort();
+    // Reset all accumulated state for the new build synchronously so that a
+    // fetch failure for the new build triggers the full-screen error rather
+    // than rendering stale logs from the previous build.
+    setDetail(null);
+    setError('');
+    setPollError('');
     userScrolled.current  = false;
     accLogsRef.current    = [];
     logOffsetRef.current  = 0;
@@ -228,6 +262,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       if (pollRef.current) clearInterval(pollRef.current);
       if (toastTimer.current) clearTimeout(toastTimer.current);
       toastOpacity.stopAnimation();
+      abortRef.current?.abort();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -399,7 +434,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
             <ActivityIndicator size="large" color={colors.primary} />
             <Text style={[s.loadingText, { color: colors.mutedForeground }]}>Loading logs…</Text>
           </View>
-        ) : error ? (
+        ) : error && !detail ? (
+          // Full-screen error only when the initial load failed and there are
+          // no accumulated log lines to show.
           <View style={s.center}>
             <MaterialCommunityIcons name="alert-circle-outline" size={32} color={colors.destructive} />
             <Text style={[s.errorText, { color: colors.mutedForeground }]}>{error}</Text>
@@ -421,6 +458,23 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
           </View>
         ) : (
           <>
+            {/* ── Inline retry banner (poll failure, logs already visible) ── */}
+            {!!pollError && (
+              <View style={[s.retryBanner, { backgroundColor: colors.destructive + '18', borderColor: colors.destructive + '44' }]}>
+                <MaterialCommunityIcons name="wifi-off" size={14} color={colors.destructive} />
+                <Text style={[s.retryBannerText, { color: colors.destructive }]} numberOfLines={1}>
+                  Lost connection — retrying…
+                </Text>
+                <Pressable
+                  onPress={() => setPollError('')}
+                  hitSlop={10}
+                  style={s.retryBannerDismiss}
+                >
+                  <MaterialCommunityIcons name="close" size={14} color={colors.destructive} />
+                </Pressable>
+              </View>
+            )}
+
             <ScrollView
               ref={scrollRef}
               style={[s.logScroll, { backgroundColor: colors.background }]}
@@ -558,6 +612,15 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10, marginTop: 4,
     },
     retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+    retryBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      marginHorizontal: 12, marginTop: 4, marginBottom: 2,
+      paddingHorizontal: 10, paddingVertical: 7,
+      borderRadius: 8, borderWidth: 1,
+    },
+    retryBannerText: { flex: 1, fontSize: 12, fontWeight: '600' },
+    retryBannerDismiss: { padding: 2 },
 
     pollingBar: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
