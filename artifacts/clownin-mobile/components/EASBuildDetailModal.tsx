@@ -18,6 +18,8 @@ import {
   Platform,
   Animated,
   Share,
+  ActionSheetIOS,
+  Alert,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -278,6 +280,41 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     toastTimer.current = setTimeout(() => setToastText(''), 1700);
   }, [toastOpacity]);
 
+  // ── Share a single log line via the native share sheet ─────────────────────
+
+  const shareLine = useCallback(async (line: string) => {
+    try {
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { message: line }
+          : { message: line, title: 'Build Log' },
+      );
+    } catch {
+      // User cancelled or share sheet dismissed — nothing to do.
+    }
+  }, []);
+
+  // ── Long-press context menu: Copy or Share ──────────────────────────────────
+
+  const showLineMenu = useCallback((line: string) => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options: ['Cancel', 'Copy', 'Share'], cancelButtonIndex: 0 },
+        (buttonIndex) => {
+          if (buttonIndex === 1) copyLine(line);
+          else if (buttonIndex === 2) shareLine(line);
+        },
+      );
+    } else {
+      const preview = line.trim().slice(0, 80) + (line.length > 80 ? '…' : '');
+      Alert.alert('', preview, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Copy',  onPress: () => copyLine(line) },
+        { text: 'Share', onPress: () => shareLine(line) },
+      ]);
+    }
+  }, [copyLine, shareLine]);
+
   // ── Nothing to show ────────────────────────────────────────────────────────
 
   if (!build) return null;
@@ -405,7 +442,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
                 <Pressable
                   key={i}
                   onPress={() => copyLine(line)}
-                  onLongPress={() => copyLine(line)}
+                  onLongPress={() => showLineMenu(line)}
                   delayLongPress={300}
                   android_ripple={{ color: colors.primary + '22', borderless: false }}
                 >
