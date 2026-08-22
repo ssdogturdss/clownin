@@ -16,7 +16,9 @@ import {
   Modal,
   Linking,
   Platform,
+  Animated,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
@@ -113,13 +115,16 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const insets  = useSafeAreaInsets();
   const s       = makeStyles(colors);
 
-  const [detail,   setDetail]   = useState<BuildDetail | null>(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
-  const [logCount, setLogCount] = useState(0);
+  const [detail,      setDetail]      = useState<BuildDetail | null>(null);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState('');
+  const [logCount,    setLogCount]    = useState(0);
+  const [toastText,   setToastText]   = useState('');
 
-  const scrollRef = useRef<ScrollView>(null);
-  const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scrollRef    = useRef<ScrollView>(null);
+  const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track whether we're auto-scrolling so manual scroll isn't hijacked
   const userScrolled = useRef(false);
 
@@ -182,8 +187,39 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const handleClose = () => {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
+    // Clean up toast so no delayed setState fires after close
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastOpacity.stopAnimation();
     onClose();
   };
+
+  // ── Unmount cleanup ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastOpacity.stopAnimation();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Copy a log line to clipboard with a brief toast ─────────────────────────
+
+  const copyLine = useCallback((line: string) => {
+    Clipboard.setStringAsync(line);
+    setToastText('Copied!');
+    // Cancel any in-flight animation and pending hide timer before restarting
+    toastOpacity.stopAnimation();
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastOpacity.setValue(0);
+    Animated.sequence([
+      Animated.timing(toastOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.delay(1200),
+      Animated.timing(toastOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
+    ]).start();
+    toastTimer.current = setTimeout(() => setToastText(''), 1700);
+  }, [toastOpacity]);
 
   // ── Nothing to show ────────────────────────────────────────────────────────
 
@@ -283,25 +319,42 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
             </Text>
           </View>
         ) : (
-          <ScrollView
-            ref={scrollRef}
-            style={[s.logScroll, { backgroundColor: colors.background }]}
-            contentContainerStyle={s.logContent}
-            onScrollBeginDrag={() => { userScrolled.current = true; }}
-            scrollEventThrottle={16}
-          >
-            {logs.map((line, i) => (
-              <Text
-                key={i}
-                style={[s.logLine, { color: lineColor(line, colors) }]}
-                selectable
-              >
-                {line}
-              </Text>
-            ))}
-            {/* Tail padding so the last line isn't flush at the bottom */}
-            <View style={{ height: insets.bottom + 24 }} />
-          </ScrollView>
+          <>
+            <ScrollView
+              ref={scrollRef}
+              style={[s.logScroll, { backgroundColor: colors.background }]}
+              contentContainerStyle={s.logContent}
+              onScrollBeginDrag={() => { userScrolled.current = true; }}
+              scrollEventThrottle={16}
+            >
+              {logs.map((line, i) => (
+                <Pressable
+                  key={i}
+                  onPress={() => copyLine(line)}
+                  onLongPress={() => copyLine(line)}
+                  delayLongPress={300}
+                  android_ripple={{ color: colors.primary + '22', borderless: false }}
+                >
+                  <Text
+                    style={[s.logLine, { color: lineColor(line, colors) }]}
+                    selectable
+                  >
+                    {line}
+                  </Text>
+                </Pressable>
+              ))}
+              {/* Tail padding so the last line isn't flush at the bottom */}
+              <View style={{ height: insets.bottom + 24 }} />
+            </ScrollView>
+
+            {/* ── Copy toast ──────────────────────────────────────────────── */}
+            <Animated.View
+              pointerEvents="none"
+              style={[s.toast, { opacity: toastOpacity, backgroundColor: colors.card, borderColor: colors.border }]}
+            >
+              <Text style={[s.toastText, { color: colors.foreground }]}>{toastText}</Text>
+            </Animated.View>
+          </>
         )}
 
         {/* ── Polling indicator ──────────────────────────────────────────── */}
@@ -398,5 +451,21 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       borderTopWidth: 1,
     },
     pollingText: { fontSize: 11 },
+
+    toast: {
+      position: 'absolute',
+      alignSelf: 'center',
+      bottom: 60,
+      paddingHorizontal: 18,
+      paddingVertical: 9,
+      borderRadius: 20,
+      borderWidth: 1,
+      shadowColor: '#000',
+      shadowOpacity: 0.18,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 6,
+    },
+    toastText: { fontSize: 13, fontWeight: '600' },
   });
 }
