@@ -303,7 +303,7 @@ export function DeployModal({
                   }]}
                   onPress={() => {
                     if (hasUbuntuServer && canDeployToUbuntu) { onClose(); onDeployToUbuntu?.(); }
-                    else { onOpenUbuntuSetup?.(); }
+                    else { onClose(); onOpenUbuntuSetup?.(); }
                   }}
                 >
                   <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
