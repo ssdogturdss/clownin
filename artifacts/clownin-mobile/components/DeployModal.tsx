@@ -239,6 +239,23 @@ export function DeployModal({
                 </Text>
 
                 <Pressable
+                  testID="expo-launch-button"
+                  style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                  onPress={() => Linking.openURL("https://expo.dev/builds")}
+                >
+                  <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
+                    <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color={colors.primary} />
+                  </View>
+                  <View style={s.targetCopy}>
+                    <Text style={[s.targetTitle, { color: colors.foreground }]}>Expo Dashboard</Text>
+                    <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
+                      View EAS builds, submit to App Store & Play Store, and manage releases on expo.dev.
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons name="open-in-new" size={17} color={colors.mutedForeground} />
+                </Pressable>
+
+                <Pressable
                   testID="ubuntu-deploy-button"
                   style={[
                     s.targetCard,
