@@ -19,7 +19,8 @@
       "buildNumber": "1",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Clownin needs access to your photo library so you can attach images to your AI chat and share them with the coding assistant.",
-        "NSPhotoLibraryAddUsageDescription": "Clownin needs permission to save images to your photo library."
+        "NSPhotoLibraryAddUsageDescription": "Clownin needs permission to save images to your photo library.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -46,6 +47,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0c0ffbbc-fe41-42cf-afde-1fe68b6d2068"
+      }
+    },
+    "owner": "ssimtherealss"
   }
 }
