@@ -18,6 +18,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/contexts/AuthContext';
 import { resolveApiBaseUrl } from '@/app/_layout';
+import { EASBuildDetailModal, type EASBuildSummary } from '@/components/EASBuildDetailModal';
 
 // ─── Status / platform maps ───────────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ interface EASBuild {
   createdAt: string;
   expirationDate?: string;
   app: { name: string; slug: string };
+  appId?: string;
   artifacts?: { buildUrl?: string };
 }
 
@@ -566,6 +568,7 @@ export default function EASBuildsScreen() {
   const [refreshing,   setRefreshing]   = useState(false);
   const [partialError, setPartialError] = useState('');
   const [showModal,    setShowModal]    = useState(false);
+  const [selectedBuild, setSelectedBuild] = useState<EASBuildSummary | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -641,12 +644,26 @@ export default function EASBuildsScreen() {
     const buildUrl     = item.artifacts?.buildUrl;
     const appLabel     = item.app?.name || item.app?.slug || '—';
 
+    const openDetail = () => setSelectedBuild({
+      id:        item.id,
+      status:    item.status,
+      platform:  item.platform,
+      createdAt: item.createdAt,
+      appId:     item.appId,
+      app:       item.app,
+      artifacts: item.artifacts,
+    });
+
     return (
-      <View style={[
-        s.buildCard,
-        { borderColor: isActive ? statusColor + '55' : colors.border },
-        isActive && { borderLeftColor: statusColor, borderLeftWidth: 3 },
-      ]}>
+      <Pressable
+        onPress={openDetail}
+        style={({ pressed }) => [
+          s.buildCard,
+          { borderColor: isActive ? statusColor + '55' : colors.border },
+          isActive && { borderLeftColor: statusColor, borderLeftWidth: 3 },
+          pressed && { opacity: 0.75 },
+        ]}
+      >
         <View style={[s.platformBadge, { backgroundColor: platColor + '18' }]}>
           <MaterialCommunityIcons name={platIcon} size={22} color={platColor} />
         </View>
@@ -679,9 +696,11 @@ export default function EASBuildsScreen() {
             <MaterialCommunityIcons name="download-outline" size={20} color={colors.success} />
           </Pressable>
         ) : (
-          <View style={{ width: 36 }} />
+          <View style={[s.logsHint, { borderColor: colors.border + '88' }]}>
+            <MaterialCommunityIcons name="text-box-outline" size={15} color={colors.mutedForeground} />
+          </View>
         )}
-      </View>
+      </Pressable>
     );
   }, [colors, s]);
 
@@ -856,6 +875,11 @@ export default function EASBuildsScreen() {
         onClose={() => setShowModal(false)}
         onBuildStarted={handleBuildStarted}
       />
+      <EASBuildDetailModal
+        build={selectedBuild}
+        authToken={authToken ?? ''}
+        onClose={() => setSelectedBuild(null)}
+      />
     </View>
   );
 }
@@ -910,6 +934,11 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     dlBtn: {
       width: 36, height: 36, borderRadius: 10,
       alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    },
+    logsHint: {
+      width: 36, height: 36, borderRadius: 10,
+      alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      borderWidth: 1,
     },
 
     // States

@@ -126,10 +126,12 @@ interface RawBuild {
   updatedAt?: string;
   expirationDate?: string;
   artifacts?: { buildUrl?: string; xcodeBuildLogsUrl?: string };
+  metrics?: { buildDuration?: number };
 }
 
 interface Build extends RawBuild {
   app: { name: string; slug: string };
+  appId: string;
 }
 
 function easErrorResponse(res: import("express").Response, err: unknown): void {
@@ -194,6 +196,7 @@ router.get("/eas/builds", requireAuth, requireAdmin, async (_req, res): Promise<
           return (data.app?.byId?.builds ?? []).map((b): Build => ({
             ...b,
             app: { name: app.name, slug: app.slug },
+            appId: app.id,
           }));
         } catch (err) {
           logger.warn({ err, appId: app.id }, "Failed to fetch builds for app");
@@ -210,6 +213,127 @@ router.get("/eas/builds", requireAuth, requireAdmin, async (_req, res): Promise<
     res.json({ builds, account: accounts[0]?.name ?? "", username });
   } catch (err) {
     logger.error({ err }, "EAS builds error");
+    easErrorResponse(res, err);
+  }
+});
+
+// ── GET /api/eas/builds/:buildId/logs ────────────────────────────────────────
+// Returns build metadata + log lines for a single build.
+// Uses the singular `build { byId }` root — consistent with the `app { byId }`
+// pattern used elsewhere in this file (probed 2026-08-22).
+
+// EAS Build schema (v22+) exposes `logFileUrls` — an array of presigned S3
+// URLs whose content is plain text.  The deprecated `logFiles` field has the
+// same shape but is omitted here.  `xcodeBuildLogsUrl` (inside artifacts) is
+// an iOS-specific fallback used when logFileUrls is empty.
+const BUILD_LOGS_QUERY = `
+  query ClowninBuildLogs($buildId: ID!) {
+    build {
+      byId(buildId: $buildId) {
+        id
+        status
+        platform
+        createdAt
+        updatedAt
+        expirationDate
+        metrics { buildDuration }
+        logFileUrls
+        artifacts {
+          buildUrl
+          xcodeBuildLogsUrl
+        }
+      }
+    }
+  }
+`;
+
+interface BuildDetail {
+  id: string;
+  status: string;
+  platform: string;
+  createdAt: string;
+  updatedAt?: string;
+  expirationDate?: string;
+  metrics?: { buildDuration?: number };
+  logFileUrls?: string[];
+  artifacts?: { buildUrl?: string; xcodeBuildLogsUrl?: string };
+}
+
+router.get("/eas/builds/:buildId/logs", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const { buildId } = req.params as { buildId: string };
+
+  try {
+    // 1. Try EAS GraphQL logs query (chunks returned by EAS directly)
+    let build: BuildDetail | null = null;
+    let logLines: string[] = [];
+    let logsError: string | null = null;
+
+    try {
+      const data = await easQuery<{
+        build: { byId: BuildDetail };
+      }>(BUILD_LOGS_QUERY, { buildId });
+      build = data?.build?.byId ?? null;
+    } catch (gqlErr) {
+      // Re-throw configuration errors so the outer handler returns 503
+      if (
+        gqlErr instanceof Error &&
+        gqlErr.message.includes("EAS_CLOWNIN_KEY is not configured")
+      ) {
+        throw gqlErr;
+      }
+      logsError = gqlErr instanceof Error ? gqlErr.message : "GraphQL error";
+      logger.warn({ err: gqlErr, buildId }, "EAS build logs GQL error");
+    }
+
+    if (!build) {
+      // GraphQL failed entirely — return a minimal error payload
+      res.status(502).json({ error: logsError ?? "Build not found", logs: [] });
+      return;
+    }
+
+    // 2. Fetch text from each logFileUrl in parallel (EAS v22+ schema)
+    const logUrls = build.logFileUrls ?? [];
+    if (logUrls.length > 0) {
+      const texts = await Promise.all(
+        logUrls.map(async (url) => {
+          try {
+            // logFileUrls are presigned S3 URLs — no extra auth header needed
+            const r = await fetch(url);
+            return r.ok ? await r.text() : "";
+          } catch {
+            return "";
+          }
+        }),
+      );
+      logLines = texts.join("\n").split("\n");
+    }
+
+    // 3. iOS fallback: if logFileUrls is empty, try xcodeBuildLogsUrl from artifacts
+    if (logLines.length === 0 && build.artifacts?.xcodeBuildLogsUrl) {
+      try {
+        const logsRes = await fetch(build.artifacts.xcodeBuildLogsUrl);
+        if (logsRes.ok) {
+          const text = await logsRes.text();
+          logLines = text.split("\n");
+        }
+      } catch (fetchErr) {
+        logger.warn({ err: fetchErr, buildId }, "EAS xcodeBuildLogsUrl fetch failed");
+      }
+    }
+
+    res.json({
+      id: build.id,
+      status: build.status,
+      platform: build.platform,
+      createdAt: build.createdAt,
+      updatedAt: build.updatedAt,
+      expirationDate: build.expirationDate,
+      durationSeconds: build.metrics?.buildDuration ?? null,
+      buildUrl: build.artifacts?.buildUrl ?? null,
+      logs: logLines,
+    });
+  } catch (err) {
+    logger.error({ err, buildId }, "EAS build logs error");
     easErrorResponse(res, err);
   }
 });

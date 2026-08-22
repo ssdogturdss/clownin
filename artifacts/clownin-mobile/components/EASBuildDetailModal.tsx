@@ -1,0 +1,402 @@
+/**
+ * EASBuildDetailModal
+ *
+ * Shows full build metadata + scrollable log output for a single EAS build.
+ * Polls EAS every 5 s while the build is active (IN_PROGRESS / IN_QUEUE / NEW).
+ */
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ScrollView,
+  ActivityIndicator,
+  Modal,
+  Linking,
+  Platform,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useColors } from '@/hooks/useColors';
+import { resolveApiBaseUrl } from '@/app/_layout';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface EASBuildSummary {
+  id: string;
+  status: string;
+  platform: string;
+  createdAt: string;
+  appId?: string;
+  app: { name: string; slug: string };
+  artifacts?: { buildUrl?: string };
+}
+
+interface BuildDetail {
+  id: string;
+  status: string;
+  platform: string;
+  createdAt: string;
+  updatedAt?: string;
+  durationSeconds: number | null;
+  buildUrl: string | null;
+  logs: string[];
+}
+
+// ─── Maps (keep in sync with eas-builds.tsx) ─────────────────────────────────
+
+const STATUS_COLOR: Record<string, string> = {
+  FINISHED:    '#3fb950',
+  IN_PROGRESS: '#58a6ff',
+  ERRORED:     '#f85149',
+  CANCELED:    '#6e7681',
+  IN_QUEUE:    '#d29922',
+  NEW:         '#d29922',
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  FINISHED:    'Done',
+  IN_PROGRESS: 'Building…',
+  ERRORED:     'Failed',
+  CANCELED:    'Canceled',
+  IN_QUEUE:    'Queued',
+  NEW:         'Queued',
+};
+
+const PLATFORM_ICON: Record<string, keyof typeof MaterialCommunityIcons.glyphMap> = {
+  IOS:     'apple',
+  ANDROID: 'android',
+};
+
+const PLATFORM_LABEL: Record<string, string> = {
+  IOS:     'iOS',
+  ANDROID: 'Android',
+};
+
+const PLATFORM_COLOR: Record<string, string> = {
+  IOS:     '#a8b2bf',
+  ANDROID: '#3ddc84',
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function isActive(status: string): boolean {
+  return status === 'IN_PROGRESS' || status === 'IN_QUEUE' || status === 'NEW';
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+interface Props {
+  build: EASBuildSummary | null;
+  authToken: string;
+  onClose: () => void;
+}
+
+export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
+  const colors  = useColors();
+  const insets  = useSafeAreaInsets();
+  const s       = makeStyles(colors);
+
+  const [detail,   setDetail]   = useState<BuildDetail | null>(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
+  const [logCount, setLogCount] = useState(0);
+
+  const scrollRef = useRef<ScrollView>(null);
+  const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track whether we're auto-scrolling so manual scroll isn't hijacked
+  const userScrolled = useRef(false);
+
+  // ── Fetch logs ──────────────────────────────────────────────────────────────
+
+  const fetchLogs = useCallback(async (silent = false) => {
+    if (!build) return;
+    if (!silent) setLoading(true);
+    setError('');
+
+    try {
+      const base = resolveApiBaseUrl();
+      const res = await fetch(`${base}/api/eas/builds/${build.id}/logs`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const json = await res.json() as BuildDetail & { error?: string };
+      if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
+
+      setDetail(json);
+      setLogCount(json.logs?.length ?? 0);
+
+      // Auto-scroll to bottom for active builds (unless user has scrolled up)
+      if (!userScrolled.current && isActive(json.status)) {
+        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load logs');
+    } finally {
+      setLoading(false);
+    }
+  }, [build, authToken]);
+
+  // ── Mount / build change ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!build) {
+      setDetail(null);
+      setError('');
+      setLoading(false);
+      return;
+    }
+    userScrolled.current = false;
+    fetchLogs(false);
+  }, [build, fetchLogs]);
+
+  // ── Polling for active builds ───────────────────────────────────────────────
+
+  useEffect(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (!build) return;
+    const status = detail?.status ?? build.status;
+    if (isActive(status)) {
+      pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [build, detail?.status, fetchLogs]);
+
+  // ── Stop polling / reset on close ──────────────────────────────────────────
+
+  const handleClose = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
+    onClose();
+  };
+
+  // ── Nothing to show ────────────────────────────────────────────────────────
+
+  if (!build) return null;
+
+  const liveStatus   = detail?.status ?? build.status;
+  const statusColor  = STATUS_COLOR[liveStatus]    ?? '#6e7681';
+  const statusLabel  = STATUS_LABEL[liveStatus]    ?? liveStatus;
+  const platIcon     = PLATFORM_ICON[build.platform] ?? 'help-circle-outline';
+  const platLabel    = PLATFORM_LABEL[build.platform] ?? build.platform;
+  const platColor    = PLATFORM_COLOR[build.platform] ?? colors.mutedForeground;
+  const active       = isActive(liveStatus);
+  const downloadUrl  = detail?.buildUrl ?? build.artifacts?.buildUrl;
+  const logs         = detail?.logs ?? [];
+
+  return (
+    <Modal
+      visible={!!build}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={handleClose}
+    >
+      <View style={[s.root, { paddingTop: Platform.OS === 'ios' ? insets.top + 8 : 16 }]}>
+
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <View style={s.header}>
+          <Pressable onPress={handleClose} hitSlop={12} style={s.closeBtn}>
+            <MaterialCommunityIcons name="close" size={20} color={colors.foreground} />
+          </Pressable>
+          <Text style={[s.title, { color: colors.foreground }]} numberOfLines={1}>
+            Build Logs
+          </Text>
+          {downloadUrl ? (
+            <Pressable
+              style={[s.dlBtn, { backgroundColor: colors.success + '1a' }]}
+              onPress={() => Linking.openURL(downloadUrl)}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons name="download-outline" size={20} color={colors.success} />
+            </Pressable>
+          ) : (
+            <View style={{ width: 36 }} />
+          )}
+        </View>
+
+        {/* ── Metadata strip ─────────────────────────────────────────────── */}
+        <View style={[s.meta, { borderColor: colors.border, backgroundColor: colors.card }]}>
+          <View style={[s.platBadge, { backgroundColor: platColor + '18' }]}>
+            <MaterialCommunityIcons name={platIcon} size={20} color={platColor} />
+          </View>
+
+          <View style={s.metaInfo}>
+            <Text style={[s.metaAppName, { color: colors.foreground }]} numberOfLines={1}>
+              {build.app.name || build.app.slug}
+            </Text>
+            <Text style={[s.metaLine, { color: colors.mutedForeground }]}>
+              {platLabel} · Started {formatDate(build.createdAt)}
+              {detail?.durationSeconds != null
+                ? `  ·  ${formatDuration(detail.durationSeconds)}`
+                : ''}
+            </Text>
+          </View>
+
+          <View style={[s.statusPill, { backgroundColor: statusColor + '1a' }]}>
+            {active
+              ? <ActivityIndicator size={9} color={statusColor} style={{ marginRight: 4 }} />
+              : <View style={[s.statusDot, { backgroundColor: statusColor }]} />
+            }
+            <Text style={[s.statusText, { color: statusColor }]}>{statusLabel}</Text>
+          </View>
+        </View>
+
+        {/* ── Log area ───────────────────────────────────────────────────── */}
+        {loading && !detail ? (
+          <View style={s.center}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={[s.loadingText, { color: colors.mutedForeground }]}>Loading logs…</Text>
+          </View>
+        ) : error ? (
+          <View style={s.center}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={32} color={colors.destructive} />
+            <Text style={[s.errorText, { color: colors.mutedForeground }]}>{error}</Text>
+            <Pressable style={[s.retryBtn, { backgroundColor: colors.primary }]} onPress={() => fetchLogs(false)}>
+              <MaterialCommunityIcons name="refresh" size={14} color="#fff" />
+              <Text style={s.retryBtnText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : logs.length === 0 ? (
+          <View style={s.center}>
+            <MaterialCommunityIcons
+              name={active ? 'timer-sand' : 'text-box-remove-outline'}
+              size={32}
+              color={colors.mutedForeground}
+            />
+            <Text style={[s.emptyText, { color: colors.mutedForeground }]}>
+              {active ? 'Waiting for log output…' : 'No logs available for this build.'}
+            </Text>
+          </View>
+        ) : (
+          <ScrollView
+            ref={scrollRef}
+            style={[s.logScroll, { backgroundColor: colors.background }]}
+            contentContainerStyle={s.logContent}
+            onScrollBeginDrag={() => { userScrolled.current = true; }}
+            scrollEventThrottle={16}
+          >
+            {logs.map((line, i) => (
+              <Text
+                key={i}
+                style={[s.logLine, { color: lineColor(line, colors) }]}
+                selectable
+              >
+                {line}
+              </Text>
+            ))}
+            {/* Tail padding so the last line isn't flush at the bottom */}
+            <View style={{ height: insets.bottom + 24 }} />
+          </ScrollView>
+        )}
+
+        {/* ── Polling indicator ──────────────────────────────────────────── */}
+        {active && !!detail && (
+          <View style={[s.pollingBar, { borderTopColor: colors.border }]}>
+            <ActivityIndicator size={11} color={colors.primary} />
+            <Text style={[s.pollingText, { color: colors.mutedForeground }]}>
+              Live · {logCount} {logCount === 1 ? 'line' : 'lines'}
+            </Text>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Log line colouring ───────────────────────────────────────────────────────
+
+function lineColor(line: string, colors: ReturnType<typeof useColors>): string {
+  const l = line.toLowerCase();
+  if (/\b(error|failed|failure|fatal)\b/.test(l))  return colors.destructive;
+  if (/\b(warn|warning|deprecated)\b/.test(l))       return '#d29922';
+  if (/\b(success|succeeded|✓|✔)\b/.test(l))        return colors.success;
+  return colors.foreground;
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+function makeStyles(colors: ReturnType<typeof useColors>) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.background },
+
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    closeBtn: {
+      width: 36, height: 36, borderRadius: 10,
+      alignItems: 'center', justifyContent: 'center',
+      backgroundColor: colors.secondary,
+    },
+    title: {
+      flex: 1, textAlign: 'center',
+      fontSize: 15, fontWeight: '700', letterSpacing: 0.1,
+    },
+    dlBtn: {
+      width: 36, height: 36, borderRadius: 10,
+      alignItems: 'center', justifyContent: 'center',
+    },
+
+    meta: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      marginHorizontal: 12, marginTop: 10, marginBottom: 6,
+      borderRadius: 12, borderWidth: 1, padding: 12,
+    },
+    platBadge: {
+      width: 38, height: 38, borderRadius: 10,
+      alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    },
+    metaInfo: { flex: 1 },
+    metaAppName: { fontSize: 14, fontWeight: '700' },
+    metaLine:    { fontSize: 11, marginTop: 2, lineHeight: 16 },
+    statusPill: {
+      flexDirection: 'row', alignItems: 'center', gap: 5,
+      paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20, flexShrink: 0,
+    },
+    statusDot:  { width: 6, height: 6, borderRadius: 3 },
+    statusText: { fontSize: 11, fontWeight: '700' },
+
+    logScroll:   { flex: 1 },
+    logContent:  { paddingHorizontal: 12, paddingTop: 8 },
+    logLine: {
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 11, lineHeight: 17,
+    },
+
+    center:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 32 },
+    loadingText: { fontSize: 13, marginTop: 6 },
+    errorText:   { fontSize: 13, textAlign: 'center', lineHeight: 20 },
+    emptyText:   { fontSize: 13, textAlign: 'center', lineHeight: 20 },
+    retryBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10, marginTop: 4,
+    },
+    retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+    pollingBar: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: 16, paddingVertical: 8,
+      borderTopWidth: 1,
+    },
+    pollingText: { fontSize: 11 },
+  });
+}
