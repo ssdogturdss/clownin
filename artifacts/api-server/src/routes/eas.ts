@@ -261,6 +261,11 @@ interface BuildDetail {
 
 router.get("/eas/builds/:buildId/logs", requireAuth, requireAdmin, async (req, res): Promise<void> => {
   const { buildId } = req.params as { buildId: string };
+  // ?offset=N — when provided, only lines from that index onwards are returned.
+  // The response always includes `logOffset` (total line count after this fetch)
+  // so the client can pass it on the next poll to receive only new lines.
+  const rawOffset = parseInt(String(req.query["offset"] ?? "0"), 10);
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
   try {
     // 1. Try EAS GraphQL logs query (chunks returned by EAS directly)
@@ -321,6 +326,12 @@ router.get("/eas/builds/:buildId/logs", requireAuth, requireAdmin, async (req, r
       }
     }
 
+    // 4. Apply offset — return only the new lines since the client's last fetch.
+    //    `logOffset` tells the client the new absolute position to use next time.
+    const newLines = offset > 0 && offset < logLines.length
+      ? logLines.slice(offset)
+      : (offset === 0 ? logLines : []); // offset >= total → nothing new
+
     res.json({
       id: build.id,
       status: build.status,
@@ -330,7 +341,8 @@ router.get("/eas/builds/:buildId/logs", requireAuth, requireAdmin, async (req, r
       expirationDate: build.expirationDate,
       durationSeconds: build.metrics?.buildDuration ?? null,
       buildUrl: build.artifacts?.buildUrl ?? null,
-      logs: logLines,
+      logs: newLines,
+      logOffset: logLines.length,
     });
   } catch (err) {
     logger.error({ err, buildId }, "EAS build logs error");

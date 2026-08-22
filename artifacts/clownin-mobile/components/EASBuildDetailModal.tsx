@@ -45,6 +45,8 @@ interface BuildDetail {
   durationSeconds: number | null;
   buildUrl: string | null;
   logs: string[];
+  /** Total log lines received so far — used as the offset for the next poll. */
+  logOffset: number;
 }
 
 // ─── Maps (keep in sync with eas-builds.tsx) ─────────────────────────────────
@@ -125,8 +127,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Track whether we're auto-scrolling so manual scroll isn't hijacked
-  const userScrolled = useRef(false);
+  // True when the user has manually scrolled up; suppresses auto-scroll to bottom.
+  const userScrolled  = useRef(false);
+  // Accumulated log lines across poll ticks — avoids replacing the whole array.
+  const accLogsRef    = useRef<string[]>([]);
+  // Absolute offset into the full server log stream (= total lines received so far).
+  const logOffsetRef  = useRef(0);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -137,17 +143,33 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
 
     try {
       const base = resolveApiBaseUrl();
-      const res = await fetch(`${base}/api/eas/builds/${build.id}/logs`, {
+      // On poll ticks (silent=true) ask the server for only new lines since
+      // our last fetch; on the first load (silent=false) always start from 0.
+      const offset = silent ? logOffsetRef.current : 0;
+      const url = `${base}/api/eas/builds/${build.id}/logs${offset > 0 ? `?offset=${offset}` : ''}`;
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const json = await res.json() as BuildDetail & { error?: string };
       if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
 
-      setDetail(json);
-      setLogCount(json.logs?.length ?? 0);
+      // Build the accumulated log array:
+      //   - First load (offset === 0): replace entirely.
+      //   - Poll tick: append only the new delta lines.
+      const newLines = json.logs ?? [];
+      const merged = offset === 0
+        ? newLines
+        : [...accLogsRef.current, ...newLines];
 
-      // Auto-scroll to bottom for active builds (unless user has scrolled up)
-      if (!userScrolled.current && isActive(json.status)) {
+      accLogsRef.current  = merged;
+      logOffsetRef.current = json.logOffset ?? merged.length;
+
+      // Merge new metadata into detail but swap in the accumulated log array.
+      setDetail({ ...json, logs: merged });
+      setLogCount(merged.length);
+
+      // Auto-scroll to bottom only when the user hasn't manually scrolled up.
+      if (!userScrolled.current && isActive(json.status) && newLines.length > 0) {
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
       }
     } catch (err) {
@@ -166,7 +188,10 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       setLoading(false);
       return;
     }
-    userScrolled.current = false;
+    // Reset all accumulated state for the new build.
+    userScrolled.current  = false;
+    accLogsRef.current    = [];
+    logOffsetRef.current  = 0;
     fetchLogs(false);
   }, [build, fetchLogs]);
 
@@ -324,8 +349,18 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
               ref={scrollRef}
               style={[s.logScroll, { backgroundColor: colors.background }]}
               contentContainerStyle={s.logContent}
+              // Mark the user as having scrolled up the moment they drag.
               onScrollBeginDrag={() => { userScrolled.current = true; }}
-              scrollEventThrottle={16}
+              // When the scroll position settles near the bottom (within 40 px),
+              // re-enable auto-scroll so the next poll resumes tailing.
+              onScroll={({ nativeEvent: e }) => {
+                const distanceFromBottom =
+                  e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y;
+                if (distanceFromBottom < 40) {
+                  userScrolled.current = false;
+                }
+              }}
+              scrollEventThrottle={100}
             >
               {logs.map((line, i) => (
                 <Pressable
