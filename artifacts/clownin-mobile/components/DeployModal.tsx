@@ -10,6 +10,7 @@ import {
   Linking,
   Share,
   StyleSheet,
+  InteractionManager,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -270,7 +271,7 @@ export function DeployModal({
                 <Pressable
                   testID="expo-launch-button"
                   style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  onPress={() => { onClose(); onOpenEasBuilds?.(); }}
+                  onPress={() => { onClose(); InteractionManager.runAfterInteractions(() => onOpenEasBuilds?.()); }}
                 >
                   <View style={[s.targetIcon, { backgroundColor: "#58a6ff22" }]}>
                     <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color="#58a6ff" />
@@ -302,8 +303,11 @@ export function DeployModal({
                     borderColor: hasUbuntuServer && canDeployToUbuntu ? colors.primary + "88" : colors.border,
                   }]}
                   onPress={() => {
-                    if (hasUbuntuServer && canDeployToUbuntu) { onClose(); onDeployToUbuntu?.(); }
-                    else { onClose(); onOpenUbuntuSetup?.(); }
+                    onClose();
+                    InteractionManager.runAfterInteractions(() => {
+                      if (hasUbuntuServer && canDeployToUbuntu) onDeployToUbuntu?.();
+                      else onOpenUbuntuSetup?.();
+                    });
                   }}
                 >
                   <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
