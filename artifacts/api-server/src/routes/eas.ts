@@ -394,7 +394,7 @@ router.get("/eas/apps", requireAuth, requireAdmin, async (req, res): Promise<voi
 
 const CREATE_IOS_BUILD = `
   mutation ClowninCreateIosBuild($appId: String!, $job: IosJobInput!) {
-    buildMutation {
+    build {
       createIosBuild(appId: $appId, job: $job) {
         build {
           id
@@ -411,7 +411,7 @@ const CREATE_IOS_BUILD = `
 
 const CREATE_ANDROID_BUILD = `
   mutation ClowninCreateAndroidBuild($appId: String!, $job: AndroidJobInput!) {
-    buildMutation {
+    build {
       createAndroidBuild(appId: $appId, job: $job) {
         build {
           id
@@ -524,14 +524,14 @@ router.post("/eas/builds/trigger", requireAuth, requireAdmin, async (req, res): 
     let build: unknown;
     if (platform === "IOS") {
       const data = await easQuery<{
-        buildMutation: { createIosBuild: { build: unknown } };
+        build: { createIosBuild: { build: unknown } };
       }>(CREATE_IOS_BUILD, { appId, job });
-      build = data?.buildMutation?.createIosBuild?.build;
+      build = data?.build?.createIosBuild?.build;
     } else {
       const data = await easQuery<{
-        buildMutation: { createAndroidBuild: { build: unknown } };
+        build: { createAndroidBuild: { build: unknown } };
       }>(CREATE_ANDROID_BUILD, { appId, job });
-      build = data?.buildMutation?.createAndroidBuild?.build;
+      build = data?.build?.createAndroidBuild?.build;
     }
 
     if (!build) throw new Error("No build returned from EAS API");
