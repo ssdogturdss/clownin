@@ -32,6 +32,8 @@ interface DeployModalProps {
   onOpenUbuntuSetup?: () => void;
   /** Called when a deploy succeeds so the caller can persist and show the URL. */
   onDeploySuccess?: (url: string, platform: string) => void;
+  /** Opens the in-app EAS Build status screen. */
+  onOpenEasBuilds?: () => void;
 }
 
 type Platform = "netlify" | "vercel";
@@ -82,6 +84,7 @@ export { deployedUrlKey };
 export function DeployModal({
   visible, onClose, projectId, projectName, hasUbuntuServer = false,
   canDeployToUbuntu = false, onDeployToUbuntu, onOpenUbuntuSetup, onDeploySuccess,
+  onOpenEasBuilds,
 }: DeployModalProps) {
   const colors = useColors();
   const { token } = useAuth();
@@ -241,18 +244,18 @@ export function DeployModal({
                 <Pressable
                   testID="expo-launch-button"
                   style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  onPress={() => Linking.openURL("https://expo.dev/builds")}
+                  onPress={() => { onClose(); onOpenEasBuilds?.(); }}
                 >
                   <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
                     <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color={colors.primary} />
                   </View>
                   <View style={s.targetCopy}>
-                    <Text style={[s.targetTitle, { color: colors.foreground }]}>Expo Dashboard</Text>
+                    <Text style={[s.targetTitle, { color: colors.foreground }]}>EAS Builds</Text>
                     <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
-                      View EAS builds, submit to App Store & Play Store, and manage releases on expo.dev.
+                      View build queue, download artifacts, and track App Store submissions.
                     </Text>
                   </View>
-                  <MaterialCommunityIcons name="open-in-new" size={17} color={colors.mutedForeground} />
+                  <MaterialCommunityIcons name="chevron-right" size={19} color={colors.mutedForeground} />
                 </Pressable>
 
                 <Pressable

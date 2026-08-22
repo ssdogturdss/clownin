@@ -1506,6 +1506,7 @@ export default function ProjectEditorScreen() {
           router.push('/(app)/servers');
         }}
         onDeploySuccess={(url) => setDeployedUrl(url)}
+        onOpenEasBuilds={() => router.push('/(app)/eas-builds')}
       />
 
       <GitHubExportModal
