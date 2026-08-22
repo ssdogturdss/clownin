@@ -17,6 +17,7 @@ import {
   Linking,
   Platform,
   Animated,
+  Share,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -229,6 +230,37 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Share build (link + optional log tail for failures) ────────────────────
+
+  const handleShare = useCallback(async () => {
+    if (!build) return;
+    const easUrl = `https://expo.dev/builds/${build.id}`;
+    const liveStatus  = detail?.status ?? build.status;
+    const statusLbl   = STATUS_LABEL[liveStatus]    ?? liveStatus;
+    const platLbl     = PLATFORM_LABEL[build.platform] ?? build.platform;
+    const appName     = build.app.name || build.app.slug;
+    const currentLogs = accLogsRef.current;
+
+    // For failed builds, append the last 30 error lines so the recipient
+    // can see the problem without opening the link on another device.
+    const isFailure = liveStatus === 'ERRORED';
+    const logTail   = isFailure && currentLogs.length > 0
+      ? '\n\nLog tail:\n' + currentLogs.slice(-30).join('\n')
+      : '';
+
+    const message = `EAS Build ${statusLbl} — ${appName} (${platLbl})\n${easUrl}${logTail}`;
+
+    try {
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { url: easUrl, message }
+          : { message, title: `EAS Build — ${appName}` },
+      );
+    } catch {
+      // User cancelled or share sheet dismissed — nothing to do.
+    }
+  }, [build, detail]);
+
   // ── Copy a log line to clipboard with a brief toast ─────────────────────────
 
   const copyLine = useCallback((line: string) => {
@@ -277,17 +309,24 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
           <Text style={[s.title, { color: colors.foreground }]} numberOfLines={1}>
             Build Logs
           </Text>
-          {downloadUrl ? (
+          <View style={s.headerActions}>
+            {downloadUrl && (
+              <Pressable
+                style={[s.headerBtn, { backgroundColor: colors.success + '1a' }]}
+                onPress={() => Linking.openURL(downloadUrl)}
+                hitSlop={8}
+              >
+                <MaterialCommunityIcons name="download-outline" size={20} color={colors.success} />
+              </Pressable>
+            )}
             <Pressable
-              style={[s.dlBtn, { backgroundColor: colors.success + '1a' }]}
-              onPress={() => Linking.openURL(downloadUrl)}
+              style={[s.headerBtn, { backgroundColor: colors.secondary }]}
+              onPress={handleShare}
               hitSlop={8}
             >
-              <MaterialCommunityIcons name="download-outline" size={20} color={colors.success} />
+              <MaterialCommunityIcons name="share-variant-outline" size={20} color={colors.foreground} />
             </Pressable>
-          ) : (
-            <View style={{ width: 36 }} />
-          )}
+          </View>
         </View>
 
         {/* ── Metadata strip ─────────────────────────────────────────────── */}
@@ -439,7 +478,10 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       flex: 1, textAlign: 'center',
       fontSize: 15, fontWeight: '700', letterSpacing: 0.1,
     },
-    dlBtn: {
+    headerActions: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+    },
+    headerBtn: {
       width: 36, height: 36, borderRadius: 10,
       alignItems: 'center', justifyContent: 'center',
     },
