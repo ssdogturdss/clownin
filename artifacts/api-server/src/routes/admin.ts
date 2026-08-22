@@ -65,7 +65,7 @@ async function resolveAdminUserIds(): Promise<Set<number>> {
   return ids;
 }
 
-function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const raw = process.env.ADMIN_USER_IDS ?? "";
   if (!raw.trim()) {
     res.status(503).json({ error: "Admin access is not configured. Set ADMIN_USER_IDS." });

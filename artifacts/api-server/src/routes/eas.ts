@@ -2,6 +2,10 @@
  * EAS Build proxy — uses the server-side EAS_CLOWNIN_KEY to forward
  * requests to Expo's GraphQL API on behalf of authenticated Clownin users.
  *
+ * All routes require admin authorization (requireAdmin) in addition to
+ * authentication (requireAuth). This prevents ordinary users from
+ * enumerating or triggering builds on the shared EAS account.
+ *
  * Real EAS GraphQL schema (probed 2026-08-22):
  *   - viewer { id username accounts { id name } }
  *   - account { byName(accountName: String!) { apps(limit: Int!, offset: Int!) { id name slug } } }
@@ -9,12 +13,15 @@
  *       createdAt updatedAt expirationDate artifacts { buildUrl xcodeBuildLogsUrl } } } }
  *
  * Routes:
- *   GET /eas/viewer  → account info for the configured key
- *   GET /eas/builds  → recent builds across all apps on all accounts
+ *   GET  /eas/viewer          → account name + username for the configured key
+ *   GET  /eas/builds          → recent builds across all apps on the account
+ *   GET  /eas/apps            → apps on the account (with GitHub repo info)
+ *   POST /eas/builds/trigger  → trigger an iOS or Android build for an app
  */
 
 import { Router, type IRouter } from "express";
 import { requireAuth } from "../lib/auth";
+import { requireAdmin } from "./admin";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -125,9 +132,18 @@ interface Build extends RawBuild {
   app: { name: string; slug: string };
 }
 
+function easErrorResponse(res: import("express").Response, err: unknown): void {
+  const msg = err instanceof Error ? err.message : "Unknown EAS error";
+  if (msg.includes("EAS_CLOWNIN_KEY is not configured")) {
+    res.status(503).json({ error: "EAS is not configured on this server" });
+  } else {
+    res.status(502).json({ error: msg });
+  }
+}
+
 // ── GET /api/eas/viewer ───────────────────────────────────────────────────────
 
-router.get("/eas/viewer", requireAuth, async (_req, res) => {
+router.get("/eas/viewer", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   try {
     const viewer = await getViewer(true);
     res.json({
@@ -137,9 +153,8 @@ router.get("/eas/viewer", requireAuth, async (_req, res) => {
       apps: viewer.apps,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Failed to fetch Expo account";
     logger.error({ err }, "EAS viewer error");
-    res.status(msg.includes("not configured") ? 503 : 502).json({ error: msg });
+    easErrorResponse(res, err);
   }
 });
 
@@ -158,7 +173,7 @@ const BUILDS_PER_APP = `
   }
 `;
 
-router.get("/eas/builds", requireAuth, async (_req, res) => {
+router.get("/eas/builds", requireAuth, requireAdmin, async (_req, res): Promise<void> => {
   try {
     const viewer = await getViewer();
     const { apps, username, accounts } = viewer;
@@ -194,9 +209,218 @@ router.get("/eas/builds", requireAuth, async (_req, res) => {
 
     res.json({ builds, account: accounts[0]?.name ?? "", username });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Failed to fetch builds";
     logger.error({ err }, "EAS builds error");
-    res.status(msg.includes("not configured") ? 503 : 502).json({ error: msg });
+    easErrorResponse(res, err);
+  }
+});
+
+// ── GET /api/eas/apps ─────────────────────────────────────────────────────────
+// Returns apps on the account with GitHub repo info so the client can show
+// which projects are ready for remote builds.
+
+const APPS_WITH_GITHUB_QUERY = `
+  query ClowninAppsWithGitHub($accountName: String!, $limit: Int!) {
+    account {
+      byName(accountName: $accountName) {
+        apps(limit: $limit, offset: 0) {
+          id
+          name
+          slug
+          githubRepository {
+            githubRepositoryUrl
+            metadata {
+              githubRepoOwnerName
+              githubRepoName
+              defaultBranch
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+router.get("/eas/apps", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  try {
+    const limit = Math.min(Number(req.query["limit"]) || 50, 100);
+    const viewer = await getViewer();
+    const accountName = viewer.accounts[0]?.name ?? "";
+
+    if (!accountName) {
+      res.json({ apps: [], account: "" });
+      return;
+    }
+
+    const data = await easQuery<{
+      account: { byName: { apps: unknown[] } };
+    }>(APPS_WITH_GITHUB_QUERY, { accountName, limit });
+
+    const apps = data.account?.byName?.apps ?? [];
+    res.json({ apps, account: accountName });
+  } catch (err) {
+    logger.error({ err }, "EAS apps error");
+    easErrorResponse(res, err);
+  }
+});
+
+// ── POST /api/eas/builds/trigger ──────────────────────────────────────────────
+// Triggers an iOS or Android build for the given app. The project archive is
+// sourced from the app's linked GitHub repository (type: URL using codeload CDN).
+// Body: { appId: string, platform: "IOS" | "ANDROID", buildProfile: string }
+
+const CREATE_IOS_BUILD = `
+  mutation ClowninCreateIosBuild($appId: String!, $job: IosJobInput!) {
+    buildMutation {
+      createIosBuild(appId: $appId, job: $job) {
+        build {
+          id
+          status
+          platform
+          createdAt
+          app { name slug }
+          artifacts { buildUrl }
+        }
+      }
+    }
+  }
+`;
+
+const CREATE_ANDROID_BUILD = `
+  mutation ClowninCreateAndroidBuild($appId: String!, $job: AndroidJobInput!) {
+    buildMutation {
+      createAndroidBuild(appId: $appId, job: $job) {
+        build {
+          id
+          status
+          platform
+          createdAt
+          app { name slug }
+          artifacts { buildUrl }
+        }
+      }
+    }
+  }
+`;
+
+// We need to know the GitHub repo info for the app to construct the archive URL.
+// Fetch it fresh at trigger time (not cached, since the user just picked the app).
+const APP_GITHUB_QUERY = `
+  query ClowninAppGitHub($appId: String!) {
+    app {
+      byId(appId: $appId) {
+        githubRepository {
+          githubRepositoryUrl
+          metadata {
+            githubRepoOwnerName
+            githubRepoName
+            defaultBranch
+          }
+        }
+      }
+    }
+  }
+`;
+
+interface GitHubMeta {
+  githubRepoOwnerName: string;
+  githubRepoName: string;
+  defaultBranch: string;
+}
+
+interface AppGitHubData {
+  app: {
+    byId: {
+      githubRepository: {
+        githubRepositoryUrl: string;
+        metadata: GitHubMeta | null;
+      } | null;
+    };
+  };
+}
+
+function friendlyTriggerError(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("eas.json") || lower.includes("easjson"))
+    return "No eas.json found. Run `eas build:configure` in your project first, then push to GitHub.";
+  if (lower.includes("project id") || lower.includes("projectid"))
+    return "Project not linked to EAS. Run `eas init` in your project and push to GitHub.";
+  if (lower.includes("github") || lower.includes("not connected"))
+    return "Connect this project to a GitHub repo on expo.dev → Project → GitHub, then try again.";
+  if (lower.includes("credential") || lower.includes("certificate"))
+    return "Build credentials not set up. Run `eas credentials` to configure signing.";
+  return msg;
+}
+
+router.post("/eas/builds/trigger", requireAuth, requireAdmin, async (req, res): Promise<void> => {
+  const { appId, platform, buildProfile } = req.body as {
+    appId?: string;
+    platform?: string;
+    buildProfile?: string;
+  };
+
+  if (!appId || typeof appId !== "string") {
+    res.status(400).json({ error: "appId is required" });
+    return;
+  }
+  if (platform !== "IOS" && platform !== "ANDROID") {
+    res.status(400).json({ error: "platform must be IOS or ANDROID" });
+    return;
+  }
+  if (!buildProfile || typeof buildProfile !== "string") {
+    res.status(400).json({ error: "buildProfile is required" });
+    return;
+  }
+
+  try {
+    // Resolve GitHub archive URL for this app
+    const ghData = await easQuery<AppGitHubData>(APP_GITHUB_QUERY, { appId });
+    const gh = ghData?.app?.byId?.githubRepository;
+    const meta = gh?.metadata;
+
+    if (!gh || !meta) {
+      res.status(422).json({
+        error:
+          "This project is not connected to a GitHub repository. " +
+          "Link it on expo.dev → Project → GitHub to trigger remote builds.",
+      });
+      return;
+    }
+
+    const branch = meta.defaultBranch || "main";
+    // GitHub codeload serves tar.gz archives; EAS uses this as the project source.
+    const archiveUrl = `https://codeload.github.com/${meta.githubRepoOwnerName}/${meta.githubRepoName}/tar.gz/${branch}`;
+
+    const job = {
+      type: "MANAGED",
+      projectRootDirectory: ".",
+      projectArchive: { type: "URL", url: archiveUrl },
+      buildProfile,
+    };
+
+    let build: unknown;
+    if (platform === "IOS") {
+      const data = await easQuery<{
+        buildMutation: { createIosBuild: { build: unknown } };
+      }>(CREATE_IOS_BUILD, { appId, job });
+      build = data?.buildMutation?.createIosBuild?.build;
+    } else {
+      const data = await easQuery<{
+        buildMutation: { createAndroidBuild: { build: unknown } };
+      }>(CREATE_ANDROID_BUILD, { appId, job });
+      build = data?.buildMutation?.createAndroidBuild?.build;
+    }
+
+    if (!build) throw new Error("No build returned from EAS API");
+    res.json({ build });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to trigger build";
+    logger.error({ err }, "EAS trigger error");
+    const friendly = friendlyTriggerError(msg);
+    if (msg.includes("EAS_CLOWNIN_KEY is not configured")) {
+      res.status(503).json({ error: "EAS is not configured on this server" });
+    } else {
+      res.status(502).json({ error: friendly });
+    }
   }
 });
 
