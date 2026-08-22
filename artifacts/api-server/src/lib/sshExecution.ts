@@ -103,8 +103,8 @@ function connectConfig(srv: SshServerConfig): ConnectConfig {
     host: srv.host,
     port: srv.port,
     username: srv.username,
-    readyTimeout: 10_000,
-    keepaliveInterval: 5_000,
+    readyTimeout: 30_000,
+    keepaliveInterval: 10_000,
   };
   if (srv.privateKey) {
     cfg.privateKey = srv.privateKey;
