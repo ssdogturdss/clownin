@@ -1431,6 +1431,24 @@ export default function ProjectEditorScreen() {
                   ready for input before the user can submit anything. ── */}
               {isRunning && !!runToken && (
                 <View style={[styles.stdinRow, { borderTopColor: '#21262d' }]}>
+                  {/* ⌃C — send SIGINT via the cancel endpoint */}
+                  <Pressable
+                    onPress={async () => {
+                      const currentToken = runTokenRef.current;
+                      if (!currentToken || !token) return;
+                      try {
+                        await fetch(`https://${getApiHost()}/api/projects/${projectId}/execute/cancel`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                          body: JSON.stringify({ token: currentToken }),
+                        });
+                      } catch { /* ignore — process will time out naturally */ }
+                    }}
+                    style={[styles.stdinSendBtn, { marginRight: 0, backgroundColor: '#f8514922', borderRadius: 6, paddingHorizontal: 8 }]}
+                    hitSlop={8}
+                  >
+                    <Text style={{ color: '#f85149', fontSize: 12, fontFamily: 'Inter_600SemiBold' }}>⌃C</Text>
+                  </Pressable>
                   <TextInput
                     style={[styles.stdinInput, { color: '#e6edf3', backgroundColor: '#161b22' }]}
                     value={stdinInput}

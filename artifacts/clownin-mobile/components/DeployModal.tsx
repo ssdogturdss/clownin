@@ -113,24 +113,33 @@ export function DeployModal({
     setError("");
     setShowSettings(false);
     setShowBuildTargets(true);
+
+    // Load deploy tokens/platform from storage
     Promise.all([
       AsyncStorage.getItem(tokenKey("netlify")),
       AsyncStorage.getItem(tokenKey("vercel")),
       AsyncStorage.getItem(`clownin_deploy_platform`),
       AsyncStorage.getItem(siteIdKey("netlify", projectId)),
       AsyncStorage.getItem(siteIdKey("vercel", projectId)),
-      AsyncStorage.getItem("clownin_expo_token"),
-    ]).then(([nt, vt, savedPlatform, nSiteId, vSiteId, expoTok]) => {
+    ]).then(([nt, vt, savedPlatform, nSiteId, vSiteId]) => {
       const savedTokens = { netlify: nt ?? "", vercel: vt ?? "" };
       setTokens(savedTokens);
       setSiteIds({ netlify: nSiteId ?? "", vercel: vSiteId ?? "" });
       const activePlatform: Platform = savedPlatform === "vercel" ? "vercel" : "netlify";
       setPlatform(activePlatform);
-      // Quick mode if a token already exists for the saved platform
       setQuickMode(!!savedTokens[activePlatform]);
-      setHasExpoToken(!!expoTok);
     });
-  }, [visible, projectName, projectId]);
+
+    // Check EAS connectivity via the server — the token lives server-side
+    if (token) {
+      const base = resolveApiBaseUrl();
+      fetch(`${base}/api/eas/viewer`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => setHasExpoToken(r.ok))
+        .catch(() => setHasExpoToken(false));
+    }
+  }, [visible, projectName, projectId, token]);
 
   // When platform changes in settings, check if quick mode applies
   useEffect(() => {

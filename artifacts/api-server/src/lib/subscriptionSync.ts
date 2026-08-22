@@ -51,7 +51,7 @@
 import cron from "node-cron";
 import pLimit from "p-limit";
 import { db, usersTable } from "@workspace/db";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { logger } from "./logger";
 
 const RC_API_BASE = "https://api.revenuecat.com/v1";
@@ -398,6 +398,52 @@ export function startSubscriptionSyncJob(): ReturnType<typeof cron.schedule> {
   const task = cron.schedule("0 */6 * * *", () => {
     syncSubscriptions().catch((err) => {
       logger.error({ err }, "subscriptionSync: unhandled error in sync job");
+    });
+  });
+
+  return task;
+}
+
+/**
+ * Reset daily message counts at midnight for any free-tier user whose
+ * last_message_date is before today.
+ *
+ * The lazy-reset in agent.ts already handles this per-message, but without
+ * this job the count stays stale until the user sends their first message of
+ * the new day — making it look like they have 0 messages left when they don't.
+ */
+export async function resetDailyCounts(): Promise<void> {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const result = await db
+    .update(usersTable)
+    .set({ dailyMessageCount: 0 })
+    .where(
+      and(
+        eq(usersTable.subscriptionTier, "free"),
+        isNotNull(usersTable.lastMessageDate),
+        lt(usersTable.lastMessageDate, todayStr),
+      ),
+    )
+    .returning({ id: usersTable.id });
+
+  if (result.length > 0) {
+    logger.info(
+      { count: result.length },
+      "midnightReset: reset daily message counts",
+    );
+  }
+}
+
+/**
+ * Register the midnight daily-count reset cron job.
+ * Runs at 00:00 server time every day.
+ */
+export function startMidnightResetJob(): ReturnType<typeof cron.schedule> {
+  logger.info("midnightReset: scheduling daily message count reset at 00:00");
+
+  const task = cron.schedule("0 0 * * *", () => {
+    resetDailyCounts().catch((err) => {
+      logger.error({ err }, "midnightReset: unhandled error");
     });
   });
 

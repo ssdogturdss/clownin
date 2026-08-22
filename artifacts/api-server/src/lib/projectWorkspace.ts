@@ -14,11 +14,13 @@
 import { writeFile, mkdir, readFile, rm } from "fs/promises";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { createHash } from "crypto";
 import { spawn } from "child_process";
 
-const BASE = join(tmpdir(), "clownin-projects");
+// Use the home directory so installed packages survive server restarts within
+// the same deployment. Fall back to /tmp when HOME is unavailable (tests, CI).
+const BASE = join(process.env["HOME"] ?? homedir() ?? tmpdir(), ".clownin-projects");
 const INSTALL_TIMEOUT_MS = 120_000; // 2 minutes
 
 export function projectDir(projectId: number): string {

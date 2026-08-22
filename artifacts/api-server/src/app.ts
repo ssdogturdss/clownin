@@ -9,7 +9,7 @@ import termsRouter from "./routes/terms";
 import webhookRouter from "./routes/webhooks";
 import { logger } from "./lib/logger";
 import { serveProxyRouter } from "./routes/serve";
-import { startSubscriptionSyncJob } from "./lib/subscriptionSync";
+import { startSubscriptionSyncJob, startMidnightResetJob } from "./lib/subscriptionSync";
 
 const app: Express = express();
 
@@ -88,5 +88,6 @@ app.use("/api", router);
 // Start the daily subscription sync job to heal stale Pro states from
 // missed or failed RevenueCat webhook deliveries.
 startSubscriptionSyncJob();
+startMidnightResetJob();
 
 export default app;
