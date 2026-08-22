@@ -102,6 +102,8 @@ export function DeployModal({
   const [quickMode, setQuickMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showBuildTargets, setShowBuildTargets] = useState(true);
+  /** Whether the user has already connected their Expo account (for the EAS card badge). */
+  const [hasExpoToken, setHasExpoToken] = useState(false);
 
   // Reset and load saved tokens + site IDs whenever the modal opens
   useEffect(() => {
@@ -117,7 +119,8 @@ export function DeployModal({
       AsyncStorage.getItem(`clownin_deploy_platform`),
       AsyncStorage.getItem(siteIdKey("netlify", projectId)),
       AsyncStorage.getItem(siteIdKey("vercel", projectId)),
-    ]).then(([nt, vt, savedPlatform, nSiteId, vSiteId]) => {
+      AsyncStorage.getItem("clownin_expo_token"),
+    ]).then(([nt, vt, savedPlatform, nSiteId, vSiteId, expoTok]) => {
       const savedTokens = { netlify: nt ?? "", vercel: vt ?? "" };
       setTokens(savedTokens);
       setSiteIds({ netlify: nSiteId ?? "", vercel: vSiteId ?? "" });
@@ -125,6 +128,7 @@ export function DeployModal({
       setPlatform(activePlatform);
       // Quick mode if a token already exists for the saved platform
       setQuickMode(!!savedTokens[activePlatform]);
+      setHasExpoToken(!!expoTok);
     });
   }, [visible, projectName, projectId]);
 
@@ -238,68 +242,84 @@ export function DeployModal({
             ) : showBuildTargets ? (
               <View style={s.targetList}>
                 <Text style={[s.targetIntro, { color: colors.mutedForeground }]}>
-                  Choose where to take this project next.
+                  Where should this project go?
                 </Text>
 
+                {/* ── EAS Builds ── */}
                 <Pressable
                   testID="expo-launch-button"
                   style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                   onPress={() => { onClose(); onOpenEasBuilds?.(); }}
                 >
-                  <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
-                    <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color={colors.primary} />
+                  <View style={[s.targetIcon, { backgroundColor: "#58a6ff22" }]}>
+                    <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color="#58a6ff" />
                   </View>
                   <View style={s.targetCopy}>
-                    <Text style={[s.targetTitle, { color: colors.foreground }]}>EAS Builds</Text>
+                    <View style={s.targetTitleRow}>
+                      <Text style={[s.targetTitle, { color: colors.foreground }]}>EAS Builds</Text>
+                      {hasExpoToken && (
+                        <View style={[s.connectedBadge, { backgroundColor: "#3fb95022", borderColor: "#3fb95055" }]}>
+                          <View style={[s.connectedDot, { backgroundColor: "#3fb950" }]} />
+                          <Text style={[s.connectedText, { color: "#3fb950" }]}>Connected</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
-                      View build queue, download artifacts, and track App Store submissions.
+                      Build queue, artifacts, and App Store submissions.
                     </Text>
                   </View>
                   <MaterialCommunityIcons name="chevron-right" size={19} color={colors.mutedForeground} />
                 </Pressable>
 
+                {/* ── Ubuntu ── */}
                 <Pressable
                   testID="ubuntu-deploy-button"
-                  style={[
-                    s.targetCard,
-                    { backgroundColor: colors.card, borderColor: hasUbuntuServer ? colors.primary : colors.border },
-                  ]}
+                  style={[s.targetCard, {
+                    backgroundColor: colors.card,
+                    borderColor: hasUbuntuServer && canDeployToUbuntu ? colors.primary + "88" : colors.border,
+                  }]}
                   onPress={() => {
-                    if (hasUbuntuServer && canDeployToUbuntu) {
-                      onClose();
-                      onDeployToUbuntu?.();
-                    } else {
-                      onOpenUbuntuSetup?.();
-                    }
+                    if (hasUbuntuServer && canDeployToUbuntu) { onClose(); onDeployToUbuntu?.(); }
+                    else { onOpenUbuntuSetup?.(); }
                   }}
                 >
                   <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
                     <MaterialCommunityIcons name="server-network" size={21} color={colors.primary} />
                   </View>
                   <View style={s.targetCopy}>
-                    <Text style={[s.targetTitle, { color: colors.foreground }]}>
-                      {hasUbuntuServer ? "Deploy on Ubuntu" : "Connect an Ubuntu server"}
-                    </Text>
+                    <View style={s.targetTitleRow}>
+                      <Text style={[s.targetTitle, { color: colors.foreground }]}>
+                        {hasUbuntuServer ? "Ubuntu Server" : "Connect Ubuntu"}
+                      </Text>
+                      {hasUbuntuServer && (
+                        <View style={[s.connectedBadge, { backgroundColor: colors.primary + "18", borderColor: colors.primary + "44" }]}>
+                          <View style={[s.connectedDot, { backgroundColor: colors.primary }]} />
+                          <Text style={[s.connectedText, { color: colors.primary }]}>Ready</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
                       {hasUbuntuServer
                         ? canDeployToUbuntu
-                          ? "Start this project on your configured Ubuntu server over SSH."
-                          : "Select a runnable server file before deploying remotely."
-                        : "Add an Ubuntu 20.04+ host to run this project remotely over SSH."}
+                          ? "Run this project on your SSH server."
+                          : "Select a server file first, then deploy."
+                        : "Add an Ubuntu 20.04+ host via SSH."}
                     </Text>
                   </View>
                   <MaterialCommunityIcons name="chevron-right" size={19} color={colors.mutedForeground} />
                 </Pressable>
 
+                {/* ── Web hosting (secondary) ── */}
                 <Pressable
                   testID="web-hosting-button"
                   style={[s.webTargetButton, { borderColor: colors.border }]}
                   onPress={() => setShowBuildTargets(false)}
                 >
-                  <MaterialCommunityIcons name="web" size={17} color={colors.mutedForeground} />
+                  <MaterialCommunityIcons name="web" size={16} color={colors.mutedForeground} />
                   <Text style={[s.webTargetText, { color: colors.mutedForeground }]}>
-                    Deploy to Netlify or Vercel
+                    Netlify or Vercel
                   </Text>
+                  <MaterialCommunityIcons name="chevron-right" size={15} color={colors.mutedForeground} style={{ marginLeft: "auto" }} />
                 </Pressable>
               </View>
             ) : quickMode && !showSettings ? (
@@ -498,23 +518,31 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     changeSettingsText: { fontSize: 12, textDecorationLine: "underline" },
     backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 },
     backText: { fontSize: 14, fontWeight: "500" },
-    targetList: { gap: 12, paddingVertical: 8 },
-    targetIntro: { fontSize: 13, lineHeight: 19, marginBottom: 2 },
+    targetList: { gap: 10, paddingVertical: 8 },
+    targetIntro: { fontSize: 12, lineHeight: 18, marginBottom: 4 },
     targetCard: {
       flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1,
       borderRadius: 14, padding: 14,
     },
     targetIcon: {
-      width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center",
+      width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexShrink: 0,
     },
-    targetCopy: { flex: 1, gap: 3 },
+    targetCopy: { flex: 1, gap: 4 },
+    targetTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
     targetTitle: { fontSize: 15, fontWeight: "700" },
-    targetDescription: { fontSize: 12, lineHeight: 17 },
-    webTargetButton: {
-      flexDirection: "row", alignItems: "center", justifyContent: "center",
-      gap: 8, borderWidth: 1, borderRadius: 10, paddingVertical: 11, marginTop: 2,
+    targetDescription: { fontSize: 12, lineHeight: 17, color: colors.mutedForeground },
+    connectedBadge: {
+      flexDirection: "row", alignItems: "center", gap: 4,
+      borderWidth: 1, borderRadius: 20, paddingHorizontal: 7, paddingVertical: 2,
     },
-    webTargetText: { fontSize: 13, fontWeight: "600" },
+    connectedDot: { width: 5, height: 5, borderRadius: 3 },
+    connectedText: { fontSize: 10, fontWeight: "700" },
+    webTargetButton: {
+      flexDirection: "row", alignItems: "center",
+      gap: 7, borderWidth: 1, borderRadius: 10,
+      paddingVertical: 10, paddingHorizontal: 14, marginTop: 2,
+    },
+    webTargetText: { fontSize: 13, fontWeight: "500" },
 
     // Full form
     platformRow: { flexDirection: "row", gap: 10, marginBottom: 8 },
