@@ -16,6 +16,7 @@ import templatesRouter from "./templates";
 import adminRouter from "./admin";
 import promoRouter from "./promo";
 import secretsRouter from "./secrets";
+import easRouter from "./eas";
 
 const router: IRouter = Router();
 
@@ -36,6 +37,7 @@ router.use(envRouter);
 router.use(adminRouter);
 router.use(promoRouter);
 router.use(secretsRouter);
+router.use(easRouter);
 
 export default router;
 
