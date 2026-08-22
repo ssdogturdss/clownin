@@ -71,6 +71,9 @@ const PLATFORMS: Array<{
   },
 ];
 
+/** Module-level cache so the badge keeps its last-known value while a fresh check is in flight. */
+const easCache: { hasToken: boolean; username: string } = { hasToken: false, username: "" };
+
 function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 63);
 }
@@ -103,10 +106,10 @@ export function DeployModal({
   const [quickMode, setQuickMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showBuildTargets, setShowBuildTargets] = useState(true);
-  /** Whether the server-side EAS key is configured and reachable. */
-  const [hasExpoToken, setHasExpoToken] = useState(false);
+  /** Whether the server-side EAS key is configured and reachable. Seeded from cache so the badge never flashes on open. */
+  const [hasExpoToken, setHasExpoToken] = useState(easCache.hasToken);
   /** Expo username returned by /api/eas/viewer, shown in the Connected badge. */
-  const [easUsername, setEasUsername] = useState<string>("");
+  const [easUsername, setEasUsername] = useState<string>(easCache.username);
 
   // Reset and load saved tokens + site IDs whenever the modal opens
   useEffect(() => {
@@ -133,9 +136,10 @@ export function DeployModal({
       setQuickMode(!!savedTokens[activePlatform]);
     });
 
-    // Check EAS connectivity via the server — the token lives server-side
-    setHasExpoToken(false);
-    setEasUsername("");
+    // Check EAS connectivity via the server — the token lives server-side.
+    // Seed from cache first so the badge stays visible while the refresh is in flight.
+    setHasExpoToken(easCache.hasToken);
+    setEasUsername(easCache.username);
     if (token) {
       const base = resolveApiBaseUrl();
       fetch(`${base}/api/eas/viewer`, {
@@ -144,13 +148,24 @@ export function DeployModal({
         .then(async (r) => {
           if (r.ok) {
             const data = await r.json().catch(() => ({}));
+            const username = (data as { username?: string }).username ?? "";
+            easCache.hasToken = true;
+            easCache.username = username;
             setHasExpoToken(true);
-            setEasUsername((data as { username?: string }).username ?? "");
+            setEasUsername(username);
           } else {
+            easCache.hasToken = false;
+            easCache.username = "";
             setHasExpoToken(false);
+            setEasUsername("");
           }
         })
-        .catch(() => setHasExpoToken(false));
+        .catch(() => {
+          easCache.hasToken = false;
+          easCache.username = "";
+          setHasExpoToken(false);
+          setEasUsername("");
+        });
     }
   }, [visible, projectName, projectId, token]);
 
