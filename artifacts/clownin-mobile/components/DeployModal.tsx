@@ -102,8 +102,10 @@ export function DeployModal({
   const [quickMode, setQuickMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showBuildTargets, setShowBuildTargets] = useState(true);
-  /** Whether the user has already connected their Expo account (for the EAS card badge). */
+  /** Whether the server-side EAS key is configured and reachable. */
   const [hasExpoToken, setHasExpoToken] = useState(false);
+  /** Expo username returned by /api/eas/viewer, shown in the Connected badge. */
+  const [easUsername, setEasUsername] = useState<string>("");
 
   // Reset and load saved tokens + site IDs whenever the modal opens
   useEffect(() => {
@@ -131,12 +133,22 @@ export function DeployModal({
     });
 
     // Check EAS connectivity via the server — the token lives server-side
+    setHasExpoToken(false);
+    setEasUsername("");
     if (token) {
       const base = resolveApiBaseUrl();
       fetch(`${base}/api/eas/viewer`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-        .then((r) => setHasExpoToken(r.ok))
+        .then(async (r) => {
+          if (r.ok) {
+            const data = await r.json().catch(() => ({}));
+            setHasExpoToken(true);
+            setEasUsername((data as { username?: string }).username ?? "");
+          } else {
+            setHasExpoToken(false);
+          }
+        })
         .catch(() => setHasExpoToken(false));
     }
   }, [visible, projectName, projectId, token]);
@@ -269,7 +281,9 @@ export function DeployModal({
                       {hasExpoToken && (
                         <View style={[s.connectedBadge, { backgroundColor: "#3fb95022", borderColor: "#3fb95055" }]}>
                           <View style={[s.connectedDot, { backgroundColor: "#3fb950" }]} />
-                          <Text style={[s.connectedText, { color: "#3fb950" }]}>Connected</Text>
+                          <Text style={[s.connectedText, { color: "#3fb950" }]}>
+                            {easUsername ? `@${easUsername}` : "Connected"}
+                          </Text>
                         </View>
                       )}
                     </View>
