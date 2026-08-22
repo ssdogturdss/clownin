@@ -185,13 +185,6 @@ export function DeployModal({
     } catch { /* user dismissed */ }
   }, [result]);
 
-  const openExpoPublishing = useCallback(() => {
-    // Expo Launch is managed by Replit's Publishing tool, not an app API.
-    // Opening Replit keeps the action honest while taking the user to the
-    // place where the current workspace can start the signed mobile build.
-    Linking.openURL("https://replit.com/").catch(() => {});
-  }, []);
-
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={s.overlay} onPress={onClose}>
@@ -244,23 +237,6 @@ export function DeployModal({
                 <Text style={[s.targetIntro, { color: colors.mutedForeground }]}>
                   Choose where to take this project next.
                 </Text>
-
-                <Pressable
-                  testID="expo-launch-button"
-                  style={[s.targetCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  onPress={openExpoPublishing}
-                >
-                  <View style={[s.targetIcon, { backgroundColor: colors.primary + "22" }]}>
-                    <MaterialCommunityIcons name="cellphone-arrow-down" size={21} color={colors.primary} />
-                  </View>
-                  <View style={s.targetCopy}>
-                    <Text style={[s.targetTitle, { color: colors.foreground }]}>Expo Launch</Text>
-                    <Text style={[s.targetDescription, { color: colors.mutedForeground }]}>
-                      Build and publish the Clownin mobile app from Replit’s Publishing tool.
-                    </Text>
-                  </View>
-                  <MaterialCommunityIcons name="open-in-new" size={17} color={colors.mutedForeground} />
-                </Pressable>
 
                 <Pressable
                   testID="ubuntu-deploy-button"
