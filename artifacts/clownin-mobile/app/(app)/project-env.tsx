@@ -30,18 +30,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
 import { fetch as expoFetch } from 'expo/fetch';
 import { useListSecrets, useInjectSecretIntoEnv } from '@workspace/api-client-react';
+import { apiUrl, resolveApiBaseUrl } from '@/lib/apiUrl';
 
 type EnvVar = { key: string; maskedValue: string };
-
-function getApiHost(): string {
-  const domain = process.env.EXPO_PUBLIC_API_URL ?? '';
-  if (domain) return domain;
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const h = window.location.hostname.replace('.expo', '');
-    return `https://${h}`;
-  }
-  return '';
-}
 
 export default function ProjectEnvScreen() {
   const { projectId: rawId } = useLocalSearchParams();
@@ -63,7 +54,7 @@ export default function ProjectEnvScreen() {
   // Vault picker state
   const [showVaultPicker, setShowVaultPicker] = useState(false);
 
-  const apiBase = getApiHost();
+  const apiBase = resolveApiBaseUrl() ?? '';
 
   // Vault secrets
   const { data: vaultData, isLoading: vaultLoading } = useListSecrets();
@@ -71,7 +62,7 @@ export default function ProjectEnvScreen() {
 
   const fetchVars = useCallback(async () => {
     try {
-      const res = await expoFetch(`${apiBase}/api/projects/${projectId}/env`, {
+      const res = await expoFetch(apiUrl(`/api/projects/${projectId}/env`), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {

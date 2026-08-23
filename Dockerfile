@@ -44,7 +44,13 @@ RUN PORT=3000 BASE_PATH=/admin-panel/ \
 
 # Create a self-contained production directory: production node_modules + dist.
 # --ignore-scripts prevents prepare/postinstall hooks from running twice.
-RUN pnpm --filter @workspace/api-server deploy --prod --ignore-scripts /app/api
+RUN pnpm --filter @workspace/api-server deploy --legacy --prod --ignore-scripts /app/api
+
+# The migration target intentionally keeps the full workspace and Drizzle CLI.
+# Docker Compose runs this one-shot target before starting the lean API image.
+FROM builder AS migrator
+
+CMD ["sh", "-c", "pnpm --filter @workspace/db run wait && pnpm --filter @workspace/db run migrate"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: production image

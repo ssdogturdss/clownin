@@ -104,7 +104,7 @@ sudo chown -R clownin:clownin /opt/clownin
 sudo -u clownin bash -c "cd /opt/clownin && pnpm install --frozen-lockfile"
 sudo -u clownin bash -c "cd /opt/clownin && pnpm typecheck:libs"
 sudo -u clownin bash -c "cd /opt/clownin && pnpm --filter @workspace/api-server run build"
-sudo -u clownin bash -c "cd /opt/clownin && PORT=8080 pnpm --filter @workspace/admin-panel run build"
+sudo -u clownin bash -c "cd /opt/clownin && pnpm --filter @workspace/admin-panel run build"
 ```
 
 ### Database
@@ -115,7 +115,7 @@ sudo -u postgres psql -c "CREATE DATABASE clownin OWNER clownin;"
 
 # Apply migrations
 cd /opt/clownin/lib/db
-DATABASE_URL=postgresql://clownin:changeme@localhost:5432/clownin pnpm push
+DATABASE_URL=postgresql://clownin:changeme@localhost:5432/clownin pnpm db:migrate
 ```
 
 ### systemd service
@@ -177,8 +177,8 @@ cd /opt/clownin
 sudo -u clownin git pull --ff-only
 sudo -u clownin pnpm install --frozen-lockfile
 sudo -u clownin pnpm --filter @workspace/api-server run build
-sudo -u clownin PORT=8080 pnpm --filter @workspace/admin-panel run build
-cd lib/db && sudo -u clownin pnpm push   # run new migrations
+sudo -u clownin pnpm --filter @workspace/admin-panel run build
+sudo -u clownin pnpm db:migrate   # run new migrations
 sudo systemctl restart clownin-api
 
 # After the service is up, verify session name coverage:

@@ -143,8 +143,8 @@ function findFreePort(): Promise<number> {
 
 // ── URL construction ──────────────────────────────────────────────────────────
 function buildProxyUrl(req: Request, projectId: number): string {
-  const domain = process.env.REPLIT_DEV_DOMAIN;
-  if (domain) return `https://${domain}/api/projects/${projectId}/serve/proxy/`;
+  const configuredPublicUrl = process.env.PUBLIC_API_URL?.replace(/\/+$/, "");
+  if (configuredPublicUrl) return `${configuredPublicUrl}/api/projects/${projectId}/serve/proxy/`;
   const host = req.get("host") ?? "localhost";
   return `${req.protocol}://${host}/api/projects/${projectId}/serve/proxy/`;
 }

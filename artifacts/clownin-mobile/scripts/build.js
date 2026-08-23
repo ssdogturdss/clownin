@@ -60,6 +60,10 @@ function stripProtocol(domain) {
 }
 
 function getDeploymentDomain() {
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return stripProtocol(process.env.EXPO_PUBLIC_API_URL);
+  }
+
   if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
     return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
   }
@@ -73,7 +77,7 @@ function getDeploymentDomain() {
   }
 
   console.error(
-    'ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN',
+    'ERROR: No API domain found. Set EXPO_PUBLIC_API_URL or EXPO_PUBLIC_DOMAIN.',
   );
   process.exit(1);
 }

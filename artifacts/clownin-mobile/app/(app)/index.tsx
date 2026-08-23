@@ -34,6 +34,7 @@ import { OnboardingScreen } from '@/components/OnboardingScreen';
 import { PaywallSheet, type PaywallReason } from '@/components/PaywallSheet';
 import { ProfileModal } from '@/components/ProfileModal';
 import { useProfile, PROFILE_QUERY_KEY } from '@/hooks/useProfile';
+import { apiUrl } from '@/lib/apiUrl';
 
 // ── Template catalogue (for idea→template matching) ──────────────────────────
 interface TemplateForMatching {
@@ -48,13 +49,6 @@ interface PendingSubmission {
   template: TemplateForMatching;
 }
 
-function getApiBase(): string {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `https://${window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')}`;
-  }
-  return `https://${process.env.EXPO_PUBLIC_DOMAIN ?? ''}`;
-}
-
 const TEMPLATES_CACHE_KEY = '@clownin/templates-for-matching';
 
 function useTemplatesForMatching() {
@@ -62,7 +56,7 @@ function useTemplatesForMatching() {
     queryKey: ['templates-for-matching'],
     queryFn: async () => {
       try {
-        const res = await fetch(`${getApiBase()}/api/templates`);
+        const res = await fetch(apiUrl('/api/templates'));
         if (!res.ok) throw new Error('Failed to load templates');
         const data: Array<{ id: string; name: string; language: string; keywords?: string[] }> = await res.json();
         const templates = data

@@ -1,18 +1,14 @@
-version: "3.9"
-
 # Clownin — Docker Compose (API server + PostgreSQL)
 #
 # Quick start:
-#   cp .env.example .env        # fill in JWT_SECRET, SESSION_SECRET, etc.
+#   cp .env.example .env        # fill in DB_PASSWORD, JWT_SECRET, and STUDIO_MASTER_KEY
 #   docker compose up --build
 #
 # The API server is available at http://localhost:8080/api/
 # The admin panel is available at http://localhost:8080/admin-panel/
 #
-# To apply database migrations:
-#   docker compose exec api node -e "require('./dist/index.mjs')"
-#   # or run the migration container target:
-#   docker compose run --rm migrate
+# Migrations run automatically through the one-shot `migrate` service before
+# the API starts. To rerun them manually: docker compose run --rm migrate
 
 services:
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
@@ -22,14 +18,21 @@ services:
     environment:
       POSTGRES_DB:       clownin
       POSTGRES_USER:     clownin
-      POSTGRES_PASSWORD: "${DB_PASSWORD:-changeme_in_production}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test:     ["CMD-SHELL", "pg_isready -U clownin -d clownin"]
-      interval: 10s
-      timeout:  5s
-      retries:  5
+
+  # ── Database migrations ─────────────────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      target: migrator
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_started
+    environment:
+      DATABASE_URL: "postgresql://clownin:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:5432/clownin"
 
   # ── API server ──────────────────────────────────────────────────────────────
   api:
@@ -39,16 +42,19 @@ services:
     restart: unless-stopped
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "${HOST_PORT:-8080}:8080"
     environment:
       # Database — points to the companion db service
-      DATABASE_URL: "postgresql://clownin:${DB_PASSWORD:-changeme_in_production}@db:5432/clownin"
+      DATABASE_URL: "postgresql://clownin:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:5432/clownin"
 
       # Required secrets — set these in your .env file
       JWT_SECRET:        "${JWT_SECRET}"
       SESSION_SECRET:    "${SESSION_SECRET}"
+      STUDIO_MASTER_KEY: "${STUDIO_MASTER_KEY}"
       ADMIN_USER_IDS:    "${ADMIN_USER_IDS:-}"
 
       # AI providers — set at least one
@@ -65,6 +71,8 @@ services:
       PORT:      "8080"
       NODE_ENV:  "production"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      PUBLIC_API_URL: "${PUBLIC_API_URL:-}"
+      ADMIN_PANEL_DIR: "/app/admin-panel"
 
 volumes:
   pgdata:

@@ -20,7 +20,7 @@ export async function ensureSystemUser(): Promise<number> {
   if (!masterKey) {
     logger.warn(
       "STUDIO_MASTER_KEY is not set — system user cannot be authenticated. " +
-      "Set STUDIO_MASTER_KEY in Replit secrets before first use.",
+      "Set STUDIO_MASTER_KEY in your deployment secret manager before first use.",
     );
   }
 
@@ -47,7 +47,7 @@ export async function ensureSystemUser(): Promise<number> {
   if (!masterKey) {
     throw new Error(
       "Cannot create system user: STUDIO_MASTER_KEY is not set. " +
-      "Add it to your Replit secrets and restart the server.",
+      "Add it to your deployment environment and restart the server.",
     );
   }
 

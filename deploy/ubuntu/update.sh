@@ -60,7 +60,7 @@ info "Building API server..."
 sudo -u "$APP_USER" bash -c "cd $REPO_DIR && pnpm --filter @workspace/api-server run build"
 
 info "Building admin panel..."
-sudo -u "$APP_USER" bash -c "cd $REPO_DIR && PORT=$API_PORT pnpm --filter @workspace/admin-panel run build"
+sudo -u "$APP_USER" bash -c "cd $REPO_DIR && pnpm --filter @workspace/admin-panel run build"
 ok "Build complete"
 
 # ── 4. Run migrations ─────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   set -a; source "$ENV_FILE"; set +a
 fi
-sudo -u "$APP_USER" bash -c "cd $REPO_DIR/lib/db && pnpm push"
+sudo -u "$APP_USER" bash -c "cd $REPO_DIR && pnpm db:migrate"
 ok "Migrations applied"
 
 # ── 5. Restart the service ─────────────────────────────────────────────────────

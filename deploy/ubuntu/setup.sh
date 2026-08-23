@@ -163,15 +163,13 @@ info "Building API server..."
 sudo -u "$APP_USER" bash -c "cd $REPO_DIR && pnpm --filter @workspace/api-server run build"
 
 info "Building admin panel..."
-# Admin panel Vite build needs a PORT value
-sudo -u "$APP_USER" bash -c "cd $REPO_DIR && PORT=$API_PORT pnpm --filter @workspace/admin-panel run build"
+sudo -u "$APP_USER" bash -c "cd $REPO_DIR && pnpm --filter @workspace/admin-panel run build"
 
 ok "Build complete"
 
 # ── 9. Database migrations ─────────────────────────────────────────────────────
 info "Applying database migrations..."
-sudo -u "$APP_USER" bash -c "cd $REPO_DIR && DATABASE_URL=$DATABASE_URL pnpm --filter @workspace/db run push" 2>/dev/null || \
-sudo -u "$APP_USER" bash -c "cd $REPO_DIR/lib/db && DATABASE_URL=$DATABASE_URL pnpm push"
+sudo -u "$APP_USER" bash -c "cd $REPO_DIR && DATABASE_URL=$DATABASE_URL pnpm db:migrate"
 ok "Migrations applied"
 
 # ── 10. Install systemd service ────────────────────────────────────────────────

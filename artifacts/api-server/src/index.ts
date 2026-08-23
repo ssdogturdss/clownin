@@ -6,10 +6,7 @@ import { seedDemoData, ensureSystemUser } from "./lib/seed";
 import { setSystemUserId } from "./lib/auth";
 import { cleanupAllServers, getAuthorizedServerTarget, stopPreviewForRelayFailure } from "./routes/serve";
 
-const rawPort = process.env["PORT"];
-if (!rawPort) {
-  throw new Error("PORT environment variable is required but was not provided.");
-}
+const rawPort = process.env["PORT"] ?? "8080";
 const serverPort = Number(rawPort);
 if (Number.isNaN(serverPort) || serverPort <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
@@ -150,9 +147,11 @@ server.listen(serverPort, async () => {
   } catch (err) {
     logger.error({ err }, "System user setup failed (non-fatal, defaulting to userId=1)");
   }
-  try {
-    await seedDemoData();
-  } catch (err) {
-    logger.error({ err }, "Seed failed (non-fatal)");
+  if (process.env.SEED_DEMO_DATA === "true") {
+    try {
+      await seedDemoData();
+    } catch (err) {
+      logger.error({ err }, "Demo seed failed");
+    }
   }
 });

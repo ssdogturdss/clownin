@@ -24,6 +24,7 @@ import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { useProfile } from '@/hooks/useProfile';
+import { apiUrl } from '@/lib/apiUrl';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Template {
@@ -46,14 +47,6 @@ const LANG_TAB_LABELS: Record<string, string> = {
   ruby: 'Ruby',
   java: 'Java',
 };
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function getApiBase(): string {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `https://${window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')}`;
-  }
-  return `https://${process.env.EXPO_PUBLIC_DOMAIN ?? ''}`;
-}
 
 const LANG_COLORS: Record<string, string> = {
   javascript: '#f7df1e',
@@ -83,7 +76,7 @@ function useTemplates() {
   return useQuery<Template[]>({
     queryKey: ['templates'],
     queryFn: async () => {
-      const res = await fetch(`${getApiBase()}/api/templates`);
+      const res = await fetch(apiUrl('/api/templates'));
       if (!res.ok) throw new Error('Failed to load templates');
       return res.json();
     },

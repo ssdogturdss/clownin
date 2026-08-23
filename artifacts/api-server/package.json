@@ -7,6 +7,7 @@
     "dev": "export NODE_ENV=development && (fuser -k ${PORT:-8080}/tcp 2>/dev/null || true); sleep 1; pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "seed": "pnpm run build && node --enable-source-maps ./dist/seed.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --exclude '**/dockerSmoke*'",
     "test:ssh": "SSH_INTEGRATION=1 vitest run src/lib/__tests__/sshExecution.test.ts --reporter verbose",

@@ -3,17 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
-
-const isDevServer = process.env.NODE_ENV !== 'production';
 const rawPort = process.env.PORT;
-
-if (isDevServer && !rawPort) {
-  throw new Error(
-    'PORT environment variable is required for the dev server but was not provided.',
-  );
-}
-
 const port = Number(rawPort ?? '3000');
 
 if (rawPort && (Number.isNaN(port) || port <= 0)) {
@@ -22,26 +12,11 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 
 const basePath = process.env.BASE_PATH ?? '/';
 
-const isReplit = process.env.REPL_ID !== undefined;
-
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
-    ...(isReplit ? [runtimeErrorOverlay()] : []),
     tailwindcss(),
-    ...(isDevServer && isReplit
-      ? [
-          await import('@replit/vite-plugin-cartographer').then((m) =>
-            m.cartographer({
-              root: path.resolve(import.meta.dirname, '..'),
-            }),
-          ),
-          await import('@replit/vite-plugin-dev-banner').then((m) =>
-            m.devBanner(),
-          ),
-        ]
-      : []),
   ],
   resolve: {
     alias: {

@@ -67,7 +67,9 @@ app.use("/preview", express.static(path.join(__dirname, "assets")));
 // next to the API server dist so both services are served from a single
 // container.  When running under Replit the directory won't exist and this
 // block is a no-op — the admin panel runs as its own Vite dev process.
-const adminPanelDist = path.join(__dirname, "../../admin-panel");
+const adminPanelDist = process.env.ADMIN_PANEL_DIR
+  ? path.resolve(process.env.ADMIN_PANEL_DIR)
+  : path.join(__dirname, "../../admin-panel");
 if (fs.existsSync(adminPanelDist)) {
   app.use("/admin-panel", express.static(adminPanelDist));
   // SPA fallback: serve index.html for any unknown /admin-panel/* route

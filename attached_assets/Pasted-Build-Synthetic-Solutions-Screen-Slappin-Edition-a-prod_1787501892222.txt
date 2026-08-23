@@ -1,0 +1,556 @@
+Build Synthetic Solutions Screen Slappin Edition, a production-quality screen recording application for iPhone, iPad, Android, Windows, macOS, and web/PWA where platform capabilities allow.
+
+The application must be a real, functional screen recorder, not a mockup, simulated recorder, fake progress bar, or prototype. Use native platform screen-capture APIs wherever required and gracefully handle platform-specific permissions and limitations.
+
+BRAND
+
+Product name: Synthetic Solutions Screen Slappin Edition
+
+Brand personality:
+
+* Fast
+* Bold
+* Technical
+* Fun
+* Creator-focused
+* Professional enough for business use
+
+Create a polished Synthetic Solutions visual identity with:
+
+* Custom app icon
+* Splash screen
+* Dark/light themes
+* Animated recording indicator
+* Modern responsive interface
+* “SLAPPIN” visual treatment for recording actions
+* Accessible typography and controls
+
+CORE RECORDING FEATURES
+
+Implement actual screen recording with:
+
+* Start recording
+* Pause recording
+* Resume recording
+* Stop recording
+* Recording timer
+* Recording status indicator
+* Microphone audio
+* System/device audio where supported
+* Microphone + system audio mixing where supported
+* Front-facing camera overlay where supported
+* Camera enable/disable
+* Camera position controls
+* Camera size controls
+* Screen orientation handling
+* Resolution selection
+* Frame-rate selection
+* Bitrate selection
+* Recording-quality presets
+* Hardware-accelerated encoding where available
+* Background recording where the operating system permits it
+* Automatic handling of screen-lock/interruption events
+* Permission management
+* Storage-space checks
+* Recording recovery after unexpected interruption where technically possible
+
+RECORDING MODES
+
+Provide:
+
+1. Full Screen
+2. Application/Window capture where supported
+3. Camera + Screen
+4. Audio-only
+5. Tutorial Mode
+6. Presentation Mode
+7. Gaming Mode
+8. Quick Record
+
+Quick Record should allow the user to begin recording with minimal interaction.
+
+RECORDING CONTROLS
+
+Create a floating recording controller with:
+
+* Record/Pause
+* Stop
+* Microphone toggle
+* Camera toggle
+* Camera position
+* Drawing/annotation toggle
+* Screenshot button
+* Recording duration
+* Audio level meter
+
+The controller should be unobtrusive and should not appear in the captured recording unless explicitly selected.
+
+LIVE ANNOTATION TOOLS
+
+During recording provide:
+
+* Pen
+* Highlighter
+* Arrow
+* Rectangle
+* Circle
+* Text
+* Number markers
+* Spotlight
+* Magnifier
+* Cursor highlight
+* Click indicator
+* Laser-pointer effect
+* Undo
+* Redo
+* Clear annotations
+
+Annotations should be rendered into the recording where technically possible or stored as an editable overlay for supported recording pipelines.
+
+AUDIO
+
+Implement real audio capture using the appropriate native APIs.
+
+Features:
+
+* Microphone input selection where supported
+* System audio capture where supported
+* Audio-level meter
+* Mute/unmute microphone
+* Noise reduction
+* Automatic gain control where appropriate
+* Echo cancellation where appropriate
+* Audio synchronization
+* Separate audio tracks when supported
+* Audio preview
+
+Never claim system-audio recording is supported on a platform when the operating system does not permit it.
+
+CAMERA OVERLAY
+
+For platforms that support simultaneous camera capture:
+
+* Circular camera
+* Rounded-square camera
+* Rectangle camera
+* Adjustable size
+* Adjustable opacity
+* Drag-and-drop positioning
+* Camera flip
+* Camera controls
+* Optional background blur/removal where technically supported
+
+SCREENSHOT SYSTEM
+
+Allow users to capture screenshots while recording.
+
+Each screenshot should include:
+
+* Timestamp
+* Optional annotation
+* Optional cursor position
+* Automatic association with the recording
+
+Create a screenshot gallery connected to the recording session.
+
+VIDEO EDITOR
+
+After recording, open a lightweight non-destructive editor.
+
+Features:
+
+* Trim
+* Cut
+* Split
+* Crop
+* Resize
+* Rotate
+* Speed control
+* Volume control
+* Fade audio
+* Blur sensitive areas
+* Add text
+* Add images
+* Add logos
+* Add annotations
+* Add background music where licensed audio is supplied
+* Add intro/outro
+* Remove sections
+* Undo/redo
+* Timeline
+* Preview
+* Export
+
+The editor should remain responsive with long recordings.
+
+SYNTHETIC SOLUTIONS WATERMARK
+
+Provide optional branding:
+
+* Synthetic Solutions logo
+* “Screen Slappin Edition”
+* Custom watermark
+* Position
+* Size
+* Opacity
+* Intro/outro branding
+
+Allow watermark removal for authorized/premium configurations.
+
+EXPORT
+
+Support appropriate formats based on platform capabilities:
+
+* MP4
+* MOV
+* WebM where supported
+
+Quality presets:
+
+* 720p
+* 1080p
+* 1440p where supported
+* 4K where supported
+
+Frame rates:
+
+* 24 FPS
+* 30 FPS
+* 60 FPS where supported
+
+Automatically choose compatible codecs and encoding settings rather than pretending unsupported configurations work.
+
+FILE MANAGEMENT
+
+Create a recording library containing:
+
+* Recordings
+* Screenshots
+* Projects
+* Edited videos
+* Exported videos
+
+Each recording should display:
+
+* Thumbnail
+* Name
+* Duration
+* Date
+* Resolution
+* File size
+* Audio status
+* Camera status
+
+Actions:
+
+* Rename
+* Duplicate
+* Delete
+* Share
+* Export
+* Move
+* Search
+* Sort
+* Filter
+
+Include storage usage information.
+
+CLOUD/BACKUP ARCHITECTURE
+
+Design optional backend support for:
+
+* User-owned storage
+* Local-only operation
+* Cloud backup
+* Project synchronization
+* Cross-device access
+
+Do not require a cloud account for basic local recording.
+
+If cloud storage is implemented, use secure authentication, encrypted transport, access-controlled storage, resumable uploads, and deletion controls.
+
+SCREENCASTING
+
+Where supported, allow users to share recordings or live capture through:
+
+* Native sharing
+* Files
+* AirDrop
+* Nearby sharing
+* Browser download
+* Share sheet
+* Supported cloud providers
+
+Do not implement unauthorized interception of other devices, screens, accounts, or communications.
+
+AI FEATURES
+
+Add an optional AI assistant that can process recordings after capture.
+
+Capabilities:
+
+* Automatic transcription
+* Generate title
+* Generate description
+* Create chapters
+* Detect important moments
+* Generate summary
+* Extract action items
+* Create captions
+* Generate searchable transcript
+* Find moments using natural-language search
+* Suggest clips
+* Generate tutorial steps from a recording
+
+AI processing must require appropriate user consent before uploading or processing private recordings.
+
+SEARCH
+
+Create powerful local search across:
+
+* Recording names
+* Transcripts
+* Tags
+* Dates
+* Projects
+* Chapters
+* AI-generated descriptions
+
+Example:
+
+“Find the recording where I demonstrated Docker deployment.”
+
+SECURITY
+
+Implement:
+
+* Secure local storage
+* Encryption where appropriate
+* Secure permissions
+* No hidden recording
+* No stealth recording
+* Clear recording indicators
+* Explicit microphone/camera permission handling
+* Secure cloud authentication
+* Protected APIs
+* Input validation
+* Rate limiting
+* Audit logging for cloud operations
+
+The application must never secretly record the screen, microphone, camera, or another user’s device.
+
+MOBILE EXPERIENCE
+
+For iPhone/iPad/Android:
+
+Use native capabilities through appropriate platform APIs.
+
+If using Expo/React Native, use development builds and native modules/configuration where required. Do not build a fake recorder simply because a particular Expo managed feature cannot perform native capture.
+
+Provide:
+
+* Mobile-first dashboard
+* Large recording button
+* Quick Record
+* Recording library
+* Editor
+* Settings
+* Storage manager
+* Share/export controls
+
+DESKTOP EXPERIENCE
+
+For Windows/macOS where supported:
+
+* Screen selection
+* Window selection
+* Monitor selection
+* System audio
+* Microphone
+* Camera
+* Cursor capture
+* Hotkeys
+* Recording controls
+* Multiple-monitor support
+* Hardware encoding
+
+Allow users to select exactly what they intend to capture.
+
+WEB/PWA
+
+Create a web/PWA version using browser APIs where available.
+
+Use:
+
+* Screen Capture API
+* MediaRecorder API
+* Web Audio APIs
+* IndexedDB
+* Web Workers
+* WebCodecs where available
+
+Detect browser capabilities before enabling features.
+
+If the browser cannot perform a requested function, clearly explain why rather than simulating it.
+
+HOTKEYS
+
+Desktop:
+
+* Start/stop recording
+* Pause/resume
+* Screenshot
+* Toggle microphone
+* Toggle camera
+* Open controls
+
+Allow customizable shortcuts.
+
+SETTINGS
+
+Include:
+
+* Recording quality
+* Resolution
+* FPS
+* Bitrate
+* Codec
+* Audio source
+* Microphone
+* Camera
+* Storage location
+* Export format
+* Watermark
+* Hotkeys
+* Appearance
+* Notifications
+* Privacy
+* AI processing
+* Cloud backup
+
+ARCHITECTURE
+
+Use a clean modular architecture.
+
+Preferred technology:
+
+Frontend:
+
+* React
+* TypeScript
+* TailwindCSS
+* Responsive UI
+
+Mobile:
+
+* React Native / Expo where appropriate
+* Native modules for capabilities unavailable in managed Expo
+
+Desktop:
+
+* Tauri or Electron, or another appropriate native desktop architecture
+
+Backend:
+
+* Node.js
+* Fastify or Express
+* PostgreSQL where persistent cloud data is required
+* Redis where useful
+* Object storage for recordings
+* WebSocket support where appropriate
+
+Video processing:
+
+* Native platform encoders where available
+* FFmpeg for supported desktop/server workflows
+* Hardware acceleration where available
+
+PERFORMANCE
+
+Optimize for long recordings.
+
+Requirements:
+
+* Streaming/chunked recording where appropriate
+* Avoid loading entire videos into memory
+* Background processing
+* Worker threads/processes for encoding
+* Resumable exports
+* Crash recovery
+* Storage monitoring
+* Memory monitoring
+* GPU acceleration where available
+
+TESTING
+
+Create real automated tests for:
+
+* Recording lifecycle
+* Permissions
+* Audio capture
+* Camera capture
+* Pause/resume
+* File creation
+* Export
+* Editing
+* Storage management
+* Crash recovery
+* Authentication
+* Cloud upload/download
+* Search
+* AI processing
+* Security
+
+Test on actual supported devices and operating systems.
+
+CRITICAL REQUIREMENT
+
+NO FAKE FEATURES.
+
+Do not create buttons that merely display:
+
+“Recording…”
+
+“Uploading…”
+
+“Processing…”
+
+without actually performing the operation.
+
+Every implemented feature must either:
+
+1. Perform the real operation, or
+2. Clearly identify itself as unavailable on the current platform and explain the limitation.
+
+Never silently substitute a simulated implementation.
+
+DELIVERABLE
+
+Produce a complete production-ready project containing:
+
+* Source code
+* Native configuration
+* Mobile configuration
+* Desktop configuration
+* Web/PWA
+* Backend
+* Database schema where needed
+* API routes
+* Authentication where required
+* Recording engine
+* Video editor
+* Export pipeline
+* Storage manager
+* AI integration layer
+* Tests
+* Error handling
+* Security configuration
+* Environment configuration
+* Documentation
+* Build scripts
+* Deployment configuration
+* CI/CD configuration
+
+The final application should feel like a polished Synthetic Solutions Screen Slappin Edition product, with the recording engine at its core and the UI wrapped around it like a professional creator tool.
+
+Build it as a real application intended to run on actual supported hardware, not as a visual demonstration.

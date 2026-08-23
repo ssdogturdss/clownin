@@ -91,7 +91,8 @@ See [`.env.example`](.env.example) for every variable with inline documentation.
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET` | 48+ char random string (`openssl rand -base64 48`) |
 | `SESSION_SECRET` | 48+ char random string (`openssl rand -base64 48`) |
-| `ADMIN_USER_IDS` | Comma-separated usernames/emails with admin access |
+| `STUDIO_MASTER_KEY` | Required system-user secret for the current single-user deployment |
+| `ADMIN_USER_IDS` | Optional additional usernames/emails with admin access |
 | `OPENAI_API_KEY` | Fallback AI provider key (or configure one via admin panel) |
 | `CORS_ORIGIN` | *(Production)* Comma-separated allowed origins, e.g. `https://clownin.app` |
 
@@ -103,13 +104,13 @@ Run each service in a separate terminal:
 
 ```bash
 # API server (default port 8080)
-PORT=8080 pnpm --filter @workspace/api-server run dev
+pnpm dev:api
 
 # Admin panel (any available port)
-PORT=5174 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run dev
+pnpm dev:admin
 
 # Mobile app (Expo)
-pnpm --filter @workspace/clownin-mobile run dev
+pnpm dev:mobile
 ```
 
 ---
@@ -117,14 +118,14 @@ pnpm --filter @workspace/clownin-mobile run dev
 ## Database
 
 ```bash
-# Apply migrations to your database
-cd lib/db && pnpm push
+# Apply checked-in migrations to your database
+pnpm db:migrate
 
 # Generate a new migration after schema changes
-cd lib/db && pnpm generate
+pnpm db:generate
 
 # Run pending migrations (production-safe)
-cd lib/db && pnpm migrate
+pnpm db:migrate
 ```
 
 ---
@@ -139,7 +140,7 @@ pnpm typecheck:libs
 pnpm --filter @workspace/api-server run build
 
 # Build the admin panel (produces static files)
-PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run build
+pnpm --filter @workspace/admin-panel run build
 ```
 
 ---
@@ -152,7 +153,7 @@ pnpm typecheck
 
 # Individual
 pnpm --filter @workspace/api-server run typecheck
-PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run typecheck
+pnpm --filter @workspace/admin-panel run typecheck
 ```
 
 ---
@@ -176,14 +177,15 @@ pnpm --filter @workspace/api-server run test:watch
 ```bash
 # 1. Configure environment
 cp .env.example .env
-#    Set JWT_SECRET, SESSION_SECRET, ADMIN_USER_IDS, and at least one AI key.
+#    Set DB_PASSWORD, JWT_SECRET, SESSION_SECRET, STUDIO_MASTER_KEY,
+#    and at least one AI key.
 #    DATABASE_URL is set automatically by docker-compose (points to the db service).
 
 # 2. Build and start
 docker compose up --build
 
-# 3. Apply database migrations (first run only)
-docker compose exec api sh -c "cd lib/db && pnpm push"
+# Migrations run automatically before the API starts.
+# To rerun them manually: docker compose run --rm migrate
 ```
 
 The API and admin panel are then available at:
@@ -199,6 +201,7 @@ docker run -p 8080:8080 \
   -e DATABASE_URL="postgresql://..." \
   -e JWT_SECRET="..." \
   -e SESSION_SECRET="..." \
+  -e STUDIO_MASTER_KEY="..." \
   clownin
 ```
 
@@ -218,14 +221,14 @@ cd clownin && pnpm install
 cp .env.example .env && nano .env
 
 # 4. Apply database migrations
-cd lib/db && pnpm migrate && cd ../..
+pnpm db:migrate
 
 # 5. Build
 pnpm --filter @workspace/api-server run build
-PORT=3000 BASE_PATH=/admin-panel/ pnpm --filter @workspace/admin-panel run build
+pnpm --filter @workspace/admin-panel run build
 
-# 6. Copy admin panel dist next to the API server dist so it is served at /admin-panel/
-cp -r artifacts/admin-panel/dist artifacts/api-server/dist/admin-panel
+# 6. Point the API at the static admin build when it should serve it directly
+export ADMIN_PANEL_DIR="$PWD/artifacts/admin-panel/dist"
 
 # 7. Start
 PORT=8080 node artifacts/api-server/dist/index.mjs
@@ -266,7 +269,7 @@ The application runs as a standard Node.js process and can be deployed to any en
 - **Railway / Render** — point at the repo; set env vars from `.env.example`
 - **Any Node.js host** — build with `pnpm run build`, start with `node artifacts/api-server/dist/index.mjs`
 
-The admin panel is a static Vite build served by the API server at `/admin-panel/` in Docker. In Replit it runs as a separate Vite dev process.
+The admin panel is a static Vite build served by the API server at `/admin-panel/` in Docker. For a bare Node deployment, set `ADMIN_PANEL_DIR` to `artifacts/admin-panel/dist`; an Nginx deployment can instead serve that directory directly.
 
 ---
 
@@ -287,7 +290,8 @@ GitHub Actions runs on every push and pull request to `main`:
 1. Install dependencies (`pnpm install --frozen-lockfile`)
 2. Type-check all packages (API server, admin panel, mobile)
 3. Build the API server and admin panel
-4. Run the full test suite (258 tests) against a real PostgreSQL instance
+4. Run the full test suite and apply checked-in migrations to a real PostgreSQL instance
+5. Bring up Docker Compose, then smoke-test the health route and bundled admin panel
 
 No Replit account or secrets required to run CI.
 
@@ -297,9 +301,9 @@ No Replit account or secrets required to run CI.
 
 | Problem | Fix |
 |---------|-----|
-| `PORT environment variable is required` | Set `PORT=8080` (dev server) or run `vite build` (production build auto-detects) |
+| API is unreachable from a native Expo build | Set `EXPO_PUBLIC_API_URL` to the public API origin before starting or exporting Expo |
 | `DATABASE_URL is required` | Copy `.env.example` → `.env` and fill in a valid Postgres URL |
 | `No AI provider configured` | Set `OPENAI_API_KEY` in `.env`, or add a key in the admin panel |
 | Admin panel shows 404 | In Docker: built-in; in dev: run the admin panel separately on its own port |
 | `Invalid or expired token` | JWT token has expired — log in again; check `JWT_SECRET` hasn't changed |
-| DB migration fails | Ensure `DATABASE_URL` points to a reachable Postgres instance; run `cd lib/db && pnpm push` |
+| DB migration fails | Ensure `DATABASE_URL` points to a reachable Postgres instance; run `pnpm db:migrate` |

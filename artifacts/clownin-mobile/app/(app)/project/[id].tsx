@@ -41,6 +41,7 @@ import type { ProjectFile } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
+import { apiUrl } from '@/lib/apiUrl';
 import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -565,10 +566,7 @@ export default function ProjectEditorScreen() {
     const currentToken = runTokenRef.current;
     if (!currentToken || !text) return;
     try {
-      const apiHost = Platform.OS === 'web' && typeof window !== 'undefined'
-        ? window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')
-        : process.env.EXPO_PUBLIC_DOMAIN ?? '';
-      const response = await fetch(`https://${apiHost}/api/projects/${projectId}/stdin`, {
+      const response = await fetch(apiUrl(`/api/projects/${projectId}/stdin`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ token: currentToken, data: text }),
@@ -614,10 +612,7 @@ export default function ProjectEditorScreen() {
     const runStartTime = Date.now();
 
     try {
-      const apiHost = Platform.OS === 'web' && typeof window !== 'undefined'
-        ? window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev')
-        : process.env.EXPO_PUBLIC_DOMAIN ?? '';
-      const url = `https://${apiHost}/api/projects/${projectId}/execute`;
+      const url = apiUrl(`/api/projects/${projectId}/execute`);
       const response = await expoFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -680,13 +675,6 @@ export default function ProjectEditorScreen() {
   useEffect(() => { handleRunRef.current = handleRun; }, [handleRun]);
 
   // ── Serve: helper to get the API base URL ──────────────────────────────────
-  const getApiHost = useCallback((): string => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      return window.location.hostname.replace('.expo.kirk.replit.dev', '.kirk.replit.dev');
-    }
-    return process.env.EXPO_PUBLIC_DOMAIN ?? '';
-  }, []);
-
   // The serve proxy intentionally requires a short-lived, project-bound
   // capability. Exchange the authenticated workspace session for that
   // capability before opening a preview in a browser or WebView; the proxy
@@ -694,7 +682,7 @@ export default function ProjectEditorScreen() {
   const getAuthorizedServeUrl = useCallback(async (url: string): Promise<string> => {
     if (!token) throw new Error('Sign in to open the live preview');
 
-    const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve/preview-token`, {
+    const response = await fetch(apiUrl(`/api/projects/${projectId}/serve/preview-token`), {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error(`Could not authorize preview (${response.status})`);
@@ -704,7 +692,7 @@ export default function ProjectEditorScreen() {
 
     const separator = url.includes('?') ? '&' : '?';
     return `${url}${separator}preview_token=${encodeURIComponent(data.token)}`;
-  }, [token, projectId, getApiHost]);
+  }, [token, projectId]);
 
   const recoverStartedServe = useCallback(async (): Promise<boolean> => {
     // The API can finish launching a sandbox after a browser proxy has already
@@ -712,7 +700,7 @@ export default function ProjectEditorScreen() {
     // briefly so a live preview is not reported as a failed start.
     for (let attempt = 0; attempt < 6; attempt += 1) {
       try {
-        const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+        const response = await fetch(apiUrl(`/api/projects/${projectId}/serve`), {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (response.ok) {
@@ -733,15 +721,14 @@ export default function ProjectEditorScreen() {
       if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 250));
     }
     return false;
-  }, [token, projectId, getApiHost, getAuthorizedServeUrl, openTerminal]);
+  }, [token, projectId, getAuthorizedServeUrl, openTerminal]);
 
   // ── Clean install ──────────────────────────────────────────────────────────
   // Wipes node_modules / .venv so the next run reinstalls from scratch.
   const handleCleanInstall = useCallback(async () => {
     if (!token) return;
-    const apiHost = getApiHost();
     try {
-      const response = await fetch(`https://${apiHost}/api/projects/${projectId}/clean`, {
+      const response = await fetch(apiUrl(`/api/projects/${projectId}/clean`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -754,7 +741,7 @@ export default function ProjectEditorScreen() {
       addLine('stderr', '[Failed to clear package cache: network error]');
     }
     openTerminal();
-  }, [token, projectId, getApiHost, addLine, openTerminal]);
+  }, [token, projectId, addLine, openTerminal]);
 
   const handleRunLongPress = useCallback(async () => {
     if (!hasDepFiles) return;
@@ -772,7 +759,7 @@ export default function ProjectEditorScreen() {
   // ── Serve: check whether a server is already running on mount ─────────────
   useEffect(() => {
     if (!token) return;
-    fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+    fetch(apiUrl(`/api/projects/${projectId}/serve`), {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -796,7 +783,7 @@ export default function ProjectEditorScreen() {
 
     (async () => {
       try {
-        const url = `https://${getApiHost()}/api/projects/${projectId}/serve/logs`;
+        const url = apiUrl(`/api/projects/${projectId}/serve/logs`);
         const response = await expoFetch(url, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}` },
@@ -860,7 +847,7 @@ export default function ProjectEditorScreen() {
     })();
 
     return () => { aborted = true; };
-  }, [isServing, token, projectId, getApiHost, addLine, getAuthorizedServeUrl, openTerminal]);
+  }, [isServing, token, projectId, addLine, getAuthorizedServeUrl, openTerminal]);
 
   // ── Start a long-lived server process ─────────────────────────────────────
   const handleServe = useCallback(async () => {
@@ -873,7 +860,7 @@ export default function ProjectEditorScreen() {
     openTerminal();
     addLine('system', '$ Starting server…');
     try {
-      const response = await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+      const response = await fetch(apiUrl(`/api/projects/${projectId}/serve`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ fileId: selectedFileId }),
@@ -898,7 +885,7 @@ export default function ProjectEditorScreen() {
     } finally {
       setIsServeLaunching(false);
     }
-  }, [selectedFileId, token, projectId, isServeLaunching, isServing, getApiHost, openTerminal, addLine, getAuthorizedServeUrl, recoverStartedServe]);
+  }, [selectedFileId, token, projectId, isServeLaunching, isServing, openTerminal, addLine, getAuthorizedServeUrl, recoverStartedServe]);
 
   // ── Stop the running server ────────────────────────────────────────────────
   const handleStopServe = useCallback(async () => {
@@ -910,13 +897,13 @@ export default function ProjectEditorScreen() {
     setActivePane('terminal');
     addLine('system', '[Stopping server…]');
     try {
-      await fetch(`https://${getApiHost()}/api/projects/${projectId}/serve`, {
+      await fetch(apiUrl(`/api/projects/${projectId}/serve`), {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch { /* best effort */ }
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  }, [token, projectId, getApiHost, addLine]);
+  }, [token, projectId, addLine]);
 
   // ── Create file ───────────────────────────────────────────────────────────
   const handleCreateFile = async () => {
@@ -1437,7 +1424,7 @@ export default function ProjectEditorScreen() {
                       const currentToken = runTokenRef.current;
                       if (!currentToken || !token) return;
                       try {
-                        await fetch(`https://${getApiHost()}/api/projects/${projectId}/execute/cancel`, {
+                        await fetch(apiUrl(`/api/projects/${projectId}/execute/cancel`), {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                           body: JSON.stringify({ token: currentToken }),

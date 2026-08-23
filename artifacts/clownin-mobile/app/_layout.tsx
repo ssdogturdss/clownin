@@ -14,10 +14,12 @@ import {
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { Platform } from 'react-native';
 import { setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { initializeRevenueCat, SubscriptionProvider } from '@/lib/revenuecat';
+import { resolveApiBaseUrl } from '@/lib/apiUrl';
+
+export { resolveApiBaseUrl } from '@/lib/apiUrl';
 
 // Initialize RevenueCat once at app startup, before any purchase UI is shown.
 // Silently skips if API keys are not yet configured (dev without RC set up).
@@ -32,25 +34,6 @@ try {
   } else {
     Alert.alert('RevenueCat Unavailable', err instanceof Error ? err.message : 'Unknown error');
   }
-}
-
-// Resolve the correct API base URL at runtime so it works both in Expo Go
-// (native) and in the Expo web preview (browser on any device).
-//
-// The Expo web preview runs at:  <id>.expo.kirk.replit.dev
-// The API server lives at:       <id>.kirk.replit.dev/api
-// → strip ".expo" from the hostname to get the API domain.
-// On native, fall back to the EXPO_PUBLIC_DOMAIN env var baked in at bundle time.
-export function resolveApiBaseUrl(): string | null {
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    const host = window.location.hostname;
-    const apiHost = host.replace('.expo.kirk.replit.dev', '.kirk.replit.dev');
-    if (apiHost !== host) return `https://${apiHost}`;
-    // Not on the Expo subdomain — use relative paths (same-origin proxy)
-    return null;
-  }
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  return domain ? `https://${domain}` : null;
 }
 
 setBaseUrl(resolveApiBaseUrl());
