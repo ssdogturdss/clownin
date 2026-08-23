@@ -61,10 +61,14 @@ export function OnboardingScreen({
         duration: 200,
         useNativeDriver: true,
       }).start();
-      // Countdown from COUNTDOWN_MS to 0
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      if (!pendingTemplate) {
+        setCountdown(0);
+        return;
+      }
+      // Auto-matched templates proceed after a short confirmation window.
       const startTime = Date.now();
       setCountdown(COUNTDOWN_MS);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = setInterval(() => {
         const elapsed = Date.now() - startTime;
         const remaining = Math.max(0, COUNTDOWN_MS - elapsed);

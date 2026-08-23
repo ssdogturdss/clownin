@@ -240,7 +240,7 @@ export default function TemplatesScreen() {
             Templates
           </Text>
           <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
-            Start with a working project
+            {assistMode ? 'Choose a starting point for Assist' : 'Start with a working project'}
           </Text>
         </View>
         <View style={{ width: 36 }} />
