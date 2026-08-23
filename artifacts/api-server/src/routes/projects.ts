@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, conversationSessionsTable, projectEnvVarsTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, conversationMessagesTable, conversationSessionsTable, projectEnvVarsTable, agentRunSnapshotsTable } from "@workspace/db";
 import { eq, and, count, sql, asc, desc, isNotNull, isNull, inArray } from "drizzle-orm";
 import { requireAuth, getUser } from "../lib/auth";
 import { randomBytes } from "crypto";
@@ -579,6 +579,269 @@ router.delete(
       .where(eq(conversationMessagesTable.projectId, projectId));
 
     res.json({ ok: true });
+  },
+);
+
+// ── Agent run history & restore ────────────────────────────────────────────────
+
+/** List recent agent runs for a project (newest first, up to 30). */
+router.get(
+  "/projects/:id/runs",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    const runs = await db
+      .select({
+        runId: agentRunSnapshotsTable.runId,
+        sessionId: agentRunSnapshotsTable.sessionId,
+        changedPaths: agentRunSnapshotsTable.changedPaths,
+        createdPaths: agentRunSnapshotsTable.createdPaths,
+        deletedPaths: agentRunSnapshotsTable.deletedPaths,
+        renamedPaths: agentRunSnapshotsTable.renamedPaths,
+        createdAt: agentRunSnapshotsTable.createdAt,
+      })
+      .from(agentRunSnapshotsTable)
+      .where(eq(agentRunSnapshotsTable.projectId, projectId))
+      .orderBy(desc(agentRunSnapshotsTable.createdAt))
+      .limit(30);
+
+    res.json(
+      runs.map((r) => ({
+        runId: r.runId,
+        sessionId: r.sessionId,
+        createdAt: r.createdAt,
+        changedFiles: {
+          modified: JSON.parse(r.changedPaths) as string[],
+          created:  JSON.parse(r.createdPaths) as string[],
+          deleted:  JSON.parse(r.deletedPaths) as string[],
+          renamed:  JSON.parse(r.renamedPaths) as Array<{ from: string; to: string }>,
+        },
+      }))
+    );
+  },
+);
+
+/** Return a before/after diff for a specific agent run. */
+router.get(
+  "/projects/:id/runs/:runId/diff",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    const { runId } = req.params as { runId: string };
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    const [snapshot] = await db
+      .select()
+      .from(agentRunSnapshotsTable)
+      .where(and(eq(agentRunSnapshotsTable.runId, runId), eq(agentRunSnapshotsTable.projectId, projectId)))
+      .limit(1);
+    if (!snapshot) { res.status(404).json({ error: "run not found" }); return; }
+
+    const changedPaths: string[] = JSON.parse(snapshot.changedPaths);
+    const createdPaths: string[] = JSON.parse(snapshot.createdPaths);
+    const deletedPaths: string[] = JSON.parse(snapshot.deletedPaths);
+    const renamedPaths: Array<{ from: string; to: string }> = JSON.parse(snapshot.renamedPaths);
+
+    // fileSnapshots stores {before, after} per path (new format) or string|null (legacy = before only).
+    // Use getSnapshotState() so both formats work.
+    type FileMutationState = { before: string | null; after: string | null };
+    const rawSnapshots: Record<string, FileMutationState | string | null> = JSON.parse(snapshot.fileSnapshots);
+    function getSnapshotState(path: string): FileMutationState {
+      const raw = rawSnapshots[path];
+      if (raw !== null && typeof raw === "object") return raw as FileMutationState;
+      // Legacy: value is just the "before" string (or null = agent created)
+      return { before: raw as string | null, after: null };
+    }
+
+    type ChangeEntry = {
+      path: string;
+      type: "modified" | "created" | "deleted" | "renamed_from" | "renamed_to";
+      contentBefore: string | null;
+      contentAfter:  string | null;
+    };
+
+    const changes: ChangeEntry[] = [];
+
+    for (const path of changedPaths) {
+      const state = getSnapshotState(path);
+      changes.push({ path, type: "modified", contentBefore: state.before, contentAfter: state.after });
+    }
+    for (const path of createdPaths) {
+      const state = getSnapshotState(path);
+      changes.push({ path, type: "created", contentBefore: null, contentAfter: state.after });
+    }
+    for (const path of deletedPaths) {
+      const state = getSnapshotState(path);
+      changes.push({ path, type: "deleted", contentBefore: state.before, contentAfter: null });
+    }
+    for (const { from, to } of renamedPaths) {
+      const fromState = getSnapshotState(from);
+      const toState   = getSnapshotState(to);
+      changes.push({ path: from, type: "renamed_from", contentBefore: fromState.before, contentAfter: null });
+      changes.push({ path: to,   type: "renamed_to",   contentBefore: null,             contentAfter: toState.after });
+    }
+
+    res.json({
+      runId: snapshot.runId,
+      projectId: snapshot.projectId,
+      sessionId: snapshot.sessionId,
+      createdAt: snapshot.createdAt,
+      changes,
+    });
+  },
+);
+
+/**
+ * Restore project files to their state before a specific agent run.
+ *
+ * Body: { paths?: string[], force?: boolean }
+ *   - paths: optional subset of paths to restore; omit to restore all
+ *   - force: if true, overwrite even files that have been edited after the run
+ *
+ * Returns:
+ *   { ok: true, restored: string[] }          on success
+ *   { requiresConfirm: true, newerFiles: string[] }  when user edits would be lost
+ */
+router.post(
+  "/projects/:id/runs/:runId/restore",
+  requireAuth,
+  async (req, res): Promise<void> => {
+    const { userId } = getUser(req);
+    const projectId = parseInt(req.params["id"] as string, 10);
+    const { runId } = req.params as { runId: string };
+    if (isNaN(projectId)) { res.status(400).json({ error: "invalid project id" }); return; }
+
+    const [project] = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(and(eq(projectsTable.id, projectId), eq(projectsTable.userId, userId)))
+      .limit(1);
+    if (!project) { res.status(404).json({ error: "project not found" }); return; }
+
+    const [snapshot] = await db
+      .select()
+      .from(agentRunSnapshotsTable)
+      .where(and(eq(agentRunSnapshotsTable.runId, runId), eq(agentRunSnapshotsTable.projectId, projectId)))
+      .limit(1);
+    if (!snapshot) { res.status(404).json({ error: "run not found" }); return; }
+
+    // Reject incomplete snapshots — completedAt is set in the agent's finally block
+    // after all mutations are done; without it we may restore a partial run.
+    if (!snapshot.completedAt) {
+      res.status(409).json({ error: "run not yet finalized — try again in a moment" });
+      return;
+    }
+
+    const { paths: requestedPaths, force = false } = (req.body ?? {}) as {
+      paths?: string[];
+      force?: boolean;
+    };
+
+    // fileSnapshots stores {before, after} per path (new format) or string|null (legacy = before only).
+    type FileMutationState = { before: string | null; after: string | null };
+    const rawSnapshots: Record<string, FileMutationState | string | null> = JSON.parse(snapshot.fileSnapshots);
+    function getContentBefore(path: string): string | null | undefined {
+      const raw = rawSnapshots[path];
+      if (raw === undefined) return undefined;
+      if (raw !== null && typeof raw === "object") return (raw as FileMutationState).before;
+      return raw as string | null; // legacy: value IS the before content
+    }
+
+    // All tracked paths are in rawSnapshots — rename "to" paths are included in new format
+    let pathsToRestore = Object.keys(rawSnapshots);
+
+    if (requestedPaths && requestedPaths.length > 0) {
+      const requested = new Set(requestedPaths);
+      pathsToRestore = pathsToRestore.filter((p) => requested.has(p));
+    }
+
+    if (pathsToRestore.length === 0) {
+      res.json({ ok: true, restored: [] });
+      return;
+    }
+
+    // Fetch current state of all paths we might touch
+    const currentFiles = await db
+      .select({ path: projectFilesTable.path, content: projectFilesTable.content, updatedAt: projectFilesTable.updatedAt, id: projectFilesTable.id, language: projectFilesTable.language })
+      .from(projectFilesTable)
+      .where(and(eq(projectFilesTable.projectId, projectId), inArray(projectFilesTable.path, pathsToRestore)));
+    const currentMap = new Map(currentFiles.map((f) => [f.path, f]));
+
+    // Safety check: find files the user edited AFTER the agent finished.
+    // We compare against completedAt (set in the agent's finally block after all
+    // mutations are done), not createdAt (set before mutations begin). Files the
+    // agent itself wrote will have updatedAt <= completedAt, so they won't
+    // trigger a false positive.
+    if (!force) {
+      const baseline = snapshot.completedAt ?? snapshot.createdAt;
+      const newerFiles: string[] = [];
+      for (const path of pathsToRestore) {
+        const current = currentMap.get(path);
+        if (current && current.updatedAt > baseline) {
+          newerFiles.push(path);
+        }
+      }
+      if (newerFiles.length > 0) {
+        res.json({ requiresConfirm: true, newerFiles });
+        return;
+      }
+    }
+
+    // Perform restore operations
+    const restored: string[] = [];
+    for (const path of pathsToRestore) {
+      const contentBefore = getContentBefore(path);
+      const current = currentMap.get(path);
+
+      if (contentBefore === undefined) {
+        // Path not in snapshot — skip (shouldn't happen with Object.keys)
+        continue;
+      } else if (contentBefore === null) {
+        // File was created (or rename-placed) by the agent — delete it
+        if (current) {
+          await db.delete(projectFilesTable).where(eq(projectFilesTable.id, current.id));
+          restored.push(path);
+        }
+      } else {
+        // File existed before — restore its original content
+        if (current) {
+          await db.update(projectFilesTable)
+            .set({ content: contentBefore, updatedAt: new Date() })
+            .where(eq(projectFilesTable.id, current.id));
+        } else {
+          // File was deleted by the agent — recreate it
+          await db.insert(projectFilesTable).values({
+            projectId,
+            path,
+            content: contentBefore,
+            language: "plaintext",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+        restored.push(path);
+      }
+    }
+
+    res.json({ ok: true, restored });
   },
 );
 

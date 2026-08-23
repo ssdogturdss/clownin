@@ -57,7 +57,21 @@ type DateDividerMsg = { id: string; kind: "date_divider"; label: string };
 type ImageResultMsg = { id: string; kind: "image_result"; callId: string; dataUri: string };
 type VideoResultMsg = { id: string; kind: "video_result"; callId: string; url: string | null; hasB64: boolean };
 
-type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg | ImageResultMsg | VideoResultMsg;
+type ChangedFiles = {
+  modified: string[];
+  created:  string[];
+  deleted:  string[];
+  renamed:  Array<{ from: string; to: string }>;
+};
+
+type ChangeHistoryMsg = {
+  id: string;
+  kind: "change_history";
+  runId: string;
+  changedFiles: ChangedFiles;
+};
+
+type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg | ImageResultMsg | VideoResultMsg | ChangeHistoryMsg;
 
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
@@ -476,6 +490,12 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   // ── Image save-to-project state ───────────────────────────────────────────
   const [imageSaveState, setImageSaveState] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
 
+  // ── Change history / restore state ────────────────────────────────────────
+  // runId → "idle" | "restoring" | "restored" | "error"
+  const [restoreState, setRestoreState] = useState<Record<string, "idle" | "restoring" | "restored" | "error">>({});
+  // per-run expanded state
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
+
   const handleSaveImage = useCallback(async (imgId: string, dataUri: string) => {
     setImageSaveState((prev) => ({ ...prev, [imgId]: "saving" }));
     try {
@@ -492,6 +512,38 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       onFilesChanged?.();
     } catch {
       setImageSaveState((prev) => ({ ...prev, [imgId]: "error" }));
+    }
+  }, [projectId, token, onFilesChanged]);
+
+  // ── Restore handler ────────────────────────────────────────────────────────
+  const handleRestore = useCallback(async (runId: string, paths?: string[], force = false) => {
+    setRestoreState((prev) => ({ ...prev, [runId]: "restoring" }));
+    try {
+      const base = resolveApiBaseUrl();
+      const res = await fetch(`${base}/api/projects/${projectId}/runs/${runId}/restore`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ paths, force }),
+      });
+      const data = await res.json() as { ok?: boolean; requiresConfirm?: boolean; newerFiles?: string[]; restored?: string[] };
+      if (!res.ok) throw new Error("Restore failed");
+      if (data.requiresConfirm && data.newerFiles) {
+        // Some files were edited after the run — confirm before overwriting
+        setRestoreState((prev) => ({ ...prev, [runId]: "idle" }));
+        Alert.alert(
+          "Overwrite newer changes?",
+          `These files were edited after the agent ran:\n\n${data.newerFiles.join("\n")}\n\nRestore anyway?`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Restore anyway", style: "destructive", onPress: () => handleRestore(runId, paths, true) },
+          ],
+        );
+        return;
+      }
+      setRestoreState((prev) => ({ ...prev, [runId]: "restored" }));
+      onFilesChanged?.();
+    } catch {
+      setRestoreState((prev) => ({ ...prev, [runId]: "error" }));
     }
   }, [projectId, token, onFilesChanged]);
 
@@ -547,6 +599,40 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
             role: m.role as "user" | "assistant",
             content: m.content,
           }));
+
+          // Load run history for this session so change-history cards survive reload
+          try {
+            const runsRes = await fetch(
+              `${baseUrl}/api/projects/${projectId}/runs`,
+              { headers: { Authorization: `Bearer ${token}` } },
+            );
+            if (runsRes.ok) {
+              type RunSummary = {
+                runId: string;
+                sessionId: string | null;
+                createdAt: string;
+                changedFiles: ChangedFiles;
+              };
+              const runs: RunSummary[] = await runsRes.json();
+              // Only inject runs from the current session that touched at least one file
+              const sessionRuns = runs.filter((r) => {
+                if (r.sessionId !== latest.sessionId) return false;
+                const { modified, created, deleted, renamed } = r.changedFiles;
+                return modified.length + created.length + deleted.length + renamed.length > 0;
+              });
+              if (sessionRuns.length > 0) {
+                setMessages((prev) => [
+                  ...prev,
+                  ...sessionRuns.map((r) => ({
+                    id: `ch-${r.runId}`,
+                    kind: "change_history" as const,
+                    runId: r.runId,
+                    changedFiles: r.changedFiles,
+                  })),
+                ]);
+              }
+            }
+          } catch { /* run history is non-fatal */ }
         } catch { /* non-fatal */ }
       })
       .catch(() => {/* non-fatal */})
@@ -945,13 +1031,33 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                 ];
               }
               // Capture the sessionId and provider the server used for this turn
-              const { sessionId: serverSessionId, provider: serverProvider } = (event.payload ?? {}) as { sessionId?: string; provider?: string };
+              const { sessionId: serverSessionId, provider: serverProvider, runId: serverRunId, changedFiles: serverChangedFiles } =
+                (event.payload ?? {}) as { sessionId?: string; provider?: string; runId?: string; changedFiles?: ChangedFiles };
               if (serverSessionId && serverSessionId !== currentSessionIdRef.current) {
                 currentSessionIdRef.current = serverSessionId;
                 setCurrentSessionId(serverSessionId);
               }
               if (serverProvider) {
                 setActiveProvider(serverProvider);
+              }
+              // If the agent changed files, show a change-history card after the agent message
+              if (serverRunId && serverChangedFiles) {
+                const totalChanges =
+                  serverChangedFiles.modified.length +
+                  serverChangedFiles.created.length +
+                  serverChangedFiles.deleted.length +
+                  serverChangedFiles.renamed.length;
+                if (totalChanges > 0) {
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      id: `ch-${serverRunId}`,
+                      kind: "change_history",
+                      runId: serverRunId,
+                      changedFiles: serverChangedFiles,
+                    },
+                  ]);
+                }
               }
               break;
             }
@@ -1145,9 +1251,115 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
         );
       }
 
+      if (item.kind === "change_history") {
+        const { runId, changedFiles } = item;
+        const rState = restoreState[runId] ?? "idle";
+        const isExpanded = expandedRuns[runId] ?? false;
+        const allChangedPaths: Array<{ path: string; type: "modified" | "created" | "deleted" | "renamed" }> = [
+          ...changedFiles.modified.map((p) => ({ path: p, type: "modified" as const })),
+          ...changedFiles.created.map((p)  => ({ path: p, type: "created"  as const })),
+          ...changedFiles.deleted.map((p)  => ({ path: p, type: "deleted"  as const })),
+          ...changedFiles.renamed.map((r)  => ({ path: `${r.from} → ${r.to}`, type: "renamed" as const })),
+        ];
+        const totalCount = allChangedPaths.length;
+
+        const typeColor = (type: string) => {
+          if (type === "created")  return colors.success;
+          if (type === "deleted")  return colors.destructive;
+          if (type === "renamed")  return colors.primary;
+          return colors.mutedForeground;
+        };
+        const typeIcon = (type: string) => {
+          if (type === "created")  return "plus-circle-outline";
+          if (type === "deleted")  return "minus-circle-outline";
+          if (type === "renamed")  return "file-move-outline";
+          return "pencil-outline";
+        };
+
+        return (
+          <View style={[styles.changeHistoryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {/* Header row */}
+            <Pressable
+              style={styles.changeHistoryHeader}
+              onPress={() => setExpandedRuns((prev) => ({ ...prev, [runId]: !isExpanded }))}
+            >
+              <MaterialCommunityIcons name="history" size={14} color={colors.mutedForeground} />
+              <Text style={[styles.changeHistoryTitle, { color: colors.foreground }]}>
+                {totalCount} file{totalCount !== 1 ? "s" : ""} changed
+              </Text>
+              <MaterialCommunityIcons
+                name={isExpanded ? "chevron-up" : "chevron-down"}
+                size={14}
+                color={colors.mutedForeground}
+              />
+            </Pressable>
+
+            {/* File list — shown when expanded */}
+            {isExpanded && (
+              <View style={styles.changeHistoryFiles}>
+                {allChangedPaths.map(({ path, type }) => (
+                  <View key={path} style={styles.changeHistoryFileRow}>
+                    <MaterialCommunityIcons
+                      name={typeIcon(type) as never}
+                      size={13}
+                      color={typeColor(type)}
+                    />
+                    <Text
+                      style={[styles.changeHistoryFilePath, { color: colors.foreground }]}
+                      numberOfLines={1}
+                    >
+                      {path}
+                    </Text>
+                    <Text style={[styles.changeHistoryFileBadge, { color: typeColor(type) }]}>
+                      {type}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Restore button */}
+            <View style={styles.changeHistoryActions}>
+              {rState === "restored" ? (
+                <View style={styles.changeHistoryRestoredRow}>
+                  <MaterialCommunityIcons name="check-circle-outline" size={14} color={colors.success} />
+                  <Text style={[styles.changeHistoryRestoredText, { color: colors.success }]}>Restored</Text>
+                </View>
+              ) : rState === "error" ? (
+                <Pressable
+                  style={[styles.changeHistoryRestoreBtn, { borderColor: colors.destructive }]}
+                  onPress={() => handleRestore(runId)}
+                >
+                  <MaterialCommunityIcons name="alert-circle-outline" size={13} color={colors.destructive} />
+                  <Text style={[styles.changeHistoryRestoreBtnText, { color: colors.destructive }]}>Retry restore</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={[
+                    styles.changeHistoryRestoreBtn,
+                    { borderColor: colors.border, opacity: rState === "restoring" ? 0.5 : 1 },
+                  ]}
+                  onPress={() => handleRestore(runId)}
+                  disabled={rState === "restoring" || busy}
+                >
+                  {rState === "restoring" ? (
+                    <ActivityIndicator size={12} color={colors.mutedForeground} />
+                  ) : (
+                    <MaterialCommunityIcons name="restore" size={13} color={colors.mutedForeground} />
+                  )}
+                  <Text style={[styles.changeHistoryRestoreBtnText, { color: colors.mutedForeground }]}>
+                    {rState === "restoring" ? "Restoring…" : "Undo all changes"}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+      }
+
       return null;
     },
-    [colors, imageSaveState, handleSaveImage]
+    [colors, imageSaveState, handleSaveImage, restoreState, expandedRuns, handleRestore, busy]
   );
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -1627,4 +1839,36 @@ const styles = StyleSheet.create({
   pickerRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 11 },
   pickerLabel: { fontSize: 14 },
   pickerDivider: { height: 1, marginHorizontal: 14 },
+
+  // Change history card
+  changeHistoryCard: {
+    marginLeft: 34, borderWidth: 1, borderRadius: 10, overflow: "hidden",
+  },
+  changeHistoryHeader: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 10, paddingVertical: 8,
+  },
+  changeHistoryTitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", flex: 1 },
+  changeHistoryFiles: { paddingHorizontal: 10, paddingBottom: 8, gap: 4 },
+  changeHistoryFileRow: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+  },
+  changeHistoryFilePath: {
+    fontSize: 11, fontFamily: "monospace", flex: 1,
+  },
+  changeHistoryFileBadge: {
+    fontSize: 10, fontFamily: "Inter_400Regular", textTransform: "uppercase",
+  },
+  changeHistoryActions: {
+    paddingHorizontal: 10, paddingBottom: 8,
+  },
+  changeHistoryRestoreBtn: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    alignSelf: "flex-start",
+  },
+  changeHistoryRestoreBtnText: { fontSize: 12 },
+  changeHistoryRestoredRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  changeHistoryRestoredText: { fontSize: 12 },
 });

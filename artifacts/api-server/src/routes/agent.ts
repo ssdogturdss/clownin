@@ -4,7 +4,7 @@ import { runRemoteProcess } from "../lib/sshExecution";
 import { join } from "path";
 import { randomBytes, createHash } from "crypto";
 import AdmZip from "adm-zip";
-import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable, conversationSessionsTable } from "@workspace/db";
+import { db, projectsTable, projectFilesTable, usersTable, serversTable, projectEnvVarsTable, conversationMessagesTable, conversationSessionsTable, agentRunSnapshotsTable } from "@workspace/db";
 import { eq, and, or, ne, lt, isNull, isNotNull, sql, asc, desc } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { requireAuth, getUser } from "../lib/auth";
@@ -1289,6 +1289,66 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     let verificationRequired = false;
     req.on("close", () => { aborted = true; });
 
+    // ── Run snapshot tracking ──────────────────────────────────────────────────
+    // One snapshot per agent invocation lets users review and restore changes.
+    const runId = randomUUID();
+
+    /**
+     * Tracks the before AND after state for every file the agent touches.
+     *   before: null   → file did not exist at run start (agent created it)
+     *   before: string → file's content before the first mutation this run
+     *   after:  null   → file was deleted/renamed-away by the agent
+     *   after:  string → file's content after the last agent write
+     * `before` is fixed on first touch; `after` is updated on every mutation.
+     */
+    interface FileMutationState { before: string | null; after: string | null; }
+    const fileTracker = new Map<string, FileMutationState>();
+    const runRenamedPaths: Array<{ from: string; to: string }> = [];
+
+    /**
+     * Collapse chained renames (a→b→c) to the single net operation (a→c).
+     * Paths that appear as both a rename destination and a rename source are
+     * intermediates; the caller can exclude them from the simple category lists.
+     */
+    function collapseRenames(pairs: Array<{ from: string; to: string }>) {
+      if (pairs.length === 0) return pairs;
+      const pairsMap = new Map(pairs.map((p) => [p.from, p.to]));
+      function finalDest(start: string): string {
+        const visited = new Set<string>();
+        let cur = start;
+        while (pairsMap.has(cur) && !visited.has(cur)) { visited.add(cur); cur = pairsMap.get(cur)!; }
+        return cur;
+      }
+      const allDests = new Set(pairs.map((p) => p.to));
+      return pairs
+        .filter((p) => !allDests.has(p.from))          // keep only chain origins
+        .map((p) => ({ from: p.from, to: finalDest(p.from) }));
+    }
+
+    /** Derive the user-visible change summary from the full fileTracker state. */
+    function computeChangeSummary() {
+      // Any path involved in any raw rename pair is shown via the rename summary,
+      // not as a simple create/modify/delete — this includes intermediate chain nodes.
+      const rawFromSet = new Set(runRenamedPaths.map((r) => r.from));
+      const rawToSet   = new Set(runRenamedPaths.map((r) => r.to));
+      const modified: string[] = [];
+      const created:  string[] = [];
+      const deleted:  string[] = [];
+      for (const [path, { before, after }] of fileTracker) {
+        if (rawFromSet.has(path) || rawToSet.has(path)) continue; // part of rename chain
+        if (before !== null && after !== null) modified.push(path);
+        else if (before === null && after !== null) created.push(path);
+        else if (before !== null && after === null) deleted.push(path);
+        // (null, null) = agent created then deleted in same run → net no-op, omit
+      }
+      return { modified, created, deleted, renamed: collapseRenames(runRenamedPaths) };
+    }
+
+    // Insert the placeholder row now; file data is filled lazily during tool calls.
+    await db.insert(agentRunSnapshotsTable)
+      .values({ runId, projectId, sessionId: activeSessionId })
+      .catch(() => {});
+
     try {
       while (iteration < MAX_ITERATIONS && !aborted) {
         iteration++;
@@ -1397,7 +1457,15 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
             finalAgentText = textContent;
             sse("message", { text: textContent });
           }
-          sse("done", { sessionId: activeSessionId, provider: providerResult.provider });
+          {
+            const _cs = computeChangeSummary();
+            const _hasChanges = _cs.modified.length + _cs.created.length + _cs.deleted.length + _cs.renamed.length > 0;
+            sse("done", {
+              sessionId: activeSessionId,
+              provider: providerResult.provider,
+              ...(_hasChanges ? { runId, changedFiles: _cs } : {}),
+            });
+          }
           res.end();
           return;
         }
@@ -1473,6 +1541,12 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   result = `Not found: ${path}. Use create_file for new files.`;
                   isError = true;
                 } else {
+                  // Track before/after for diff and restore.
+                  // Must use explicit has() check — cannot use ??, because before: null
+                  // is a valid state (file was agent-created) that ?? would discard.
+                  const _prior = fileTracker.get(path);
+                  if (_prior) { _prior.after = content; }
+                  else { fileTracker.set(path, { before: existing.content, after: content }); }
                   await db.update(projectFilesTable)
                     .set({ content, updatedAt: new Date() })
                     .where(eq(projectFilesTable.id, existing.id));
@@ -1489,11 +1563,19 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   .where(and(eq(projectFilesTable.projectId, projectId), eq(projectFilesTable.path, path)))
                   .limit(1);
                 if (existing) {
+                  // Track before/after (file existed — treat as modify)
+                  const _prior = fileTracker.get(path);
+                  if (_prior) { _prior.after = content; }
+                  else { fileTracker.set(path, { before: existing.content, after: content }); }
                   await db.update(projectFilesTable)
                     .set({ content, updatedAt: new Date() })
                     .where(eq(projectFilesTable.id, existing.id));
                   result = `Updated ${path} (already existed)`;
                 } else {
+                  // Brand-new file — before: null signals "agent created this"
+                  const _prior = fileTracker.get(path);
+                  if (_prior) { _prior.after = content; }
+                  else { fileTracker.set(path, { before: null, after: content }); }
                   await db.insert(projectFilesTable)
                     .values({ projectId, path, content, language, createdAt: new Date(), updatedAt: new Date() });
                   result = `Created ${path}`;
@@ -1508,6 +1590,10 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   .limit(1);
                 if (!existing) { result = `Not found: ${path}`; isError = true; }
                 else {
+                  // Track before/after (after: null = deleted)
+                  const _prior = fileTracker.get(path);
+                  if (_prior) { _prior.after = null; }
+                  else { fileTracker.set(path, { before: existing.content, after: null }); }
                   await db.delete(projectFilesTable).where(eq(projectFilesTable.id, existing.id));
                   result = `Deleted ${path}`;
                 }
@@ -1816,6 +1902,12 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                 }
 
                 const newContent = row.content.replace(oldStr, newStr);
+                // Track before/after for diff and restore
+                {
+                  const _prior = fileTracker.get(path);
+                  if (_prior) { _prior.after = newContent; }
+                  else { fileTracker.set(path, { before: row.content, after: newContent }); }
+                }
                 await db.update(projectFilesTable)
                   .set({ content: newContent, updatedAt: new Date() })
                   .where(eq(projectFilesTable.id, row.id));
@@ -1839,6 +1931,18 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                 if (conflict) { result = `${newPath} already exists — delete it first.`; isError = true; break; }
 
                 const newLanguage = args.language ? String(args.language) : row.language;
+                // Track rename state without ?? — before: null is valid for agent-created paths.
+                // oldPath: moved away → after: null.  newPath: content arrives here → after: row.content.
+                {
+                  const _priorOld = fileTracker.get(oldPath);
+                  if (_priorOld) { _priorOld.after = null; }
+                  else { fileTracker.set(oldPath, { before: row.content, after: null }); }
+                  // For chained renames newPath may already be tracked (e.g. prior rename placed it here).
+                  const _priorNew = fileTracker.get(newPath);
+                  if (_priorNew) { _priorNew.after = row.content; }
+                  else { fileTracker.set(newPath, { before: null, after: row.content }); }
+                }
+                runRenamedPaths.push({ from: oldPath, to: newPath });
                 await db.update(projectFilesTable)
                   .set({ path: newPath, language: newLanguage, updatedAt: new Date() })
                   .where(eq(projectFilesTable.id, row.id));
@@ -2140,7 +2244,14 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
       }
       if (!aborted) {
         sse("message", { text: finalAgentText });
-        sse("done", { sessionId: activeSessionId, provider: providerResult.provider, status: "incomplete" });
+        const _cs2 = computeChangeSummary();
+        const _hasChanges2 = _cs2.modified.length + _cs2.created.length + _cs2.deleted.length + _cs2.renamed.length > 0;
+        sse("done", {
+          sessionId: activeSessionId,
+          provider: providerResult.provider,
+          status: "incomplete",
+          ...(_hasChanges2 ? { runId, changedFiles: _cs2 } : {}),
+        });
       }
       res.end();
     } catch (err: unknown) {
@@ -2156,6 +2267,25 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
           .insert(conversationMessagesTable)
           .values({ projectId, sessionId: activeSessionId, role: "assistant", content: finalAgentText })
           .catch((err) => req.log.warn({ err }, "Failed to persist assistant message"));
+      }
+
+      // Persist file change snapshot so users can review and restore changes.
+      // completedAt marks when the agent finished — used as the safety baseline
+      // for restore: files with updatedAt > completedAt were edited by the user.
+      {
+        const _cs3 = computeChangeSummary();
+        await db.update(agentRunSnapshotsTable)
+          .set({
+            // fileTracker stores {before, after} per path — both needed for accurate diff
+            fileSnapshots: JSON.stringify(Object.fromEntries(fileTracker)),
+            changedPaths:  JSON.stringify(_cs3.modified),
+            createdPaths:  JSON.stringify(_cs3.created),
+            deletedPaths:  JSON.stringify(_cs3.deleted),
+            renamedPaths:  JSON.stringify(_cs3.renamed),
+            completedAt:   new Date(),
+          })
+          .where(eq(agentRunSnapshotsTable.runId, runId))
+          .catch((err) => req.log.warn({ err }, "Failed to persist run snapshot"));
       }
     }
   }
