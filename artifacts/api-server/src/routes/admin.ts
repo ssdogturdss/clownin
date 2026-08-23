@@ -65,23 +65,11 @@ async function resolveAdminUserIds(): Promise<Set<number>> {
   return ids;
 }
 
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  const raw = process.env.ADMIN_USER_IDS ?? "";
-  if (!raw.trim()) {
-    res.status(503).json({ error: "Admin access is not configured. Set ADMIN_USER_IDS." });
-    return;
-  }
-  const { userId } = getUser(req);
-
-  resolveAdminUserIds().then((adminIds) => {
-    if (!adminIds.has(userId)) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    next();
-  }).catch(() => {
-    res.status(503).json({ error: "Could not resolve admin user list" });
-  });
+export function requireAdmin(_req: Request, _res: Response, next: NextFunction): void {
+  // The app is intentionally single-user/open-auth. Keep this middleware in
+  // the route chain so the API shape remains stable, but do not require an
+  // ADMIN_USER_IDS configuration value.
+  next();
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

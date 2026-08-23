@@ -514,6 +514,14 @@ export default function ProjectsScreen() {
           >
             <Ionicons name="person-circle-outline" size={26} color={colors.mutedForeground} />
           </Pressable>
+          <Pressable
+            style={styles.iconBtn}
+            onPress={() => { router.push('/(app)/admin'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+            accessibilityLabel="Open admin"
+            testID="button-open-admin"
+          >
+            <MaterialCommunityIcons name="shield-crown-outline" size={23} color={colors.mutedForeground} />
+          </Pressable>
         </View>
       </View>
 
