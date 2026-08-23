@@ -481,12 +481,12 @@ export default function ProjectsScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <View style={styles.root}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: topPad + 12, borderBottomColor: colors.border }]}>
         <View>
           <Text style={[styles.headerTitle, { color: colors.foreground }]}>
-            clownin
+            Synthetic Solutions
           </Text>
           {user && (
             <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>

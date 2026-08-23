@@ -68,7 +68,7 @@ export default function RegisterScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.header}>
-        <Text style={styles.title}>Join Clownin</Text>
+        <Text style={styles.title}>Join Synthetic Solutions</Text>
         <Text style={styles.subtitle}>Start coding in seconds</Text>
       </View>
 

@@ -71,9 +71,9 @@ export function SharePreviewModal({
         {
           message: Platform.OS === "ios" ? undefined : previewUrl,
           url: previewUrl, // iOS uses url; android falls back to message
-          title: `${projectName} — Built with Clownin 🤡`,
+          title: `${projectName} — Built with Synthetic Solutions Clownin Edition 🤡`,
         },
-        { subject: `${projectName} — Built with Clownin 🤡` },
+        { subject: `${projectName} — Built with Synthetic Solutions Clownin Edition 🤡` },
       );
       setShared(true);
     } catch {
@@ -212,7 +212,7 @@ function HtmlShareContent({
       </Pressable>
 
       <Text style={[styles.hint, { color: colors.mutedForeground }]}>
-        The link shows the latest saved version of your HTML file with a "Built with Clownin 🤡" badge.
+        The link shows the latest saved version of your HTML file with a "Built with Synthetic Solutions Clownin Edition 🤡" badge.
       </Text>
     </View>
   );

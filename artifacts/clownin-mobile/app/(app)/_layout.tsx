@@ -7,7 +7,7 @@ export default function AppLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: colors.background },
+        contentStyle: { backgroundColor: 'transparent' },
         animation: 'slide_from_right',
       }}
     >

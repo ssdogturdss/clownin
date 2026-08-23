@@ -106,12 +106,12 @@ export function OnboardingScreen({
 
   return (
     <KeyboardAvoidingView
-      style={[styles.root, { backgroundColor: colors.background }]}
+      style={styles.root}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       {/* Skip button */}
       <View style={[styles.topBar, { paddingTop: topPad + 8 }]}>
-        <Text style={[styles.brand, { color: colors.mutedForeground }]}>clownin</Text>
+        <Text style={[styles.brand, { color: colors.mutedForeground }]}>Synthetic Solutions</Text>
         <Pressable onPress={onSkip} hitSlop={12} disabled={isLoading}>
           <Text style={[styles.skipLink, { color: colors.mutedForeground }]}>Skip →</Text>
         </Pressable>

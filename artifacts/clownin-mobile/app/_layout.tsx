@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Image, View } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -96,6 +96,12 @@ export default function RootLayout() {
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={{ flex: 1 }}>
+            {/* Brand wallpaper — 25% opacity behind all screens */}
+            <Image
+              source={require('../assets/images/wallpaper.png')}
+              style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.25 }}
+              resizeMode="cover"
+            />
             <KeyboardProvider>
               <AuthProvider>
                 <SubscriptionProvider>

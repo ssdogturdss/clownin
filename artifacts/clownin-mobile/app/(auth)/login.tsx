@@ -59,8 +59,8 @@ export default function LoginScreen() {
     >
       {/* Logo area */}
       <View style={styles.logoArea}>
-        <Text style={styles.logoText}>clownin</Text>
-        <Text style={styles.logoSub}>The coding playground</Text>
+        <Text style={styles.logoText}>Synthetic Solutions</Text>
+        <Text style={styles.logoSub}>Clownin Edition</Text>
       </View>
 
       {/* Form */}
