@@ -1,15 +1,9 @@
 import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
 
-if (!process.env.JWT_SECRET) {
-  throw new Error(
-    "JWT_SECRET environment variable is required but was not set. " +
-    "Set it to a long random string before starting the server.",
-  );
-}
-
-// Safe after the guard above — process exits if JWT_SECRET is missing
-const JWT_SECRET = process.env.JWT_SECRET as string;
+// JWT_SECRET is only needed for preview-token signing/verification.
+// requireAuth no longer validates tokens — authentication is disabled.
+const JWT_SECRET = process.env.JWT_SECRET ?? "";
 
 export interface AuthPayload {
   userId: number;
@@ -21,6 +15,13 @@ interface PreviewPayload {
   scope: "preview";
   projectId: number;
   userId: number;
+}
+
+// System user ID resolved at startup via ensureSystemUser() in seed.ts.
+// Default 1 is a safe fallback before the DB resolves.
+let systemUserId = 1;
+export function setSystemUserId(id: number): void {
+  systemUserId = id;
 }
 
 export function signToken(payload: AuthPayload): string {
@@ -52,20 +53,17 @@ export function verifyPreviewToken(token: string): PreviewPayload {
   return payload as PreviewPayload;
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  const token = header.slice(7);
-  try {
-    const payload = verifyToken(token);
-    (req as Request & { user: AuthPayload }).user = payload;
-    next();
-  } catch {
-    res.status(401).json({ error: "Invalid or expired token" });
-  }
+/**
+ * Auth is disabled — every request runs as the system user.
+ * Any Authorization header is accepted but its value is ignored.
+ */
+export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
+  (req as Request & { user: AuthPayload }).user = {
+    userId: systemUserId,
+    email: "ss@clownin.dev",
+    username: "admin",
+  };
+  next();
 }
 
 export function getUser(req: Request): AuthPayload {

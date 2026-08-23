@@ -3,6 +3,31 @@ import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { logger } from "./logger";
 
+/**
+ * Find or create the system user (ss@clownin.dev) and return their DB ID.
+ * Called at startup so requireAuth can resolve the correct userId.
+ */
+export async function ensureSystemUser(): Promise<number> {
+  const existing = await db
+    .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.email, "ss@clownin.dev"))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0].id;
+  }
+
+  const passwordHash = await bcrypt.hash("1211", 10);
+  const [user] = await db
+    .insert(usersTable)
+    .values({ username: "admin", email: "ss@clownin.dev", passwordHash })
+    .returning({ id: usersTable.id });
+
+  logger.info({ userId: user.id }, "System user created");
+  return user.id;
+}
+
 export async function seedDemoData(): Promise<void> {
   // Check if demo user already exists
   const existing = await db

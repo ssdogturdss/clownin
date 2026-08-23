@@ -2,7 +2,8 @@ import { createServer } from "http";
 import net from "net";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { seedDemoData } from "./lib/seed";
+import { seedDemoData, ensureSystemUser } from "./lib/seed";
+import { setSystemUserId } from "./lib/auth";
 import { cleanupAllServers, getAuthorizedServerTarget, stopPreviewForRelayFailure } from "./routes/serve";
 
 const rawPort = process.env["PORT"];
@@ -142,6 +143,13 @@ server.on("error", (err) => {
 
 server.listen(serverPort, async () => {
   logger.info({ port: serverPort }, "Server listening");
+  try {
+    const uid = await ensureSystemUser();
+    setSystemUserId(uid);
+    logger.info({ systemUserId: uid }, "Auth disabled — running as system user");
+  } catch (err) {
+    logger.error({ err }, "System user setup failed (non-fatal, defaulting to userId=1)");
+  }
   try {
     await seedDemoData();
   } catch (err) {

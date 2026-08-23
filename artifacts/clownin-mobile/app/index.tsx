@@ -1,21 +1,15 @@
 import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
 import { useColors } from '@/hooks/useColors';
 
+// Auth is disabled — go straight to the app, no login screen.
 export default function RootIndex() {
-  const { token, isLoading } = useAuth();
   const colors = useColors();
 
   useEffect(() => {
-    if (isLoading) return;
-    if (token) {
-      router.replace('/(app)');
-    } else {
-      router.replace('/(auth)/login');
-    }
-  }, [isLoading, token]);
+    router.replace('/(app)');
+  }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
