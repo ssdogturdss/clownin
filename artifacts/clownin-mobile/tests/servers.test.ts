@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { clearServerTestResult, type ServerTestResult } from '../../lib/serverTestResults';
+import { clearServerTestResult, type ServerTestResult } from '../lib/serverTestResults';
 
 describe('clearServerTestResult', () => {
   const result1: ServerTestResult = { ok: true, testedAt: 1_000 };
