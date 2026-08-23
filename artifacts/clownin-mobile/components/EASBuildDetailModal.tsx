@@ -20,6 +20,7 @@ import {
   Share,
   ActionSheetIOS,
   Alert,
+  AppState,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -140,6 +141,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const logOffsetRef  = useRef(0);
   // AbortController for the in-flight fetch — cancelled when the build changes.
   const abortRef      = useRef<AbortController | null>(null);
+  // Tracks current AppState so every interval-start path can guard against
+  // restarting the poll while the app is backgrounded/inactive.
+  const appStateRef   = useRef(AppState.currentState);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -233,15 +237,25 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   }, [build, fetchLogs]);
 
   // ── Polling for active builds ───────────────────────────────────────────────
+  // Only start the interval when the app is in the foreground.  The AppState
+  // listener is responsible for pausing/resuming, so if we're currently
+  // backgrounded we skip creating a new interval here — it will be created
+  // once the app returns to "active".
 
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
     if (!build) return;
     const status = detail?.status ?? build.status;
-    if (isActive(status)) {
+    if (isActive(status) && appStateRef.current === 'active') {
       pollRef.current = setInterval(() => fetchLogs(true), 5_000);
     }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
   }, [build, detail?.status, fetchLogs]);
 
   // ── Stop polling / reset on close ──────────────────────────────────────────
@@ -254,6 +268,42 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     toastOpacity.stopAnimation();
     onClose();
   };
+
+  // ── AppState: pause polling while backgrounded, resume on foregrounding ────
+  // appStateRef is kept in sync here so the polling effect (and any other
+  // interval-start path) can check it synchronously without a stale closure.
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      const prevState = appStateRef.current;
+      appStateRef.current = nextState;
+
+      if (nextState === 'background' || nextState === 'inactive') {
+        // Pause: clear the interval and cancel any in-flight request so no
+        // network traffic fires while the app is invisible.
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        abortRef.current?.abort();
+      } else if (nextState === 'active' && prevState !== 'active') {
+        // Resume: only when we're actually transitioning back to foreground.
+        // Always clear first to prevent duplicates, then restart if the build
+        // is still in a running state.
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        const currentStatus = detail?.status ?? build?.status ?? '';
+        if (build && isActive(currentStatus)) {
+          // Immediate catch-up fetch, then regular 5-second cadence.
+          fetchLogs(true);
+          pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [build, detail?.status, fetchLogs]);
 
   // ── Unmount cleanup ────────────────────────────────────────────────────────
 
