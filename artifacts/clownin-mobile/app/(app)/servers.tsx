@@ -78,20 +78,11 @@ export default function ServersScreen() {
     setShowForm(true);
   };
 
-  const handleSave = async () => {
-    if (!form.name.trim() || !form.host.trim() || !form.username.trim()) {
-      Alert.alert('Missing fields', 'Name, host, and username are required.');
-      return;
-    }
-    if (!form.useKey && !form.password.trim() && !editingServer) {
-      Alert.alert('Missing auth', 'Enter a password or paste a private key.');
-      return;
-    }
-
+  const doSave = async (port: number) => {
     const payload = {
       name: form.name.trim(),
       host: form.host.trim(),
-      port: parseInt(form.port, 10) || 22,
+      port,
       username: form.username.trim(),
       ...(form.useKey
         ? { privateKey: form.privateKey.trim() }
@@ -110,6 +101,38 @@ export default function ServersScreen() {
     } catch {
       Alert.alert('Error', 'Failed to save server. Check your details and try again.');
     }
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim() || !form.host.trim() || !form.username.trim()) {
+      Alert.alert('Missing fields', 'Name, host, and username are required.');
+      return;
+    }
+    if (!form.useKey && !form.password.trim() && !editingServer) {
+      Alert.alert('Missing auth', 'Enter a password or paste a private key.');
+      return;
+    }
+
+    const port = parseInt(form.port, 10) || 22;
+    const hostNorm = form.host.trim().toLowerCase();
+
+    const duplicate = servers.find(
+      (s) => s.host.toLowerCase() === hostNorm && s.port === port && s.id !== editingServer?.id
+    );
+
+    if (duplicate) {
+      Alert.alert(
+        'Duplicate address',
+        `"${duplicate.name}" already uses ${form.host.trim()}:${port} — save anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save anyway', onPress: () => doSave(port) },
+        ]
+      );
+      return;
+    }
+
+    await doSave(port);
   };
 
   const handleDelete = (s: ServerConfig) => {
