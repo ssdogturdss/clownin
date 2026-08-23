@@ -27,6 +27,7 @@ import {
 } from '@workspace/api-client-react';
 import type { ServerConfig } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
+import { getConnectionHint, getErrorLabel } from '@/lib/sshErrorHint';
 
 // ─── Form state ───────────────────────────────────────────────────────────────
 interface ServerForm {
@@ -65,14 +66,6 @@ export default function ServersScreen() {
   const [form, setForm] = useState<ServerForm>(DEFAULT_FORM);
   const [testing, setTesting] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string }>>({});
-
-  function getConnectionHint(error: string): string | null {
-    if (error.includes('ECONNREFUSED')) return 'Port 22 is closed — check your firewall or port forwarding';
-    if (error.includes('ENOTFOUND')) return 'Hostname not found — check the IP or domain';
-    if (error.includes('handshake') || error.includes('readyTimeout') || error.includes('Timed out')) return 'Connected but SSH handshake timed out — try adding UseDNS no to /etc/ssh/sshd_config on the server';
-    if (error.includes('Authentication') || error.includes('password') || error.includes('auth')) return 'Wrong username or password';
-    return null;
-  };
 
   const openCreate = () => {
     setEditingServer(null);
@@ -257,7 +250,7 @@ export default function ServersScreen() {
                         color={testResult.ok ? colors.primary : colors.destructive}
                       />
                       <Text style={[styles.testBadgeText, { color: testResult.ok ? colors.primary : colors.destructive }]}>
-                        {testResult.ok ? 'Connected' : (testResult.error ?? 'Failed')}
+                        {testResult.ok ? 'Connected' : getErrorLabel(testResult.error)}
                       </Text>
                     </View>
                     {!testResult.ok && (
