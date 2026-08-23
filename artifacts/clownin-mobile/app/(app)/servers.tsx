@@ -140,6 +140,23 @@ export default function ServersScreen() {
       return;
     }
 
+    const nameNorm = form.name.trim().toLowerCase();
+    const duplicateName = servers.find(
+      (s) => s.name.toLowerCase() === nameNorm && s.id !== editingServer?.id
+    );
+
+    if (duplicateName) {
+      Alert.alert(
+        'Duplicate name',
+        `A server named "${form.name.trim()}" already exists — save anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save anyway', onPress: () => doSave(port) },
+        ]
+      );
+      return;
+    }
+
     await doSave(port);
   };
 
