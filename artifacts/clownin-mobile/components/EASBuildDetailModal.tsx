@@ -697,13 +697,20 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
                   : 'No logs available for this build.'}
             </Text>
             {pollStopped && (
-              <Pressable
-                style={[s.retryBtn, { backgroundColor: colors.primary }]}
-                onPress={handlePollRetry}
-              >
-                <MaterialCommunityIcons name="refresh" size={14} color="#fff" />
-                <Text style={s.retryBtnText}>Retry</Text>
-              </Pressable>
+              <>
+                <Pressable
+                  style={[s.retryBtn, { backgroundColor: colors.primary }]}
+                  onPress={handlePollRetry}
+                >
+                  <MaterialCommunityIcons name="refresh" size={14} color="#fff" />
+                  <Text style={s.retryBtnText}>Retry</Text>
+                </Pressable>
+                {lastSuccessAt && (
+                  <Text style={[s.lastUpdatedText, { color: colors.mutedForeground }]}>
+                    Last updated {formatLastUpdated(lastSuccessAt)}
+                  </Text>
+                )}
+              </>
             )}
           </View>
         ) : (
@@ -911,6 +918,7 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10, marginTop: 4,
     },
     retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+    lastUpdatedText: { fontSize: 11, marginTop: -4 },
 
     retryBanner: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
