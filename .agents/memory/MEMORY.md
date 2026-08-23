@@ -7,3 +7,4 @@
 - [SSH process-group cancellation](ssh-process-group-cancellation.md) — Keep the exec channel open until its PGID marker arrives; closing it first can orphan detached remote work.
 - [SSH SFTP directory creation](ssh-sftp-directory-creation.md) — Existing directories may be reported as generic SFTP failures; verify the path after a failed mkdir.
 - [Live preview start recovery](live-preview-start-recovery.md) — A proxy timeout can hide a successful sandbox start; recheck authenticated status before showing failure.
+- [Docker Compose readiness](docker-compose-readiness.md) — Gate migrations on a retrying SQL connection, not only Docker healthcheck state.

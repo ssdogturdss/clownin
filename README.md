@@ -126,6 +126,10 @@ pnpm db:generate
 
 # Run pending migrations (production-safe)
 pnpm db:migrate
+
+# Add sample projects only when explicitly needed. Supply a unique temporary
+# password in the shell; never use the default application secrets.
+DEMO_USER_PASSWORD='choose-a-temporary-password' pnpm db:seed
 ```
 
 ---

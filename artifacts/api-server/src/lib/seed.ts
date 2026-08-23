@@ -11,9 +11,6 @@ import { logger } from "./logger";
  * is set, the password hash is re-synced so rotating the key takes effect
  * immediately without a manual DB update.
  *
- * The EXPO_PUBLIC_STUDIO_KEY variable (same value, exposed to the Expo bundle)
- * lets the mobile app log in via the standard /auth/login endpoint and receive a
- * proper signed JWT.
  */
 export async function ensureSystemUser(): Promise<number> {
   const masterKey = process.env.STUDIO_MASTER_KEY;
@@ -62,6 +59,14 @@ export async function ensureSystemUser(): Promise<number> {
 }
 
 export async function seedDemoData(): Promise<void> {
+  const demoPassword = process.env.DEMO_USER_PASSWORD;
+  if (!demoPassword) {
+    throw new Error(
+      "DEMO_USER_PASSWORD is required when seeding demo data. " +
+      "Set a unique temporary password in the shell that runs the seed command.",
+    );
+  }
+
   // Check if demo user already exists
   const existing = await db
     .select()
@@ -76,7 +81,7 @@ export async function seedDemoData(): Promise<void> {
 
   logger.info("Seeding demo data...");
 
-  const passwordHash = await bcrypt.hash("demo1234", 10);
+  const passwordHash = await bcrypt.hash(demoPassword, 10);
   const [user] = await db
     .insert(usersTable)
     .values({
@@ -174,5 +179,5 @@ print(f"Average: {total / len(numbers)}")
   ]);
 
   logger.info({ userId: user.id }, "Demo data seeded successfully");
-  logger.info("Demo login: demo@clownin.dev / demo1234");
+  logger.info("Demo account created for demo@clownin.dev");
 }

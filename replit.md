@@ -8,17 +8,20 @@ A mobile-first coding playground — a true Replit clone branded as Clownin 🤡
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm db:migrate` — apply checked-in database migrations
 - Required env: `DATABASE_URL` — Postgres connection string
 - Optional env: `JWT_SECRET` — JWT signing key (defaults to `clownin-secret-dev` in dev)
 
-## Demo credentials
+## Optional demo data
 
-- Email: `demo@clownin.dev` / Password: `demo1234`
+- Create sample projects only when needed:
+  `DEMO_USER_PASSWORD='temporary-password' pnpm db:seed`
+- Authentication is disabled for the current single-user deployment; the API
+  runs requests as the system user.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
+- pnpm workspaces, Node.js 20+, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM (`users`, `projects`, `project_files`)
 - Auth: JWT via `jsonwebtoken` + `bcryptjs` (no native deps)
