@@ -5,9 +5,25 @@ import { logger } from "./logger";
 
 /**
  * Find or create the system user (ss@clownin.dev) and return their DB ID.
- * Called at startup so requireAuth can resolve the correct userId.
+ *
+ * The system user's password is sourced exclusively from the STUDIO_MASTER_KEY
+ * environment secret — never hardcoded.  On every startup, if STUDIO_MASTER_KEY
+ * is set, the password hash is re-synced so rotating the key takes effect
+ * immediately without a manual DB update.
+ *
+ * The EXPO_PUBLIC_STUDIO_KEY variable (same value, exposed to the Expo bundle)
+ * lets the mobile app log in via the standard /auth/login endpoint and receive a
+ * proper signed JWT.
  */
 export async function ensureSystemUser(): Promise<number> {
+  const masterKey = process.env.STUDIO_MASTER_KEY;
+  if (!masterKey) {
+    logger.warn(
+      "STUDIO_MASTER_KEY is not set — system user cannot be authenticated. " +
+      "Set STUDIO_MASTER_KEY in Replit secrets before first use.",
+    );
+  }
+
   const existing = await db
     .select({ id: usersTable.id })
     .from(usersTable)
@@ -15,10 +31,27 @@ export async function ensureSystemUser(): Promise<number> {
     .limit(1);
 
   if (existing.length > 0) {
+    if (masterKey) {
+      // Sync the password hash with the current STUDIO_MASTER_KEY value so
+      // key rotation takes effect on the next server restart.
+      const passwordHash = await bcrypt.hash(masterKey, 10);
+      await db
+        .update(usersTable)
+        .set({ passwordHash })
+        .where(eq(usersTable.id, existing[0].id));
+      logger.info({ userId: existing[0].id }, "System user password synced with STUDIO_MASTER_KEY");
+    }
     return existing[0].id;
   }
 
-  const passwordHash = await bcrypt.hash("1211", 10);
+  if (!masterKey) {
+    throw new Error(
+      "Cannot create system user: STUDIO_MASTER_KEY is not set. " +
+      "Add it to your Replit secrets and restart the server.",
+    );
+  }
+
+  const passwordHash = await bcrypt.hash(masterKey, 10);
   const [user] = await db
     .insert(usersTable)
     .values({ username: "admin", email: "ss@clownin.dev", passwordHash })

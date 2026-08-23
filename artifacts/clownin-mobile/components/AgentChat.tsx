@@ -382,6 +382,10 @@ function toolLabel(tool: string, args: Record<string, unknown>): string {
       const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
       return p ? `Generating video: ${p}…` : "Generating video…";
     }
+    case "browser_screenshot": {
+      const u = typeof args.url === "string" ? args.url : "";
+      try { return `Screenshotting ${new URL(u).hostname}`; } catch { return "Opening browser…"; }
+    }
     case "enable_preview":   return "Setting up preview link…";
     case "deploy": {
       const platform = typeof args.platform === "string" ? args.platform : "hosting";
@@ -407,6 +411,7 @@ function toolIcon(tool: string): string {
     case "fetch_url":        return "web";
     case "generate_image":   return "image-outline";
     case "generate_video":   return "video-outline";
+    case "browser_screenshot": return "monitor-screenshot";
     case "enable_preview":   return "link-variant";
     case "deploy":           return "rocket-launch-outline";
     default:                 return "wrench-outline";

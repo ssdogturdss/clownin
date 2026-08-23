@@ -13,6 +13,8 @@ import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { getProviderClient, classifyProviderError, getImageClient, getVideoConfig, type ProviderClientResult } from "../lib/providerClient.js";
+import { browserScreenshot, type InteractionStep } from "../lib/browserScreenshot.js";
+import { getActiveServerPort } from "./serve.js";
 
 const router: IRouter = Router();
 
@@ -478,6 +480,71 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "browser_screenshot",
+      description:
+        "Open the project's localhost preview in a real headless browser, optionally perform interaction steps (click, fill, wait), take a full-page screenshot, and return console errors and rendering issues as structured output. Restricted to localhost preview URLs only — use enable_preview or run_terminal to start the preview server first, then pass its localhost URL here. Use this after making visual or UI changes to verify the page renders correctly in a real browser.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            description:
+              "The project's localhost preview URL, e.g. 'http://localhost:3000'. Only localhost / 127.x.x.x addresses are accepted — external URLs are blocked. Start the preview server first with run_terminal or enable_preview if it is not already running.",
+          },
+          viewport_width: {
+            type: "number",
+            description: "Browser viewport width in pixels. Default 1280.",
+          },
+          viewport_height: {
+            type: "number",
+            description: "Browser viewport height in pixels. Default 800.",
+          },
+          wait_for: {
+            type: "string",
+            enum: ["load", "networkidle", "domcontentloaded"],
+            description:
+              "Navigation wait condition. 'load' (default) waits for the load event. 'networkidle' waits until no network requests for 500ms (good for SPAs). 'domcontentloaded' is fastest.",
+          },
+          interactions: {
+            type: "array",
+            description:
+              "Optional sequence of interaction steps to perform before taking the screenshot. Each step is executed in order.",
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["click", "fill", "wait", "navigate"],
+                  description: "'click' a selector, 'fill' an input, 'wait' N ms, or 'navigate' to a URL.",
+                },
+                selector: {
+                  type: "string",
+                  description: "CSS selector for click/fill steps.",
+                },
+                value: {
+                  type: "string",
+                  description: "Text to type into the selected input (fill only).",
+                },
+                ms: {
+                  type: "number",
+                  description: "Milliseconds to pause (wait only, max 10 000).",
+                },
+                url: {
+                  type: "string",
+                  description: "URL to navigate to (navigate only).",
+                },
+              },
+              required: ["type"],
+            },
+          },
+        },
+        required: ["url"],
+      },
+    },
+  },
 ];
 
 // ── Execution helpers ─────────────────────────────────────────────────────────
@@ -702,6 +769,76 @@ function terminalCommandNeedsExplicitIntent(command: string): boolean {
 // ── Route ─────────────────────────────────────────────────────────────────────
 // Plain-language narration emitted just before each tool call so the client
 // can update its "thinking" bubble with human-readable status text.
+// ── Browser URL SSRF guard ────────────────────────────────────────────────────
+// Private / reserved IPv4 prefixes that must never be reachable from the agent.
+const PRIVATE_IP_RE = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|198\.(1[89])\.|198\.51\.100\.|203\.0\.113\.)/;
+// Cloud metadata / link-local hostnames that must always be blocked.
+const BLOCKED_HOSTNAMES = new Set([
+  "169.254.169.254",        // AWS / GCP / Azure metadata
+  "metadata.google.internal",
+  "metadata.internal",
+  "instance-data",
+  "fd00:ec2::254",          // AWS metadata IPv6
+]);
+
+/**
+ * Validate a URL before passing it to the browser automation engine.
+ *
+ * This tool is intentionally restricted to the project's own localhost
+ * preview server.  Allowing arbitrary public hostnames creates an
+ * irreducible DNS-rebinding TOCTOU gap (our DNS check vs Chromium's later
+ * connection happen in separate lookups that an attacker-controlled name
+ * server can answer differently).  Restricting to loopback addresses
+ * eliminates the gap entirely, and the Chrome --host-resolver-rules flag
+ * enforces the same constraint at the network layer.
+ *
+ * Returns `null` when the URL is safe, or an error string when it is not.
+ */
+async function validateBrowserUrl(rawUrl: string, allowedLocalhostPort: number | null): Promise<string | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return `Invalid URL: "${rawUrl}"`;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return `Protocol "${parsed.protocol}" is not allowed — use http or https.`;
+  }
+
+  // Strip trailing dots (a trailing "." on a hostname is a common bypass).
+  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+
+  // Only loopback addresses are permitted.  An arbitrary public hostname could
+  // change its DNS answer between our check here and Chromium's connection
+  // attempt, so we do not allow public hostnames at all.
+  const isLoopback =
+    hostname === "localhost" ||
+    /^127\./.test(hostname) ||          // entire 127.0.0.0/8
+    hostname === "::1" ||               // IPv6 loopback
+    hostname === "0:0:0:0:0:0:0:1";    // IPv6 loopback expanded
+
+  if (!isLoopback) {
+    return (
+      `Only the project's own local preview server can be screenshotted — ` +
+      `"${hostname}" is not a localhost address.  ` +
+      `Start the project preview with run_terminal or enable_preview first, ` +
+      `then pass its localhost URL (e.g. http://localhost:3000).`
+    );
+  }
+
+  if (allowedLocalhostPort === null) {
+    return "No active project preview is running on localhost. Start the preview first with run_terminal (e.g. npm start), then screenshot it.";
+  }
+
+  const urlPort = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === "https:" ? 443 : 80);
+  if (urlPort !== allowedLocalhostPort) {
+    return `Only the project preview port (${allowedLocalhostPort}) is allowed for localhost URLs — got port ${urlPort}. Use enable_preview to confirm the correct URL.`;
+  }
+
+  return null; // explicitly permitted
+}
+
 function toolStatusNarration(name: string, args: Record<string, unknown>): string {
   const path = typeof args.path === "string" ? args.path : "";
   switch (name) {
@@ -761,6 +898,11 @@ function toolStatusNarration(name: string, args: Record<string, unknown>): strin
     case "generate_video": {
       const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
       return p ? `Generating video: ${p}…` : "Generating video…";
+    }
+    case "browser_screenshot": {
+      const u = typeof args.url === "string" ? args.url : "";
+      try { return `Screenshotting ${new URL(u).hostname}…`; }
+      catch { return "Opening browser to check the UI…"; }
     }
     default:
       return "Working on it…";
@@ -903,6 +1045,7 @@ install_packages  npm or pip install; create package.json first if needed
 fetch_url         Fetch documentation, READMEs, or API responses (HTML stripped to text)
 enable_preview    Give the user a shareable live link (no deploy needed)
 deploy            Publish to Netlify or Vercel (permanent URL; ask for token first)
+browser_screenshot  Open a URL in a real browser, take a screenshot, and return console errors
 
 ━━━ BEFORE YOU WRITE A SINGLE LINE OF CODE ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Never edit blind. Always understand first:
@@ -951,6 +1094,7 @@ JS/TS  → node / bun      (create package.json before npm install)
 "is package Y installed?"  → run_terminal (npm list Y  or  pip show Y)
 "show/share the project"   → enable_preview
 "publish permanently"      → deploy
+"verify UI renders right"  → browser_screenshot the preview URL
 
 ━━━ RESPONDING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 After completing work, give a short summary:
@@ -1843,6 +1987,117 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   result = "Image generated and displayed in chat.";
                 } catch (imgErr: unknown) {
                   result = imgErr instanceof Error ? imgErr.message : "Image generation failed";
+                  isError = true;
+                }
+                break;
+              }
+
+              case "browser_screenshot": {
+                const bsUrl = String(args.url ?? "").trim();
+                if (!bsUrl) { result = "url is required"; isError = true; break; }
+
+                // ── SSRF guard ─────────────────────────────────────────────
+                // Only the project's own active preview port is allowed on
+                // localhost; public internet hosts are permitted; all private
+                // IP ranges and cloud metadata endpoints are blocked.
+                const allowedPort = getActiveServerPort(projectId);
+                const urlError = await validateBrowserUrl(bsUrl, allowedPort);
+                if (urlError) { result = `SSRF_BLOCKED\n${urlError}`; isError = true; break; }
+
+                const bsViewportWidth = typeof args.viewport_width === "number" ? args.viewport_width : 1280;
+                const bsViewportHeight = typeof args.viewport_height === "number" ? args.viewport_height : 800;
+                const bsWaitFor = typeof args.wait_for === "string" ? args.wait_for : "load";
+
+                // Parse interaction steps safely, validating any navigate URLs.
+                // validateBrowserUrl is async (DNS resolution), so we validate
+                // all steps concurrently then collect any errors.
+                const rawSteps = Array.isArray(args.interactions) ? args.interactions : [];
+                const navigateError: string[] = [];
+                const bsInteractions: InteractionStep[] = (
+                  await Promise.all(
+                    rawSteps
+                      .filter((s) => s && typeof s === "object" && typeof s.type === "string")
+                      .map(async (s) => {
+                        const step = s as Record<string, unknown>;
+                        if (step.type === "click" && typeof step.selector === "string")
+                          return { type: "click" as const, selector: step.selector };
+                        if (step.type === "fill" && typeof step.selector === "string" && typeof step.value === "string")
+                          return { type: "fill" as const, selector: step.selector, value: step.value };
+                        if (step.type === "wait" && typeof step.ms === "number")
+                          return { type: "wait" as const, ms: step.ms };
+                        if (step.type === "navigate" && typeof step.url === "string") {
+                          const navErr = await validateBrowserUrl(step.url, allowedPort);
+                          if (navErr) { navigateError.push(`navigate ${step.url}: ${navErr}`); return null; }
+                          return { type: "navigate" as const, url: step.url };
+                        }
+                        return null;
+                      }),
+                  )
+                ).filter((s): s is InteractionStep => s !== null);
+
+                if (navigateError.length) {
+                  result = `SSRF_BLOCKED\nOne or more navigate steps were blocked:\n${navigateError.join("\n")}`;
+                  isError = true;
+                  break;
+                }
+
+                try {
+                  const bsResult = await browserScreenshot({
+                    url: bsUrl,
+                    viewportWidth: bsViewportWidth,
+                    viewportHeight: bsViewportHeight,
+                    waitFor: bsWaitFor,
+                    interactions: bsInteractions,
+                    timeoutMs: 45_000,
+                    // Pass the allowed localhost port so the Playwright network
+                    // interceptor enforces SSRF policy on every request the
+                    // browser makes, including redirects and subresources.
+                    allowedLocalhostPort: allowedPort,
+                  });
+
+                  // Emit the screenshot inline (same shape as generate_image so mobile renders it)
+                  if (bsResult.screenshotB64) {
+                    sse("image", {
+                      callId: tc.id,
+                      dataUri: `data:image/png;base64,${bsResult.screenshotB64}`,
+                    });
+                  }
+
+                  // Build a structured text summary for the agent to reason about
+                  const lines: string[] = [
+                    `BROWSER_SCREENSHOT_RESULT`,
+                    `url: ${bsResult.finalUrl}`,
+                    `title: ${bsResult.title || "(no title)"}`,
+                    `viewport: ${bsViewportWidth}x${bsViewportHeight}`,
+                  ];
+
+                  if (bsResult.interactionsCompleted.length) {
+                    lines.push(`interactions_completed:\n${bsResult.interactionsCompleted.map((s) => `  ✓ ${s}`).join("\n")}`);
+                  }
+                  if (bsResult.interactionErrors.length) {
+                    lines.push(`interaction_errors:\n${bsResult.interactionErrors.map((s) => `  ✗ ${s}`).join("\n")}`);
+                  }
+
+                  const errors = bsResult.consoleLogs.filter((l) => l.level === "error" || l.level === "warning");
+                  const infos  = bsResult.consoleLogs.filter((l) => l.level !== "error" && l.level !== "warning");
+                  if (errors.length) {
+                    lines.push(`console_errors:\n${errors.slice(0, 20).map((l) => `  [${l.level}] ${l.text}`).join("\n")}`);
+                  }
+                  if (infos.length) {
+                    lines.push(`console_info:\n${infos.slice(0, 10).map((l) => `  [${l.level}] ${l.text}`).join("\n")}`);
+                  }
+                  if (bsResult.pageErrors.length) {
+                    lines.push(`page_errors:\n${bsResult.pageErrors.slice(0, 10).map((s) => `  ${s}`).join("\n")}`);
+                  }
+
+                  const hasErrors = bsResult.pageErrors.length > 0 || errors.length > 0 || bsResult.interactionErrors.length > 0;
+                  lines.push(`status: ${hasErrors ? "ERRORS_DETECTED" : "OK"}`);
+                  lines.push(`screenshot: displayed inline above`);
+
+                  result = lines.join("\n");
+                  if (hasErrors) isError = false; // errors are expected output, not a tool failure
+                } catch (bsErr: unknown) {
+                  result = bsErr instanceof Error ? bsErr.message : "Browser screenshot failed";
                   isError = true;
                 }
                 break;

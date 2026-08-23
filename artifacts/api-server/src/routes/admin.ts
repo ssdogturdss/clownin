@@ -9,7 +9,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { db, usersTable, projectsTable, projectFilesTable, projectEnvVarsTable, conversationMessagesTable, promoCodesTable, promoCodeRedemptionsTable, providerConfigsTable, conversationSessionsTable } from "@workspace/db";
 import { eq, desc, count, sql, and, isNotNull } from "drizzle-orm";
-import { requireAuth, getUser, getSystemUserId } from "../lib/auth";
+import { requireAuth, getUser } from "../lib/auth";
 import { getProviderClient, resetProviderCache } from "../lib/providerClient.js";
 import { randomBytes } from "crypto";
 import { z } from "zod";
@@ -66,13 +66,22 @@ async function resolveAdminUserIds(): Promise<Set<number>> {
 }
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const user = getUser(req);
-  // The system user always has admin access (covers no-auth / single-user mode).
-  if (user.userId === getSystemUserId()) { next(); return; }
-  // Otherwise check the ADMIN_USER_IDS allowlist.
-  const allowed = await resolveAdminUserIds();
-  if (allowed.has(user.userId)) { next(); return; }
-  res.status(403).json({ error: "Forbidden" });
+  const raw = process.env.ADMIN_USER_IDS ?? "";
+  if (!raw.trim()) {
+    res.status(503).json({ error: "Admin access is not configured. Set ADMIN_USER_IDS." });
+    return;
+  }
+  const { userId } = getUser(req);
+  try {
+    const adminIds = await resolveAdminUserIds();
+    if (!adminIds.has(userId)) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    next();
+  } catch {
+    res.status(503).json({ error: "Could not resolve admin user list" });
+  }
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
