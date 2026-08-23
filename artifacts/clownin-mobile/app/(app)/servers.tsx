@@ -124,14 +124,19 @@ export default function ServersScreen() {
     const port = parseInt(form.port, 10) || 22;
     const hostNorm = form.host.trim().toLowerCase();
 
-    const duplicate = servers.find(
+    const duplicateAddress = servers.find(
       (s) => s.host.toLowerCase() === hostNorm && s.port === port && s.id !== editingServer?.id
     );
 
-    if (duplicate) {
+    const nameNorm = form.name.trim().toLowerCase();
+    const duplicateName = servers.find(
+      (s) => s.name.toLowerCase() === nameNorm && s.id !== editingServer?.id
+    );
+
+    if (duplicateAddress && duplicateName?.id === duplicateAddress.id) {
       Alert.alert(
-        'Duplicate address',
-        `"${duplicate.name}" already uses ${form.host.trim()}:${port} — save anyway?`,
+        'Duplicate server',
+        `"${duplicateAddress.name}" already uses ${form.host.trim()}:${port} and has this name — save anyway?`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Save anyway', onPress: () => doSave(port) },
@@ -140,10 +145,17 @@ export default function ServersScreen() {
       return;
     }
 
-    const nameNorm = form.name.trim().toLowerCase();
-    const duplicateName = servers.find(
-      (s) => s.name.toLowerCase() === nameNorm && s.id !== editingServer?.id
-    );
+    if (duplicateAddress) {
+      Alert.alert(
+        'Duplicate address',
+        `"${duplicateAddress.name}" already uses ${form.host.trim()}:${port} — save anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save anyway', onPress: () => doSave(port) },
+        ]
+      );
+      return;
+    }
 
     if (duplicateName) {
       Alert.alert(
