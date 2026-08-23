@@ -192,7 +192,61 @@ export function buildResult(
   model: string,
 ): ProviderClientResult {
   if (provider === "anthropic") {
-    return { provider, model, anthropicClient: new Anthropic({ apiKey }) };
+    return { provider, model, anthropicClient: new Anthropic({ apiKey, timeout: 30_000 }) };
   }
-  return { provider, model, openaiClient: new OpenAI({ apiKey, baseURL }) };
+  return { provider, model, openaiClient: new OpenAI({ apiKey, baseURL, timeout: 30_000 }) };
+}
+
+/**
+ * Maps a raw SDK/network error into a user-readable, actionable message.
+ *
+ * Called in the agent loop catch blocks so that auth failures, quota
+ * exhaustion, and timeouts surface immediately with clear guidance instead
+ * of a raw SDK error string or a silent hang.
+ */
+export function classifyProviderError(err: unknown, provider: string): string {
+  const status  = (err as { status?: number }).status;
+  const code    = (err as { code?: string }).code ?? "";
+  const message = (err as { message?: string }).message ?? "";
+  const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
+
+  // ── Authentication / authorisation ────────────────────────────────────────
+  if (
+    status === 401 ||
+    status === 403 ||
+    /invalid_api_key|authentication_error|invalid.api.key|unauthorized/i.test(code + " " + message)
+  ) {
+    return (
+      `Your ${providerLabel} API key is invalid, expired, or has been revoked. ` +
+      `Please check that the key is correct and has the required permissions, ` +
+      `then update it in the admin panel under Settings → AI Provider.`
+    );
+  }
+
+  // ── Quota / billing ───────────────────────────────────────────────────────
+  if (
+    status === 402 ||
+    (status === 429 && /quota|billing|credit|insufficient/i.test(message))
+  ) {
+    return (
+      `Your ${providerLabel} account has exceeded its quota or has a billing issue. ` +
+      `Please check your usage limits and payment details on the ${providerLabel} dashboard.`
+    );
+  }
+
+  // ── Timeout / connection ──────────────────────────────────────────────────
+  if (
+    /timeout|timed.?out/i.test(message) ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "ENOTFOUND"
+  ) {
+    return (
+      `The request to ${providerLabel} timed out or could not connect. ` +
+      `The service may be slow or unreachable — please try again in a moment.`
+    );
+  }
+
+  // ── Fallthrough: return the original message so nothing is lost ───────────
+  return message || `Unknown error from ${providerLabel}`;
 }

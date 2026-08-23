@@ -12,7 +12,7 @@ import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getProviderClient, type ProviderClientResult } from "../lib/providerClient.js";
+import { getProviderClient, classifyProviderError, type ProviderClientResult } from "../lib/providerClient.js";
 
 const router: IRouter = Router();
 
@@ -951,7 +951,9 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                 await new Promise((r) => setTimeout(r, delays[attempt]));
                 attempt++;
               } else {
-                throw err;
+                // Surface auth failures, quota errors, and timeouts with a
+                // clear, actionable message instead of a raw SDK error string.
+                throw new Error(classifyProviderError(err, providerResult.provider));
               }
             }
           }
@@ -980,7 +982,9 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   await new Promise((r) => setTimeout(r, delays[attempt]));
                   attempt++;
                 } else {
-                  throw err;
+                  // Surface auth failures, quota errors, and timeouts with a
+                  // clear, actionable message instead of a raw SDK error string.
+                  throw new Error(classifyProviderError(err, providerResult.provider));
                 }
               }
             }
