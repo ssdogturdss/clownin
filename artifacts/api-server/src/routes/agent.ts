@@ -522,12 +522,148 @@ function runProcess(
   });
 }
 
+type ProjectFileSnapshot = {
+  path: string;
+  content: string;
+  language: string;
+};
+
+function extractPackageScripts(content: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(content) as { scripts?: unknown };
+    if (parsed.scripts && typeof parsed.scripts === "object" && !Array.isArray(parsed.scripts)) {
+      return Object.fromEntries(
+        Object.entries(parsed.scripts).filter(([, value]) => typeof value === "string")
+      ) as Record<string, string>;
+    }
+  } catch {
+    // A malformed manifest is itself useful context, but must not crash the agent.
+  }
+  return {};
+}
+
+function buildProjectMap(files: ProjectFileSnapshot[]): string {
+  const manifests = files.filter((file) =>
+    /(^|\/)(package\.json|tsconfig\.json|pyproject\.toml|requirements\.txt|Pipfile|Cargo\.toml|go\.mod|Gemfile)$/i.test(file.path)
+  );
+  const packageFile = files.find((file) => /(^|\/)package\.json$/i.test(file.path));
+  const scripts = packageFile ? extractPackageScripts(packageFile.content) : {};
+  const entryPoints = files
+    .filter((file) => /(^|\/)(index|main|app|server|start)\.(tsx?|jsx?|py|go|rs|rb|java)$/i.test(file.path))
+    .map((file) => file.path);
+  const sourceFiles = files
+    .filter((file) => /\.(tsx?|jsx?|py|go|rs|rb|java)$/i.test(file.path))
+    .map((file) => file.path);
+  const dependencyLines = packageFile
+    ? (() => {
+        try {
+          const parsed = JSON.parse(packageFile.content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+          const dependencies = { ...(parsed.dependencies ?? {}), ...(parsed.devDependencies ?? {}) };
+          return Object.keys(dependencies).slice(0, 30);
+        } catch {
+          return [];
+        }
+      })()
+    : [];
+
+  return [
+    "PROJECT_MAP",
+    `files: ${files.length}`,
+    `manifests: ${manifests.length ? manifests.map((file) => file.path).join(", ") : "none"}`,
+    `entry_points: ${entryPoints.length ? entryPoints.join(", ") : "none detected"}`,
+    `source_files: ${sourceFiles.length ? sourceFiles.slice(0, 60).join(", ") : "none"}`,
+    `scripts: ${Object.keys(scripts).length ? Object.keys(scripts).join(", ") : "none"}`,
+    `dependencies: ${dependencyLines.length ? dependencyLines.join(", ") : "none detected"}`,
+    "Use search_files and read_file for details before editing. The map is an index, not file content.",
+  ].join("\n");
+}
+
+type VerificationCommand = { label: string; cmd: string; args: string[] };
+
+function chooseVerificationCommands(files: ProjectFileSnapshot[], preferred: string): VerificationCommand[] {
+  const packageFile = files.find((file) => /(^|\/)package\.json$/i.test(file.path));
+  const scripts = packageFile ? extractPackageScripts(packageFile.content) : {};
+  const namedChecks = ["test", "typecheck", "lint", "build"];
+  const requested = preferred === "auto" ? namedChecks : [preferred];
+  const commands = requested
+    .filter((name) => typeof scripts[name] === "string")
+    .map((name) => ({ label: name, cmd: "npm", args: ["run", name] }));
+
+  if (commands.length > 0) return commands;
+  if (preferred !== "auto") return [];
+
+  const pythonFiles = files.filter((file) => /\.py$/i.test(file.path));
+  if (pythonFiles.length > 0) {
+    return [{ label: "python syntax", cmd: "python3", args: ["-m", "compileall", "-q", "."] }];
+  }
+  const javascriptFiles = files.filter((file) => /\.(m?js|cjs)$/i.test(file.path));
+  if (javascriptFiles.length > 0) {
+    return javascriptFiles.slice(0, 20).map((file) => ({
+      label: `syntax ${file.path}`,
+      cmd: "node",
+      args: ["--check", file.path],
+    }));
+  }
+  return [];
+}
+
+async function verifyProjectFiles(
+  projectId: number,
+  files: ProjectFileSnapshot[],
+  preferred: string
+): Promise<{ result: string; isError: boolean }> {
+  const commands = chooseVerificationCommands(files, preferred);
+  if (commands.length === 0) {
+    return {
+      result: `VERIFICATION_RESULT\nstatus: SKIPPED\nreason: No ${preferred === "auto" ? "safe" : preferred} verification command was detected. Add a package.json script or run_code for a specific entry file.`,
+      isError: false,
+    };
+  }
+
+  const dir = await syncProjectFiles(projectId, files);
+  const outcomes: string[] = [];
+  let failed = false;
+  for (const command of commands) {
+    const { stdout, stderr, exitCode } = await runProcess(command.cmd, command.args, dir, INSTALL_TIMEOUT_MS);
+    const output = [stdout, stderr].filter(Boolean).join("\n").trim();
+    outcomes.push([
+      `check: ${command.label}`,
+      `exit: ${exitCode}`,
+      output ? `output:\n${output.slice(0, 3000)}` : "",
+    ].filter(Boolean).join("\n"));
+    if (exitCode !== 0) failed = true;
+  }
+
+  return {
+    result: `VERIFICATION_RESULT\nstatus: ${failed ? "FAIL" : "PASS"}\n${outcomes.join("\n\n")}`,
+    isError: failed,
+  };
+}
+
+function hasExplicitToolIntent(message: string, tool: string): boolean {
+  const text = message.toLowerCase();
+  const intent: Record<string, RegExp> = {
+    delete_file: /\b(delete|remove|erase)\b/,
+    install_packages: /\b(install|add)\b.*\b(package|dependency|dependencies|npm|pip)\b/,
+    deploy: /\b(deploy|publish|ship|release)\b/,
+    fetch_url: /\b(post|send|submit|create|update)\b/,
+    run_terminal: /\b(delete|remove|erase|install|add|post|send|submit|publish|deploy)\b/,
+  };
+  return intent[tool]?.test(text) ?? true;
+}
+
+function terminalCommandNeedsExplicitIntent(command: string): boolean {
+  return /(^|[;&|]\s*)(rm|rmdir)\s|(^|[;&|]\s*)(npm|pnpm|yarn)\s+install\b|(^|[;&|]\s*)pip(?:3)?\s+install\b|\bcurl\b.*(?:-X\s*POST|--request\s+POST)/i.test(command);
+}
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 // Plain-language narration emitted just before each tool call so the client
 // can update its "thinking" bubble with human-readable status text.
 function toolStatusNarration(name: string, args: Record<string, unknown>): string {
   const path = typeof args.path === "string" ? args.path : "";
   switch (name) {
+    case "inspect_project":
+      return "Mapping the project structure and checks…";
     case "list_files":
       return "Checking what files are in your project…";
     case "read_file":
@@ -540,6 +676,8 @@ function toolStatusNarration(name: string, args: Record<string, unknown>): strin
       return path ? `Removing ${path}…` : "Deleting a file…";
     case "run_code":
       return path ? `Running ${path}…` : "Running your code…";
+    case "verify_project":
+      return "Running the project checks…";
     case "install_packages": {
       const pkgs = Array.isArray(args.packages)
         ? (args.packages as string[]).join(", ")
@@ -694,8 +832,12 @@ router.post(
 
 Project: "${project.name}" | Language: ${project.language}
 
+━━━ PROJECT MAP ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${buildProjectMap(files)}
+
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 list_files        List all project files
+inspect_project   Build a compact map of manifests, scripts, dependencies, and entry points
 search_files      Grep across all files — use BEFORE reading to locate code fast
 read_file         Read one file's full content
 edit_file         Surgical find-and-replace — strongly prefer over write_file
@@ -704,6 +846,7 @@ create_file       Create a new file
 delete_file       Delete a file
 rename_file       Rename or move a file without touching its content
 run_code          Execute a file — always do this after writing; fix all errors and re-run
+verify_project    Run detected tests, type checks, lint, build, or syntax checks after edits
 run_terminal      Arbitrary shell: mkdir, curl, git, grep, ls, env inspection
 install_packages  npm or pip install; create package.json first if needed
 fetch_url         Fetch documentation, READMEs, or API responses (HTML stripped to text)
@@ -712,8 +855,8 @@ deploy            Publish to Netlify or Vercel (permanent URL; ask for token fir
 
 ━━━ BEFORE YOU WRITE A SINGLE LINE OF CODE ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Never edit blind. Always understand first:
-1. list_files — see the full project structure
-2. search_files — find where relevant functions, types, and variables are defined
+1. inspect_project — see manifests, scripts, entry points, and dependency context
+2. list_files and search_files — locate the exact relevant code
 3. read_file — read every file you will touch AND the files they import from
 4. Identify ALL files that need to change, not just the most obvious one
 5. Check existing patterns — match the code style, naming conventions, and architecture already in use
@@ -721,8 +864,8 @@ Never edit blind. Always understand first:
 ━━━ EXECUTING CHANGES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Use edit_file for any change that touches less than half a file — never write_file just to change a few lines
 • Make changes in dependency order: shared utilities and types first, then the code that uses them
-• After ALL writes: run the code or run tests to verify everything works end-to-end
-• If tests exist in the project, run them after your changes
+• After ALL writes: call verify_project with check "auto"; fix failures and verify again
+• If verification reports SKIPPED, use run_code on the relevant entry point and state that limitation in your final response
 
 ━━━ WHEN SOMETHING ERRORS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Read the full error — line number and message almost always say exactly what's wrong
@@ -737,6 +880,7 @@ Never edit blind. Always understand first:
 • Match the error handling style already used in the project
 • Keep functions focused and small; split files that grow beyond ~300 lines
 • Never add a dependency without first checking if an existing library already covers it
+• Never delete files, install packages, deploy, or make external POST requests unless the user's message explicitly asks for that outcome
 
 ━━━ LANGUAGE EXECUTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Go     → go run file.go  (single-file programs; standard library freely available)
@@ -748,7 +892,9 @@ JS/TS  → node / bun      (create package.json before npm install)
 
 ━━━ TOOL SELECTION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 "where is function X?"     → search_files (grep beats reading 10 files)
+"what runs this project?"  → inspect_project
 "change a function/block"  → edit_file (never write_file just to change a few lines)
+"check my changes"         → verify_project with check "auto"
 "create directories"       → run_terminal (mkdir -p)
 "look up how X works"      → fetch_url the official docs or README
 "is package Y installed?"  → run_terminal (npm list Y  or  pip show Y)
@@ -944,6 +1090,8 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
     let iteration = 0;
     let aborted = false;
     let finalAgentText = ""; // tracked so we can persist it after the loop
+    const workCheckpoints: string[] = [];
+    let verificationRequired = false;
     req.on("close", () => { aborted = true; });
 
     try {
@@ -1043,6 +1191,13 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
         }
 
         if (toolCalls.length === 0) {
+          if (verificationRequired) {
+            messages.push({
+              role: "user",
+              content: "REQUIRED BEFORE FINAL RESPONSE: You changed project files. Call verify_project with check \"auto\" now. If it fails, fix the reported root cause and verify again. Do not claim completion without a PASS or an explicit SKIPPED result.",
+            });
+            continue;
+          }
           if (textContent) {
             finalAgentText = textContent;
             sse("message", { text: textContent });
@@ -1077,7 +1232,23 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
           let isError = false;
 
           try {
-            switch (tc.name) {
+            const needsExplicitIntent =
+              tc.name === "delete_file" ||
+              tc.name === "install_packages" ||
+              tc.name === "deploy" ||
+              (tc.name === "fetch_url" && String(args.method ?? "GET").toUpperCase() === "POST") ||
+              (tc.name === "run_terminal" && terminalCommandNeedsExplicitIntent(String(args.command ?? "")));
+            if (needsExplicitIntent && !hasExplicitToolIntent(message, tc.name)) {
+              result = `SAFETY_BLOCKED\n${tc.name} needs explicit confirmation in the user's request. Explain what you need to do and ask the user to confirm it before retrying.`;
+              isError = true;
+            } else switch (tc.name) {
+              case "inspect_project": {
+                const rows = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+                result = buildProjectMap(rows);
+                break;
+              }
+
               case "list_files": {
                 const rows = await db.select().from(projectFilesTable)
                   .where(eq(projectFilesTable.projectId, projectId));
@@ -1205,6 +1376,16 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                     if (exitCode !== 0) isError = true;
                   }
                 }
+                break;
+              }
+
+              case "verify_project": {
+                const preferred = String(args.check ?? "auto");
+                const rows = await db.select().from(projectFilesTable)
+                  .where(eq(projectFilesTable.projectId, projectId));
+                const verification = await verifyProjectFiles(projectId, rows, preferred);
+                result = verification.result;
+                isError = verification.isError;
                 break;
               }
 
@@ -1567,13 +1748,33 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
           // Cap result size
           if (result.length > 8000) result = result.slice(0, 8000) + "\n...[truncated]";
 
+          workCheckpoints.push(
+            `${tc.name}: ${isError ? "failed" : "completed"} — ${result.replace(/\s+/g, " ").slice(0, 360)}`
+          );
+          if (workCheckpoints.length > 12) workCheckpoints.shift();
+          if (!isError && ["write_file", "create_file", "edit_file", "delete_file", "rename_file"].includes(tc.name)) {
+            verificationRequired = true;
+          }
+          if (tc.name === "verify_project") {
+            verificationRequired = false;
+          }
           sse("tool_result", { callId: tc.id, tool: tc.name, result, isError });
           messages.push({ role: "tool", tool_call_id: tc.id, content: result });
         }
       }
 
-      sse("message", { text: "Done! Refresh the file list to see the changes." });
-      sse("done", { sessionId: activeSessionId });
+      const checkpointText = workCheckpoints.length
+        ? `\n\nRecent work:\n${workCheckpoints.map((checkpoint) => `- ${checkpoint}`).join("\n")}`
+        : "";
+      if (aborted) {
+        finalAgentText = `Work was interrupted before it finished. Send “continue” to resume from the saved project state.${checkpointText}`;
+      } else {
+        finalAgentText = `I reached the task limit before I could verify completion. Send “continue” and I’ll resume from the current project state.${checkpointText}`;
+      }
+      if (!aborted) {
+        sse("message", { text: finalAgentText });
+        sse("done", { sessionId: activeSessionId, provider: providerResult.provider, status: "incomplete" });
+      }
       res.end();
     } catch (err: unknown) {
       req.log.error({ err }, "Agent error");
