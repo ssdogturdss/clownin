@@ -42,6 +42,7 @@ const { mockFetch, mockRequireAuth, mockGetUser } = vi.hoisted(() => {
 vi.mock("../../lib/auth.js", () => ({
   requireAuth: mockRequireAuth,
   getUser:     mockGetUser,
+  getSystemUserId: () => 1,
 }));
 
 vi.mock("@workspace/db", () => ({

@@ -80,6 +80,7 @@ vi.mock("../../lib/auth.js", () => ({
   getUser: mockGetUser,
   signPreviewToken: mockSignPreviewToken,
   verifyPreviewToken: mockVerifyPreviewToken,
+  getSystemUserId: () => 1,
 }));
 
 vi.mock("../../lib/projectWorkspace.js", () => ({

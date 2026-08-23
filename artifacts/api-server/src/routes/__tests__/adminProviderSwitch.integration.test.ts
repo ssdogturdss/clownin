@@ -133,6 +133,7 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("../../lib/auth.js", () => ({
   requireAuth: mockRequireAuth,
   getUser:     mockGetUser,
+  getSystemUserId: () => 1,
 }));
 
 // ⚠️  providerClient.js is intentionally NOT mocked here.

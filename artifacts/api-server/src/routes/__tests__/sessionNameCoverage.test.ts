@@ -119,6 +119,7 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("../../lib/auth.js", () => ({
   requireAuth: mockRequireAuth,
   getUser: mockGetUser,
+  getSystemUserId: () => 1,
 }));
 
 vi.mock("node-cron", () => ({

@@ -51,6 +51,7 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("../../lib/auth.js", () => ({
   requireAuth: mockRequireAuth,
   getUser: mockGetUser,
+  getSystemUserId: () => 1,
 }));
 
 const { default: executionRouter } = await import("../../routes/execution.js");
