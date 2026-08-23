@@ -133,6 +133,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   );
   /** True after 3 consecutive poll failures — interval stopped, manual retry shown. */
   const [pollStopped, setPollStopped] = useState(false);
+  /** True while the slow reconnect probe is running after polling stopped. */
+  const [reconnectProbing, setReconnectProbing] = useState(false);
 
   const scrollRef    = useRef<ScrollView>(null);
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -154,6 +156,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // Ref mirror of pollStopped so event-handler closures can read it synchronously
   // without depending on stale React state.
   const pollStoppedRef = useRef(false);
+  // Slow reconnect probe (30 s) that fires automatically after polling stops so
+  // the user doesn't have to tap Retry after a transient network outage.
+  const reconnectProbeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Set to true for the duration of a probe fetch so fetchLogs skips its
+  // normal failure-counter and error-banner logic on probe misses.
+  const isReconnectProbeRef = useRef(false);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -211,26 +219,32 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Failed to load logs';
       // All poll-tick (silent) failures count toward the consecutive-failure
-      // limit, regardless of whether we have accumulated log lines.
+      // limit, unless this fetch was fired by the reconnect probe — probe
+      // failures are swallowed silently so they don't flip error UI or
+      // double-count against the threshold.
       if (silent) {
-        pollFailCountRef.current += 1;
-        // After 3 consecutive failures, stop hammering the server and ask the
-        // user to retry manually.
-        if (pollFailCountRef.current >= 3) {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
+        if (!isReconnectProbeRef.current) {
+          pollFailCountRef.current += 1;
+          // After 3 consecutive failures, stop hammering the server and ask the
+          // user to retry manually (or wait for the reconnect probe to succeed).
+          if (pollFailCountRef.current >= 3) {
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            pollStoppedRef.current = true;
+            setPollStopped(true);
           }
-          pollStoppedRef.current = true;
-          setPollStopped(true);
+          // Show inline banner if we have logs; otherwise surface a full-screen
+          // error so the user knows no data has been loaded yet.
+          if (accLogsRef.current.length > 0) {
+            setPollError(msg);
+          } else {
+            setError(msg);
+          }
         }
-        // Show inline banner if we have logs; otherwise surface a full-screen
-        // error so the user knows no data has been loaded yet.
-        if (accLogsRef.current.length > 0) {
-          setPollError(msg);
-        } else {
-          setError(msg);
-        }
+        // Probe failures are intentionally silent — the probe interval keeps
+        // running and tries again after 30 s.
       } else {
         setError(msg);
       }
@@ -289,7 +303,37 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
         pollRef.current = null;
       }
     };
-  }, [build, detail?.status, fetchLogs]);
+  }, [build, detail?.status, fetchLogs, pollStopped]);
+
+  // ── Reconnect probe: auto-restart polling after network recovers ────────────
+  // When polling is stopped due to consecutive failures, a slow 30-second probe
+  // silently retries in the background.  On the first successful response the
+  // normal fetchLogs success path resets pollStopped, which causes this effect
+  // to clean up the probe and the polling effect to restart the 5-second interval.
+
+  useEffect(() => {
+    if (reconnectProbeRef.current) {
+      clearInterval(reconnectProbeRef.current);
+      reconnectProbeRef.current = null;
+    }
+    const currentStatus = detail?.status ?? build?.status ?? '';
+    if (pollStopped && build && isActive(currentStatus) && appStateRef.current === 'active') {
+      setReconnectProbing(true);
+      reconnectProbeRef.current = setInterval(async () => {
+        isReconnectProbeRef.current = true;
+        try { await fetchLogs(true); } finally { isReconnectProbeRef.current = false; }
+      }, 30_000);
+    } else {
+      setReconnectProbing(false);
+    }
+    return () => {
+      if (reconnectProbeRef.current) {
+        clearInterval(reconnectProbeRef.current);
+        reconnectProbeRef.current = null;
+      }
+      isReconnectProbeRef.current = false;
+    };
+  }, [pollStopped, build, detail?.status, fetchLogs]);
 
   // ── Manual retry after polling stopped ─────────────────────────────────────
 
@@ -316,6 +360,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const handleClose = () => {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
+    if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
+    reconnectProbeRef.current = null;
+    isReconnectProbeRef.current = false;
     // Clean up toast so no delayed setState fires after close
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastOpacity.stopAnimation();
@@ -332,29 +379,43 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       appStateRef.current = nextState;
 
       if (nextState === 'background' || nextState === 'inactive') {
-        // Pause: clear the interval and cancel any in-flight request so no
-        // network traffic fires while the app is invisible.
+        // Pause: clear the interval, the reconnect probe, and any in-flight
+        // request so no network traffic fires while the app is invisible.
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
+        if (reconnectProbeRef.current) {
+          clearInterval(reconnectProbeRef.current);
+          reconnectProbeRef.current = null;
+        }
+        isReconnectProbeRef.current = false;
+        setReconnectProbing(false);
         abortRef.current?.abort();
         setPollingPaused(true);
       } else if (nextState === 'active' && prevState !== 'active') {
         // Resume: only when we're actually transitioning back to foreground.
-        // Always clear first to prevent duplicates, then restart if the build
-        // is still running AND the user hasn't been forced to a manual retry.
+        // Always clear first to prevent duplicates, then restart appropriately.
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
         const currentStatus = detail?.status ?? build?.status ?? '';
-        // Only restart automatic polling when it wasn't stopped due to
-        // consecutive failures — those require an explicit user retry.
-        if (build && isActive(currentStatus) && !pollStoppedRef.current) {
-          // Immediate catch-up fetch, then regular 5-second cadence.
-          fetchLogs(true);
-          pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+        if (build && isActive(currentStatus)) {
+          if (!pollStoppedRef.current) {
+            // Normal resume: immediate catch-up fetch then 5-second cadence.
+            fetchLogs(true);
+            pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+          } else {
+            // Polling was stopped due to failures; restart the reconnect probe
+            // (it was cleared when we went to background).
+            if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
+            setReconnectProbing(true);
+            reconnectProbeRef.current = setInterval(async () => {
+              isReconnectProbeRef.current = true;
+              try { await fetchLogs(true); } finally { isReconnectProbeRef.current = false; }
+            }, 30_000);
+          }
         }
         setPollingPaused(false);
       }
@@ -367,6 +428,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
       if (toastTimer.current) clearTimeout(toastTimer.current);
       toastOpacity.stopAnimation();
       abortRef.current?.abort();
@@ -666,18 +728,18 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
         {active && !!detail && (
           <View style={[s.pollingBar, { borderTopColor: colors.border }]}>
             {pollingPaused ? (
-              <MaterialCommunityIcons
-                name="pause-circle-outline"
-                size={11}
-                color={colors.mutedForeground}
-              />
+              <MaterialCommunityIcons name="pause-circle-outline" size={11} color={colors.mutedForeground} />
+            ) : pollStopped ? (
+              <MaterialCommunityIcons name="autorenew" size={11} color={colors.mutedForeground} />
             ) : (
               <ActivityIndicator size={11} color={colors.primary} />
             )}
             <Text style={[s.pollingText, { color: colors.mutedForeground }]}>
               {pollingPaused
                 ? 'Paused'
-                : `Live · ${logCount} ${logCount === 1 ? 'line' : 'lines'}`}
+                : pollStopped
+                  ? reconnectProbing ? 'Reconnecting…' : 'Connection lost'
+                  : `Live · ${logCount} ${logCount === 1 ? 'line' : 'lines'}`}
             </Text>
           </View>
         )}

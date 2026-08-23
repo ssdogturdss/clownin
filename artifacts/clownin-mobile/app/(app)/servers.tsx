@@ -50,6 +50,13 @@ const DEFAULT_FORM: ServerForm = {
   useKey: false,
 };
 
+function formatTestedAt(ts: number): string {
+  const diffMin = Math.floor((Date.now() - ts) / 60_000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin} min ago`;
+  return 'over an hour ago';
+}
+
 export default function ServersScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -65,7 +72,7 @@ export default function ServersScreen() {
   const [editingServer, setEditingServer] = useState<ServerConfig | null>(null);
   const [form, setForm] = useState<ServerForm>(DEFAULT_FORM);
   const [testing, setTesting] = useState<number | null>(null);
-  const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string }>>({});
+  const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string; testedAt: number }>>({});
 
   const openCreate = () => {
     setEditingServer(null);
@@ -175,12 +182,12 @@ export default function ServersScreen() {
     setTesting(s.id);
     try {
       const res = await testMutation.mutateAsync({ id: s.id });
-      setTestResults((prev) => ({ ...prev, [s.id]: res }));
+      setTestResults((prev) => ({ ...prev, [s.id]: { ...res, testedAt: Date.now() } }));
       await Haptics.notificationAsync(
         res.ok ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error
       );
     } catch {
-      setTestResults((prev) => ({ ...prev, [s.id]: { ok: false, error: 'Request failed' } }));
+      setTestResults((prev) => ({ ...prev, [s.id]: { ok: false, error: 'Request failed', testedAt: Date.now() } }));
     } finally {
       setTesting(null);
     }
@@ -251,6 +258,9 @@ export default function ServersScreen() {
                       />
                       <Text style={[styles.testBadgeText, { color: testResult.ok ? colors.primary : colors.destructive }]}>
                         {testResult.ok ? 'Connected' : getErrorLabel(testResult.error)}
+                      </Text>
+                      <Text style={[styles.testTimestamp, { color: testResult.ok ? colors.primary + 'aa' : colors.destructive + 'aa' }]}>
+                        Tested {formatTestedAt(testResult.testedAt)}
                       </Text>
                     </View>
                     {!testResult.ok && (
@@ -444,6 +454,7 @@ const styles = StyleSheet.create({
   testBadgeWrap: { gap: 4 },
   testBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' },
   testBadgeText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  testTimestamp: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 1 },
   testHintText: { fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 16, paddingHorizontal: 2 },
   testHintRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1 },
