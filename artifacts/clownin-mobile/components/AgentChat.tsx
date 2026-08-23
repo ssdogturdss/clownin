@@ -12,6 +12,7 @@ import {
   Image,
   ScrollView,
   Alert,
+  Linking,
 } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 // @ts-ignore — expo/fetch provides streaming on native + web
@@ -54,8 +55,9 @@ type ThinkingMsg = { id: string; kind: "thinking"; statusText?: string };
 type DateDividerMsg = { id: string; kind: "date_divider"; label: string };
 
 type ImageResultMsg = { id: string; kind: "image_result"; callId: string; dataUri: string };
+type VideoResultMsg = { id: string; kind: "video_result"; callId: string; url: string | null; hasB64: boolean };
 
-type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg | ImageResultMsg;
+type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg | ImageResultMsg | VideoResultMsg;
 
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
@@ -376,6 +378,10 @@ function toolLabel(tool: string, args: Record<string, unknown>): string {
       const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
       return p ? `Generating: ${p}…` : "Generating image…";
     }
+    case "generate_video": {
+      const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
+      return p ? `Generating video: ${p}…` : "Generating video…";
+    }
     case "enable_preview":   return "Setting up preview link…";
     case "deploy": {
       const platform = typeof args.platform === "string" ? args.platform : "hosting";
@@ -400,6 +406,7 @@ function toolIcon(tool: string): string {
     case "search_files":     return "magnify";
     case "fetch_url":        return "web";
     case "generate_image":   return "image-outline";
+    case "generate_video":   return "video-outline";
     case "enable_preview":   return "link-variant";
     case "deploy":           return "rocket-launch-outline";
     default:                 return "wrench-outline";
@@ -460,6 +467,28 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
   const scrollToBottom = useCallback(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
   }, []);
+
+  // ── Image save-to-project state ───────────────────────────────────────────
+  const [imageSaveState, setImageSaveState] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
+
+  const handleSaveImage = useCallback(async (imgId: string, dataUri: string) => {
+    setImageSaveState((prev) => ({ ...prev, [imgId]: "saving" }));
+    try {
+      const base64 = dataUri.replace(/^data:image\/[^;]+;base64,/, "");
+      const filename = `assets/generated-${Date.now()}.jpg`;
+      const base = resolveApiBaseUrl();
+      const res = await fetch(`${base}/api/projects/${projectId}/files`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ path: filename, content: base64, language: "plaintext" }),
+      });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      setImageSaveState((prev) => ({ ...prev, [imgId]: "saved" }));
+      onFilesChanged?.();
+    } catch {
+      setImageSaveState((prev) => ({ ...prev, [imgId]: "error" }));
+    }
+  }, [projectId, token, onFilesChanged]);
 
   // ── Load sessions and current session's messages on mount ─────────────────
   useEffect(() => {
@@ -875,6 +904,16 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               break;
             }
 
+            case "video": {
+              const { callId, url, b64 } = event.payload as { callId: string; url: string | null; b64: boolean };
+              setMessages((prev) => [
+                ...prev,
+                { id: `vid-${callId}`, kind: "video_result", callId, url: url ?? null, hasB64: !!b64 },
+              ]);
+              scrollToBottom();
+              break;
+            }
+
             case "message": {
               removeThinking();
               const { text: msgText } = event.payload as { text: string };
@@ -983,6 +1022,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
       }
 
       if (item.kind === "image_result") {
+        const saveStatus = imageSaveState[item.id] ?? "idle";
         return (
           <View style={styles.imageResultRow}>
             <Image
@@ -990,6 +1030,65 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               style={styles.imageResult}
               resizeMode="contain"
             />
+            <Pressable
+              style={[
+                styles.imageSaveBtn,
+                {
+                  backgroundColor:
+                    saveStatus === "saved" ? colors.success + "22" :
+                    saveStatus === "error"  ? colors.destructive + "22" :
+                    colors.card,
+                  borderColor:
+                    saveStatus === "saved" ? colors.success + "66" :
+                    saveStatus === "error"  ? colors.destructive + "66" :
+                    colors.border,
+                },
+              ]}
+              onPress={() => handleSaveImage(item.id, item.dataUri)}
+              disabled={saveStatus === "saving" || saveStatus === "saved"}
+            >
+              {saveStatus === "saving" ? (
+                <ActivityIndicator size={12} color={colors.mutedForeground} />
+              ) : (
+                <MaterialCommunityIcons
+                  name={saveStatus === "saved" ? "check-circle-outline" : saveStatus === "error" ? "alert-circle-outline" : "tray-arrow-down"}
+                  size={13}
+                  color={saveStatus === "saved" ? colors.success : saveStatus === "error" ? colors.destructive : colors.mutedForeground}
+                />
+              )}
+              <Text style={[styles.imageSaveBtnText, {
+                color: saveStatus === "saved" ? colors.success : saveStatus === "error" ? colors.destructive : colors.mutedForeground,
+              }]}>
+                {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved to project" : saveStatus === "error" ? "Save failed — retry" : "Save to project"}
+              </Text>
+            </Pressable>
+          </View>
+        );
+      }
+
+      if (item.kind === "video_result") {
+        return (
+          <View style={styles.imageResultRow}>
+            <View style={[styles.videoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <MaterialCommunityIcons name="video-outline" size={22} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.videoCardTitle, { color: colors.foreground }]}>Video generated</Text>
+                {!item.url && item.hasB64 && (
+                  <Text style={[styles.videoCardSub, { color: colors.mutedForeground }]}>
+                    Ask the agent to save it to your project files.
+                  </Text>
+                )}
+              </View>
+              {item.url ? (
+                <Pressable
+                  style={[styles.videoPlayBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => item.url && Linking.openURL(item.url)}
+                >
+                  <MaterialCommunityIcons name="play" size={14} color="#fff" />
+                  <Text style={styles.videoPlayBtnText}>Play</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         );
       }
@@ -1043,7 +1142,7 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
 
       return null;
     },
-    [colors]
+    [colors, imageSaveState, handleSaveImage]
   );
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -1431,6 +1530,25 @@ const styles = StyleSheet.create({
   // Generated image
   imageResultRow: { paddingHorizontal: 16, paddingVertical: 6 },
   imageResult: { width: "100%" as const, height: 300, borderRadius: 12 },
+  imageSaveBtn: {
+    flexDirection: "row" as const, alignItems: "center" as const, gap: 6,
+    marginTop: 6, paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: 8, borderWidth: 1, alignSelf: "flex-start" as const,
+  },
+  imageSaveBtnText: { fontSize: 12 },
+
+  // Generated video
+  videoCard: {
+    flexDirection: "row" as const, alignItems: "center" as const, gap: 10,
+    padding: 12, borderRadius: 12, borderWidth: 1,
+  },
+  videoCardTitle: { fontSize: 13, fontWeight: "600" as const },
+  videoCardSub: { fontSize: 11, marginTop: 2 },
+  videoPlayBtn: {
+    flexDirection: "row" as const, alignItems: "center" as const, gap: 4,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+  },
+  videoPlayBtnText: { color: "#fff", fontSize: 12, fontWeight: "700" as const },
 
   bubbleText: { fontSize: 13, lineHeight: 19 },
 

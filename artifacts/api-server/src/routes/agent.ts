@@ -12,7 +12,7 @@ import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getProviderClient, classifyProviderError, getImageClient, type ProviderClientResult } from "../lib/providerClient.js";
+import { getProviderClient, classifyProviderError, getImageClient, getVideoConfig, type ProviderClientResult } from "../lib/providerClient.js";
 
 const router: IRouter = Router();
 
@@ -438,6 +438,24 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "generate_video",
+      description:
+        "Generate a short video clip using AI and display a playable link in the chat. Use for demo animations, product walkthroughs, or any motion asset the project needs. Requires XAI_VIDEO_ENDPOINT and XAI_API_KEY to be configured.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description: "Detailed description of the video to generate. Include scene, motion, style, and duration cues.",
+          },
+        },
+        required: ["prompt"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "generate_image",
       description:
         "Generate an image using AI and display it inline in the chat. Use for UI mockups, diagrams, logos, icons, illustrations, or any visual asset the project needs. The image is shown to the user immediately — write it to the project with create_file only if the user wants to save it.",
@@ -740,6 +758,10 @@ function toolStatusNarration(name: string, args: Record<string, unknown>): strin
       const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
       return p ? `Generating image: ${p}…` : "Generating image…";
     }
+    case "generate_video": {
+      const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
+      return p ? `Generating video: ${p}…` : "Generating video…";
+    }
     default:
       return "Working on it…";
   }
@@ -852,7 +874,7 @@ router.post(
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
-    type EvtType = "thinking" | "status" | "tool_call" | "tool_result" | "image" | "token" | "message" | "done" | "error";
+    type EvtType = "thinking" | "status" | "tool_call" | "tool_result" | "image" | "video" | "token" | "message" | "done" | "error";
     function sse(type: EvtType, payload?: unknown) {
       res.write(`data: ${JSON.stringify({ type, payload })}\n\n`);
     }
@@ -1760,6 +1782,41 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   if (!res.ok) isError = true;
                 } catch (err: unknown) {
                   result = err instanceof Error ? err.message : "fetch failed";
+                  isError = true;
+                }
+                break;
+              }
+
+              case "generate_video": {
+                const prompt = String(args.prompt ?? "").trim();
+                if (!prompt) { result = "prompt is required"; isError = true; break; }
+                try {
+                  const { endpoint, model, apiKey } = await getVideoConfig();
+                  const controller = new AbortController();
+                  const tid = setTimeout(() => controller.abort(), 120_000);
+                  const vidRes = await fetch(endpoint, {
+                    method: "POST",
+                    headers: {
+                      "Authorization": `Bearer ${apiKey}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ model, prompt, n: 1 }),
+                    signal: controller.signal,
+                  });
+                  clearTimeout(tid);
+                  if (!vidRes.ok) {
+                    const errText = await vidRes.text().catch(() => "");
+                    throw new Error(`Video API error ${vidRes.status}: ${errText.slice(0, 200)}`);
+                  }
+                  const vidJson = await vidRes.json() as { data?: Array<{ url?: string; b64_json?: string }> };
+                  const vidItem = (vidJson.data ?? [])[0];
+                  const videoUrl = vidItem?.url?.trim() ?? "";
+                  const videoB64 = vidItem?.b64_json ?? "";
+                  if (!videoUrl && !videoB64) throw new Error("No video data returned by provider");
+                  sse("video", { callId: tc.id, url: videoUrl || null, b64: videoB64 ? true : false });
+                  result = "Video generated and displayed in chat.";
+                } catch (vidErr: unknown) {
+                  result = vidErr instanceof Error ? vidErr.message : "Video generation failed";
                   isError = true;
                 }
                 break;

@@ -136,6 +136,31 @@ export function getEnvVarFallback(): ProviderClientResult {
  *  3. Active DB provider is OpenAI  →  DALL-E 3
  *  4. Throws — no image-capable provider is available
  */
+/**
+ * Resolves configuration for video generation from env vars.
+ * XAI_VIDEO_ENDPOINT sets the provider URL; XAI_VIDEO_MODEL sets the model
+ * name (defaults to "aurora-video"). XAI_API_KEY is used for auth.
+ */
+export async function getVideoConfig(): Promise<{ endpoint: string; model: string; apiKey: string }> {
+  const endpoint = process.env.XAI_VIDEO_ENDPOINT?.trim();
+  const model    = process.env.XAI_VIDEO_MODEL?.trim() ?? "aurora-video";
+  const apiKey   = process.env.XAI_API_KEY?.trim();
+
+  if (!endpoint) {
+    throw new Error(
+      "No video generation endpoint configured. " +
+      "Set XAI_VIDEO_ENDPOINT (and optionally XAI_VIDEO_MODEL) to enable video generation.",
+    );
+  }
+  if (!apiKey) {
+    throw new Error(
+      "XAI_API_KEY is required for video generation. Set it alongside XAI_VIDEO_ENDPOINT.",
+    );
+  }
+
+  return { endpoint, model, apiKey };
+}
+
 export async function getImageClient(): Promise<{ client: OpenAI; model: string }> {
   // Explicit xAI key takes priority over everything else.
   const xaiEnvKey = process.env.XAI_API_KEY;
