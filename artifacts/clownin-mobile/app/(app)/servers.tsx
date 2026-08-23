@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -50,11 +50,15 @@ const DEFAULT_FORM: ServerForm = {
   useKey: false,
 };
 
-function formatTestedAt(ts: number): string {
-  const diffMin = Math.floor((Date.now() - ts) / 60_000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin} min ago`;
-  return 'over an hour ago';
+function formatTestedAt(ts: number, now: number): string {
+  const diffMinutes = Math.max(0, Math.floor((now - ts) / 60_000));
+  if (diffMinutes < 1) return 'just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
 export default function ServersScreen() {
@@ -73,6 +77,12 @@ export default function ServersScreen() {
   const [form, setForm] = useState<ServerForm>(DEFAULT_FORM);
   const [testing, setTesting] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string; testedAt: number }>>({});
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const openCreate = () => {
     setEditingServer(null);
@@ -275,10 +285,10 @@ export default function ServersScreen() {
                       <Text style={[styles.testBadgeText, { color: testResult.ok ? colors.primary : colors.destructive }]}>
                         {testResult.ok ? 'Connected' : getErrorLabel(testResult.error)}
                       </Text>
-                      <Text style={[styles.testTimestamp, { color: testResult.ok ? colors.primary + 'aa' : colors.destructive + 'aa' }]}>
-                        Tested {formatTestedAt(testResult.testedAt)}
-                      </Text>
                     </View>
+                    <Text style={[styles.testTimestamp, { color: colors.mutedForeground }]}>
+                      Tested {formatTestedAt(testResult.testedAt, now)}
+                    </Text>
                     {!testResult.ok && (
                       <View style={styles.testHintRow}>
                         {testResult.error && getConnectionHint(testResult.error) && (
