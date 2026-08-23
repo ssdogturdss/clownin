@@ -66,6 +66,14 @@ export default function ServersScreen() {
   const [testing, setTesting] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string }>>({});
 
+  function getConnectionHint(error: string): string | null {
+    if (error.includes('ECONNREFUSED')) return 'Port 22 is closed — check your firewall or port forwarding';
+    if (error.includes('ENOTFOUND')) return 'Hostname not found — check the IP or domain';
+    if (error.includes('handshake') || error.includes('readyTimeout') || error.includes('Timed out')) return 'Connected but SSH handshake timed out — try adding UseDNS no to /etc/ssh/sshd_config on the server';
+    if (error.includes('Authentication') || error.includes('password') || error.includes('auth')) return 'Wrong username or password';
+    return null;
+  };
+
   const openCreate = () => {
     setEditingServer(null);
     setForm(DEFAULT_FORM);
@@ -224,15 +232,22 @@ export default function ServersScreen() {
                 </View>
 
                 {testResult && (
-                  <View style={[styles.testBadge, { backgroundColor: testResult.ok ? colors.primary + '22' : colors.destructive + '22' }]}>
-                    <Ionicons
-                      name={testResult.ok ? 'checkmark-circle-outline' : 'close-circle-outline'}
-                      size={14}
-                      color={testResult.ok ? colors.primary : colors.destructive}
-                    />
-                    <Text style={[styles.testBadgeText, { color: testResult.ok ? colors.primary : colors.destructive }]}>
-                      {testResult.ok ? 'Connected' : (testResult.error ?? 'Failed')}
-                    </Text>
+                  <View style={styles.testBadgeWrap}>
+                    <View style={[styles.testBadge, { backgroundColor: testResult.ok ? colors.primary + '22' : colors.destructive + '22' }]}>
+                      <Ionicons
+                        name={testResult.ok ? 'checkmark-circle-outline' : 'close-circle-outline'}
+                        size={14}
+                        color={testResult.ok ? colors.primary : colors.destructive}
+                      />
+                      <Text style={[styles.testBadgeText, { color: testResult.ok ? colors.primary : colors.destructive }]}>
+                        {testResult.ok ? 'Connected' : (testResult.error ?? 'Failed')}
+                      </Text>
+                    </View>
+                    {!testResult.ok && testResult.error && getConnectionHint(testResult.error) && (
+                      <Text style={[styles.testHintText, { color: colors.mutedForeground }]}>
+                        {getConnectionHint(testResult.error)}
+                      </Text>
+                    )}
                   </View>
                 )}
 
@@ -402,8 +417,10 @@ const styles = StyleSheet.create({
   cardName: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
   cardHost: { fontSize: 12, fontFamily: 'Inter_400Regular', marginTop: 2 },
   iconBtn: { padding: 6 },
-  testBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  testBadgeWrap: { gap: 4 },
+  testBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' },
   testBadgeText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  testHintText: { fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 16, paddingHorizontal: 2 },
   testBtn: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
   testBtnText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
