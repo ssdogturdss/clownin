@@ -166,6 +166,15 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "inspect_project",
+      description:
+        "Build a compact project map before editing: identify manifests, scripts, dependencies, likely entry points, and related source files. Use this first for unfamiliar projects.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "list_files",
       description: "List all files in the project (path + language)",
       parameters: { type: "object", properties: {} },
@@ -237,6 +246,24 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
         type: "object",
         properties: { path: { type: "string" } },
         required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "verify_project",
+      description:
+        "Run the safest relevant project checks after edits. Automatically detects package scripts or language manifests and runs tests, type checks, lint, build, or an appropriate execution check. Returns structured PASS/FAIL output.",
+      parameters: {
+        type: "object",
+        properties: {
+          check: {
+            type: "string",
+            enum: ["auto", "test", "typecheck", "lint", "build"],
+            description: "Preferred check; auto chooses the best available checks.",
+          },
+        },
       },
     },
   },
