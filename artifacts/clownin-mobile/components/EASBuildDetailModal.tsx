@@ -90,6 +90,14 @@ const PLATFORM_COLOR: Record<string, string> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function formatLastUpdated(ts: Date | null): string {
+  if (!ts) return '';
+  const diffMin = Math.floor((Date.now() - ts.getTime()) / 60_000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin === 1) return '1 min ago';
+  return `${diffMin} min ago`;
+}
+
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const m = Math.floor(seconds / 60);
@@ -135,6 +143,10 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [pollStopped, setPollStopped] = useState(false);
   /** True while the slow reconnect probe is running after polling stopped. */
   const [reconnectProbing, setReconnectProbing] = useState(false);
+  /** Timestamp of the last successful poll tick — drives "Last updated N min ago". */
+  const [lastSuccessAt, setLastSuccessAt] = useState<Date | null>(null);
+  /** Incremented every 30 s while pollStopped so the "N min ago" label stays live. */
+  const [, forceTickRender] = useState(0);
 
   const scrollRef    = useRef<ScrollView>(null);
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -209,6 +221,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       setPollStopped(false);
       setError('');
       setPollError('');
+      setLastSuccessAt(new Date());
 
       // Auto-scroll to bottom only when the user hasn't manually scrolled up.
       if (!userScrolled.current && isActive(json.status) && newLines.length > 0) {
@@ -292,6 +305,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     pollStoppedRef.current   = false;
     setPollStopped(false);
     pollFailCountRef.current = 0;
+    setLastSuccessAt(null);
     userScrolled.current  = false;
     accLogsRef.current    = [];
     logOffsetRef.current  = 0;
@@ -350,6 +364,14 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       isReconnectProbeRef.current = false;
     };
   }, [pollStopped, build, detail?.status, fetchLogs]);
+
+  // ── Tick every 30 s while pollStopped so "N min ago" label stays live ──────
+
+  useEffect(() => {
+    if (!pollStopped) return;
+    const id = setInterval(() => forceTickRender(c => c + 1), 30_000);
+    return () => clearInterval(id);
+  }, [pollStopped]);
 
   // ── Manual retry after polling stopped ─────────────────────────────────────
 
@@ -665,7 +687,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
                 {pollStopped ? (
                   <>
                     <Text style={[s.retryBannerText, { color: colors.destructive }]} numberOfLines={1}>
-                      Connection lost
+                      {`Connection lost${lastSuccessAt ? ` · ${formatLastUpdated(lastSuccessAt)}` : ''}`}
                     </Text>
                     <Pressable
                       onPress={handlePollRetry}
@@ -754,7 +776,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
               {pollingPaused
                 ? 'Paused'
                 : pollStopped
-                  ? reconnectProbing ? 'Reconnecting…' : 'Connection lost'
+                  ? reconnectProbing
+                  ? `Reconnecting…${lastSuccessAt ? ` · ${formatLastUpdated(lastSuccessAt)}` : ''}`
+                  : `Connection lost${lastSuccessAt ? ` · ${formatLastUpdated(lastSuccessAt)}` : ''}`
                   : `Live · ${logCount} ${logCount === 1 ? 'line' : 'lines'}`}
             </Text>
           </View>
