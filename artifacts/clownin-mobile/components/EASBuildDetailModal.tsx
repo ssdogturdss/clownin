@@ -27,7 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { resolveApiBaseUrl } from '@/app/_layout';
-import { PollController } from '../lib/buildLogPolling';
+import { PollController, shouldRecoverFullLog } from '../lib/buildLogPolling';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -231,9 +231,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       // checking whether the build is now terminal and the server's logOffset
       // did not advance past the offset we requested with.  In that case,
       // silently re-fetch from offset 0 so no lines are lost.
-      const terminalStatus = !isActive(json.status);
-      const noNewLines = (json.logOffset ?? merged.length) <= offset;
-      if (silent && offset > 0 && terminalStatus && noNewLines) {
+      if (shouldRecoverFullLog({
+        silent,
+        requestedOffset: offset,
+        terminalStatus: !isActive(json.status),
+        serverLogOffset: json.logOffset ?? merged.length,
+      })) {
         // Reset accumulated state so the full-load response replaces everything.
         logOffsetRef.current = 0;
         accLogsRef.current   = [];

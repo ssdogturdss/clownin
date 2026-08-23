@@ -14,6 +14,36 @@
 
 export const POLL_FAILURE_THRESHOLD = 3;
 
+// ── Log-gap recovery ─────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the fetch response signals that a full log refetch from
+ * offset 0 is needed to close a gap that opened while the app was backgrounded.
+ *
+ * The condition is:
+ *   - The fetch was a silent poll tick (not the initial page load)
+ *   - We requested lines starting from a non-zero offset (we had prior lines)
+ *   - The build is now in a terminal state (finished / errored / cancelled)
+ *   - The server's returned logOffset did NOT advance past the offset we asked
+ *     with, meaning no new lines were delivered even though the build is done
+ *
+ * When all four are true the server either truncated or rotated its log buffer
+ * while the app was in the background, so lines were silently dropped.
+ */
+export function shouldRecoverFullLog(opts: {
+  silent: boolean;
+  requestedOffset: number;
+  terminalStatus: boolean;
+  serverLogOffset: number;
+}): boolean {
+  return (
+    opts.silent &&
+    opts.requestedOffset > 0 &&
+    opts.terminalStatus &&
+    opts.serverLogOffset <= opts.requestedOffset
+  );
+}
+
 export class PollController {
   private _failCount  = 0;
   private _stopped    = false;

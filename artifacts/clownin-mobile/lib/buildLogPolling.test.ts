@@ -1,15 +1,21 @@
 /**
- * Tests for the PollController build-log polling state machine.
+ * Tests for the PollController build-log polling state machine and the
+ * shouldRecoverFullLog log-gap recovery predicate.
  *
- * Covers the four required scenarios:
+ * PollController covers four scenarios:
  *   1. 3 consecutive failures → interval stopped + retry button should be shown
  *   2. A success in the middle (or after stopping) resets the failure counter
  *   3. Manual retry (reset + startInterval) restarts the interval
  *   4. AppState active transition resumes cleanly (normal poll or reconnect probe)
+ *
+ * shouldRecoverFullLog covers three scenarios:
+ *   5. Terminal status + stale logOffset → full refetch must fire
+ *   6. Terminal status + advancing logOffset (normal delta) → no refetch
+ *   7. Active build status → no refetch regardless of offset
  */
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { PollController, POLL_FAILURE_THRESHOLD } from './buildLogPolling';
+import { PollController, POLL_FAILURE_THRESHOLD, shouldRecoverFullLog } from './buildLogPolling';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -235,6 +241,116 @@ describe('PollController', () => {
       expect(ctrl.isRunning).toBe(false);
       ctrl.clearInterval(); // should not throw
       expect(ctrl.isRunning).toBe(false);
+    });
+  });
+});
+
+// ── shouldRecoverFullLog ──────────────────────────────────────────────────────
+
+describe('shouldRecoverFullLog', () => {
+  // ── 5. Terminal status + stale logOffset → full refetch must fire ─────────
+
+  describe('terminal build + stale offset → triggers full refetch', () => {
+    it('returns true when build is terminal, offset > 0, and serverLogOffset equals requestedOffset', () => {
+      // Simulates: app was backgrounded at offset 42; when it resumes the
+      // silent catch-up poll gets back logOffset=42 (no new lines), build=FINISHED.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 42,
+        terminalStatus: true,
+        serverLogOffset: 42,
+      })).toBe(true);
+    });
+
+    it('returns true when serverLogOffset is strictly less than requestedOffset', () => {
+      // Simulates server log rotation: server reports logOffset=10 even though
+      // we requested from offset 80 — the buffer was truncated.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 80,
+        terminalStatus: true,
+        serverLogOffset: 10,
+      })).toBe(true);
+    });
+
+    it('returns true when serverLogOffset is 0 (empty buffer after rotation)', () => {
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 55,
+        terminalStatus: true,
+        serverLogOffset: 0,
+      })).toBe(true);
+    });
+  });
+
+  // ── 6. Terminal status + advancing logOffset (normal delta) → no refetch ──
+
+  describe('terminal build + advancing offset → no recovery needed', () => {
+    it('returns false when serverLogOffset advances past requestedOffset (new lines arrived)', () => {
+      // Normal case: the build finished and the server delivered the final
+      // batch of lines — logOffset moved from 42 to 57.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 42,
+        terminalStatus: true,
+        serverLogOffset: 57,
+      })).toBe(false);
+    });
+
+    it('returns false when requestedOffset is 0 (initial full load, not a delta poll)', () => {
+      // The very first fetch always uses offset=0; recovery must never
+      // trigger on the initial load even if status is already terminal.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 0,
+        terminalStatus: true,
+        serverLogOffset: 0,
+      })).toBe(false);
+    });
+
+    it('returns false when silent is false (non-silent initial load)', () => {
+      // A non-silent fetch is the initial page load; recovery only applies
+      // to silent poll ticks.
+      expect(shouldRecoverFullLog({
+        silent: false,
+        requestedOffset: 42,
+        terminalStatus: true,
+        serverLogOffset: 42,
+      })).toBe(false);
+    });
+  });
+
+  // ── 7. Active build status → no refetch regardless of offset ─────────────
+
+  describe('active build → no recovery triggered', () => {
+    it('returns false when build is still active (IN_PROGRESS) even if offset is stale', () => {
+      // The build is still running — a stale-looking offset just means no new
+      // lines arrived yet; do not trigger a full reload.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 30,
+        terminalStatus: false,  // isActive(status) === true
+        serverLogOffset: 30,
+      })).toBe(false);
+    });
+
+    it('returns false when build is queued (IN_QUEUE) with zero offset', () => {
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 0,
+        terminalStatus: false,
+        serverLogOffset: 0,
+      })).toBe(false);
+    });
+
+    it('returns false when build is active and serverLogOffset is behind requestedOffset', () => {
+      // Even if offset looks stale, an active build means we must wait — no recovery.
+      expect(shouldRecoverFullLog({
+        silent: true,
+        requestedOffset: 100,
+        terminalStatus: false,
+        serverLogOffset: 80,
+      })).toBe(false);
     });
   });
 });
