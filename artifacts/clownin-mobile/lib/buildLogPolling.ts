@@ -71,14 +71,18 @@ export class PollController {
   }
 
   /**
-   * Record a failed poll tick (must NOT be called for reconnect-probe
-   * failures — those are handled silently by the caller).
+   * Record a failed poll tick.
+   *
+   * Reconnect-probe failures are deliberately ignored: the probe exists to
+   * recover from the stopped state and must not accumulate a second failure
+   * count while the network is still unavailable.
    *
    * Returns true if this failure crossed the threshold and polling was
    * just stopped; the caller should update the stopped-state UI flag and
    * start the reconnect probe.
    */
-  recordFailure(): boolean {
+  recordFailure(isReconnectProbe = false): boolean {
+    if (isReconnectProbe) return false;
     if (this._stopped) return false; // already stopped — no further accumulation
     this._failCount++;
     if (this._failCount >= POLL_FAILURE_THRESHOLD) {

@@ -83,6 +83,33 @@ describe('PollController', () => {
       expect(again).toBe(false);           // should not re-signal
       expect(ctrl.consecutiveFailures).toBe(3); // count stays at threshold
     });
+
+    it('ignores any number of reconnect-probe failures', () => {
+      ctrl.startInterval(makeTick().fn, 60_000);
+
+      for (let i = 0; i < POLL_FAILURE_THRESHOLD * 10; i++) {
+        expect(ctrl.recordFailure(true)).toBe(false);
+      }
+
+      expect(ctrl.consecutiveFailures).toBe(0);
+      expect(ctrl.isStopped).toBe(false);
+      expect(ctrl.isRunning).toBe(true);
+    });
+
+    it('keeps the stopped state and idle interval through repeated probe failures', () => {
+      ctrl.startInterval(makeTick().fn, 60_000);
+      ctrl.recordFailure();
+      ctrl.recordFailure();
+      ctrl.recordFailure();
+
+      for (let i = 0; i < POLL_FAILURE_THRESHOLD * 10; i++) {
+        ctrl.recordFailure(true);
+      }
+
+      expect(ctrl.consecutiveFailures).toBe(POLL_FAILURE_THRESHOLD);
+      expect(ctrl.isStopped).toBe(true);
+      expect(ctrl.isRunning).toBe(false);
+    });
   });
 
   // ── 2. A success resets the failure counter ───────────────────────────────
@@ -105,6 +132,27 @@ describe('PollController', () => {
       expect(wasStopped).toBe(true); // caller should restart the 5-second interval
       expect(ctrl.isStopped).toBe(false);
       expect(ctrl.consecutiveFailures).toBe(0);
+    });
+
+    it('a probe success after repeated probe failures restarts normal polling', () => {
+      ctrl.startInterval(makeTick().fn, 60_000);
+      ctrl.recordFailure();
+      ctrl.recordFailure();
+      ctrl.recordFailure();
+
+      for (let i = 0; i < POLL_FAILURE_THRESHOLD * 10; i++) {
+        ctrl.recordFailure(true);
+      }
+      expect(ctrl.isStopped).toBe(true);
+      expect(ctrl.isRunning).toBe(false);
+
+      const wasStopped = ctrl.recordSuccess();
+      expect(wasStopped).toBe(true);
+      expect(ctrl.consecutiveFailures).toBe(0);
+      expect(ctrl.isStopped).toBe(false);
+
+      ctrl.startInterval(makeTick().fn, 5_000);
+      expect(ctrl.isRunning).toBe(true);
     });
 
     it('after a mid-stream success, 3 failures must re-accumulate before stopping', () => {

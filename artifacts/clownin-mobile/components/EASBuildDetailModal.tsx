@@ -320,14 +320,15 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Failed to load logs';
       // All poll-tick (silent) failures count toward the consecutive-failure
-      // limit, unless this fetch was fired by the reconnect probe — probe
+      // limit, unless this fetch was fired by the reconnect probe. Probe
       // failures are swallowed silently so they don't flip error UI or
-      // double-count against the threshold.
+      // accumulate against the threshold.
       if (silent) {
-        if (!isReconnectProbeRef.current) {
+        const isReconnectProbe = isReconnectProbeRef.current;
+        const justStopped = pollControllerRef.current.recordFailure(isReconnectProbe);
+        if (!isReconnectProbe) {
           // After 3 consecutive failures, stop hammering the server and ask the
           // user to retry manually (or wait for the reconnect probe to succeed).
-          const justStopped = pollControllerRef.current.recordFailure();
           if (justStopped) setPollStopped(true);
           // Show inline banner if we have logs; otherwise surface a full-screen
           // error so the user knows no data has been loaded yet.
