@@ -53,7 +53,9 @@ type ThinkingMsg = { id: string; kind: "thinking"; statusText?: string };
 
 type DateDividerMsg = { id: string; kind: "date_divider"; label: string };
 
-type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg;
+type ImageResultMsg = { id: string; kind: "image_result"; callId: string; dataUri: string };
+
+type AgentMsg = TextMsg | ToolCallMsg | ThinkingMsg | DateDividerMsg | ImageResultMsg;
 
 // Pair sent to backend as history
 type HistoryEntry = { role: "user" | "assistant"; content: string };
@@ -370,6 +372,10 @@ function toolLabel(tool: string, args: Record<string, unknown>): string {
       const u = typeof args.url === "string" ? args.url : "";
       try { return `Fetching ${new URL(u).hostname}`; } catch { return "Fetching URL…"; }
     }
+    case "generate_image": {
+      const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
+      return p ? `Generating: ${p}…` : "Generating image…";
+    }
     case "enable_preview":   return "Setting up preview link…";
     case "deploy": {
       const platform = typeof args.platform === "string" ? args.platform : "hosting";
@@ -393,6 +399,7 @@ function toolIcon(tool: string): string {
     case "install_packages": return "package-down";
     case "search_files":     return "magnify";
     case "fetch_url":        return "web";
+    case "generate_image":   return "image-outline";
     case "enable_preview":   return "link-variant";
     case "deploy":           return "rocket-launch-outline";
     default:                 return "wrench-outline";
@@ -858,6 +865,16 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
               break;
             }
 
+            case "image": {
+              const { callId, dataUri } = event.payload as { callId: string; dataUri: string };
+              setMessages((prev) => [
+                ...prev,
+                { id: `img-${callId}`, kind: "image_result", callId, dataUri },
+              ]);
+              scrollToBottom();
+              break;
+            }
+
             case "message": {
               removeThinking();
               const { text: msgText } = event.payload as { text: string };
@@ -961,6 +978,18 @@ export function AgentChat({ projectId, onFilesChanged, initialMessage }: AgentCh
                 <View style={[styles.cursor, { backgroundColor: colors.primary }]} />
               )}
             </View>
+          </View>
+        );
+      }
+
+      if (item.kind === "image_result") {
+        return (
+          <View style={styles.imageResultRow}>
+            <Image
+              source={{ uri: item.dataUri }}
+              style={styles.imageResult}
+              resizeMode="contain"
+            />
           </View>
         );
       }
@@ -1398,6 +1427,10 @@ const styles = StyleSheet.create({
   toolHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
   toolLabel: { fontSize: 12, flex: 1 },
   toolResult: { fontSize: 11, fontFamily: "monospace", marginTop: 2 },
+
+  // Generated image
+  imageResultRow: { paddingHorizontal: 16, paddingVertical: 6 },
+  imageResult: { width: "100%" as const, height: 300, borderRadius: 12 },
 
   bubbleText: { fontSize: 13, lineHeight: 19 },
 

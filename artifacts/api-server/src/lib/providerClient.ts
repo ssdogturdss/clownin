@@ -100,11 +100,17 @@ export function _resetProviderCacheForTests(): void {
 }
 
 /**
- * Fallback: Replit AI integration env vars (OpenAI-compatible), then bare
- * OPENAI_API_KEY. Never cached so that a newly-configured DB provider takes
- * effect on the very next request rather than being stuck behind a cache window.
+ * Fallback: XAI_API_KEY → Replit AI integration env vars → bare OPENAI_API_KEY.
+ * Never cached so that a newly-configured DB provider takes effect on the very
+ * next request rather than being stuck behind a cache window.
  */
 export function getEnvVarFallback(): ProviderClientResult {
+  // xAI key takes priority when explicitly set in the environment.
+  const xaiKey = process.env.XAI_API_KEY;
+  if (xaiKey) {
+    return buildResult("xai", xaiKey, PROVIDER_BASE_URLS.xai, PROVIDER_DEFAULT_MODELS.xai);
+  }
+
   const apiKey =
     process.env.AI_INTEGRATIONS_OPENAI_API_KEY ??
     process.env.OPENAI_API_KEY;
@@ -114,11 +120,49 @@ export function getEnvVarFallback(): ProviderClientResult {
 
   if (!apiKey) {
     throw new Error(
-      "No AI provider configured — set an active provider in the admin panel or configure OPENAI_API_KEY",
+      "No AI provider configured — set an active provider in the admin panel, or set XAI_API_KEY / OPENAI_API_KEY",
     );
   }
 
   return buildResult("openai", apiKey, baseURL, "gpt-5.6-terra");
+}
+
+/**
+ * Resolves an OpenAI-compatible client and model name for image generation.
+ *
+ * Priority:
+ *  1. XAI_API_KEY env var  →  xAI Aurora (grok-2-image-1212)
+ *  2. Active DB provider is xAI  →  reuse its key for Aurora
+ *  3. Active DB provider is OpenAI  →  DALL-E 3
+ *  4. Throws — no image-capable provider is available
+ */
+export async function getImageClient(): Promise<{ client: OpenAI; model: string }> {
+  // Explicit xAI key takes priority over everything else.
+  const xaiEnvKey = process.env.XAI_API_KEY;
+  if (xaiEnvKey) {
+    return {
+      client: new OpenAI({ apiKey: xaiEnvKey, baseURL: PROVIDER_BASE_URLS.xai, timeout: 60_000 }),
+      model: "grok-2-image-1212",
+    };
+  }
+
+  // Reuse whichever provider is currently active in the DB.
+  try {
+    const provider = await getProviderClient();
+    if (provider.provider === "xai" && provider.openaiClient) {
+      return { client: provider.openaiClient, model: "grok-2-image-1212" };
+    }
+    if (provider.provider === "openai" && provider.openaiClient) {
+      return { client: provider.openaiClient, model: "dall-e-3" };
+    }
+  } catch {
+    // Fall through to the error below.
+  }
+
+  throw new Error(
+    "No image generation provider available. " +
+    "Set XAI_API_KEY to use xAI Aurora, or activate xAI / OpenAI in the admin panel.",
+  );
 }
 
 export async function getProviderClient(): Promise<ProviderClientResult> {

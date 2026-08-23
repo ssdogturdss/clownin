@@ -12,7 +12,7 @@ import { syncProjectFiles, projectDir } from "../lib/projectWorkspace";
 import { prepareNetlifyFiles, prepareVercelFiles } from "../lib/deployConfig";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getProviderClient, classifyProviderError, type ProviderClientResult } from "../lib/providerClient.js";
+import { getProviderClient, classifyProviderError, getImageClient, type ProviderClientResult } from "../lib/providerClient.js";
 
 const router: IRouter = Router();
 
@@ -435,6 +435,31 @@ const AGENT_TOOLS: OpenAI.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "generate_image",
+      description:
+        "Generate an image using AI and display it inline in the chat. Use for UI mockups, diagrams, logos, icons, illustrations, or any visual asset the project needs. The image is shown to the user immediately — write it to the project with create_file only if the user wants to save it.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description:
+              "Detailed description of the image to generate. Include style, colors, composition, and key visual elements. Be specific.",
+          },
+          size: {
+            type: "string",
+            enum: ["1024x1024", "1792x1024", "1024x1792"],
+            description:
+              "Image dimensions. Use 1792x1024 for landscape/wide, 1024x1792 for portrait/tall, 1024x1024 (default) for square.",
+          },
+        },
+        required: ["prompt"],
+      },
+    },
+  },
 ];
 
 // ── Execution helpers ─────────────────────────────────────────────────────────
@@ -711,6 +736,10 @@ function toolStatusNarration(name: string, args: Record<string, unknown>): strin
       try { return `Fetching ${new URL(u).hostname}…`; }
       catch { return "Fetching a URL…"; }
     }
+    case "generate_image": {
+      const p = typeof args.prompt === "string" ? args.prompt.slice(0, 40) : "";
+      return p ? `Generating image: ${p}…` : "Generating image…";
+    }
     default:
       return "Working on it…";
   }
@@ -823,7 +852,7 @@ router.post(
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
-    type EvtType = "thinking" | "status" | "tool_call" | "tool_result" | "token" | "message" | "done" | "error";
+    type EvtType = "thinking" | "status" | "tool_call" | "tool_result" | "image" | "token" | "message" | "done" | "error";
     function sse(type: EvtType, payload?: unknown) {
       res.write(`data: ${JSON.stringify({ type, payload })}\n\n`);
     }
@@ -1731,6 +1760,32 @@ ${files.length === 0 ? "  (empty project)" : files.map((f) => `  ${f.path} (${f.
                   if (!res.ok) isError = true;
                 } catch (err: unknown) {
                   result = err instanceof Error ? err.message : "fetch failed";
+                  isError = true;
+                }
+                break;
+              }
+
+              case "generate_image": {
+                const prompt = String(args.prompt ?? "").trim();
+                const size = (args.size as string | undefined) ?? "1024x1024";
+                if (!prompt) { result = "prompt is required"; isError = true; break; }
+                try {
+                  const { client: imgClient, model: imgModel } = await getImageClient();
+                  const imgRes = await imgClient.images.generate({
+                    model: imgModel,
+                    prompt,
+                    n: 1,
+                    size: size as "1024x1024" | "1792x1024" | "1024x1792",
+                    response_format: "b64_json",
+                  });
+                  const b64 = (imgRes.data ?? [])[0]?.b64_json ?? "";
+                  if (!b64) throw new Error("No image data returned by provider");
+                  // Emit a dedicated event so the mobile renders it inline
+                  // instead of truncating it as a text tool result.
+                  sse("image", { callId: tc.id, dataUri: `data:image/jpeg;base64,${b64}` });
+                  result = "Image generated and displayed in chat.";
+                } catch (imgErr: unknown) {
+                  result = imgErr instanceof Error ? imgErr.message : "Image generation failed";
                   isError = true;
                 }
                 break;
