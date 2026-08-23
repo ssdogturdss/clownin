@@ -27,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
 import { resolveApiBaseUrl } from '@/app/_layout';
+import { PollController } from '../lib/buildLogPolling';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -149,7 +150,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [, forceTickRender] = useState(0);
 
   const scrollRef    = useRef<ScrollView>(null);
-  const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Manages the 5-second poll interval and the consecutive-failure state machine. */
+  const pollControllerRef = useRef(new PollController());
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when the user has manually scrolled up; suppresses auto-scroll to bottom.
@@ -163,11 +165,6 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // Tracks current AppState so every interval-start path can guard against
   // restarting the poll while the app is backgrounded/inactive.
   const appStateRef   = useRef(AppState.currentState);
-  // Consecutive poll-failure counter — stops the interval at 3.
-  const pollFailCountRef = useRef(0);
-  // Ref mirror of pollStopped so event-handler closures can read it synchronously
-  // without depending on stale React state.
-  const pollStoppedRef = useRef(false);
   // Slow reconnect probe (30 s) that fires automatically after polling stops so
   // the user doesn't have to tap Retry after a transient network outage.
   const reconnectProbeRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -216,8 +213,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       setLogCount(merged.length);
 
       // Connection restored — clear any inline retry banner and reset failure counter.
-      pollFailCountRef.current = 0;
-      pollStoppedRef.current   = false;
+      pollControllerRef.current.recordSuccess();
       setPollStopped(false);
       setError('');
       setPollError('');
@@ -253,17 +249,10 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       // double-count against the threshold.
       if (silent) {
         if (!isReconnectProbeRef.current) {
-          pollFailCountRef.current += 1;
           // After 3 consecutive failures, stop hammering the server and ask the
           // user to retry manually (or wait for the reconnect probe to succeed).
-          if (pollFailCountRef.current >= 3) {
-            if (pollRef.current) {
-              clearInterval(pollRef.current);
-              pollRef.current = null;
-            }
-            pollStoppedRef.current = true;
-            setPollStopped(true);
-          }
+          const justStopped = pollControllerRef.current.recordFailure();
+          if (justStopped) setPollStopped(true);
           // Show inline banner if we have logs; otherwise surface a full-screen
           // error so the user knows no data has been loaded yet.
           if (accLogsRef.current.length > 0) {
@@ -302,9 +291,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     setDetail(null);
     setError('');
     setPollError('');
-    pollStoppedRef.current   = false;
+    pollControllerRef.current.reset();
     setPollStopped(false);
-    pollFailCountRef.current = 0;
     setLastSuccessAt(null);
     userScrolled.current  = false;
     accLogsRef.current    = [];
@@ -319,20 +307,14 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // once the app returns to "active".
 
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = null;
+    pollControllerRef.current.clearInterval();
     if (!build) return;
     const status = detail?.status ?? build.status;
     // Don't start a new interval if the user must manually retry after failures.
-    if (isActive(status) && appStateRef.current === 'active' && !pollStoppedRef.current) {
-      pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+    if (isActive(status) && appStateRef.current === 'active' && !pollControllerRef.current.isStopped) {
+      pollControllerRef.current.startInterval(() => fetchLogs(true), 5_000);
     }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
+    return () => pollControllerRef.current.clearInterval();
   }, [build, detail?.status, fetchLogs, pollStopped]);
 
   // ── Reconnect probe: auto-restart polling after network recovers ────────────
@@ -376,8 +358,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // ── Manual retry after polling stopped ─────────────────────────────────────
 
   const handlePollRetry = useCallback(() => {
-    pollFailCountRef.current = 0;
-    pollStoppedRef.current   = false;
+    pollControllerRef.current.reset();
     setPollStopped(false);
     setPollError('');
     setError('');
@@ -388,16 +369,14 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     // in the foreground.
     const currentStatus = detail?.status ?? build?.status ?? '';
     if (isActive(currentStatus) && appStateRef.current === 'active') {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+      pollControllerRef.current.startInterval(() => fetchLogs(true), 5_000);
     }
   }, [fetchLogs, detail?.status, build?.status]);
 
   // ── Stop polling / reset on close ──────────────────────────────────────────
 
   const handleClose = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = null;
+    pollControllerRef.current.clearInterval();
     if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
     reconnectProbeRef.current = null;
     isReconnectProbeRef.current = false;
@@ -419,10 +398,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       if (nextState === 'background' || nextState === 'inactive') {
         // Pause: clear the interval, the reconnect probe, and any in-flight
         // request so no network traffic fires while the app is invisible.
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        pollControllerRef.current.clearInterval();
         if (reconnectProbeRef.current) {
           clearInterval(reconnectProbeRef.current);
           reconnectProbeRef.current = null;
@@ -434,16 +410,13 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       } else if (nextState === 'active' && prevState !== 'active') {
         // Resume: only when we're actually transitioning back to foreground.
         // Always clear first to prevent duplicates, then restart appropriately.
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        pollControllerRef.current.clearInterval();
         const currentStatus = detail?.status ?? build?.status ?? '';
         if (build && isActive(currentStatus)) {
-          if (!pollStoppedRef.current) {
+          if (!pollControllerRef.current.isStopped) {
             // Normal resume: immediate catch-up fetch then 5-second cadence.
             fetchLogs(true);
-            pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+            pollControllerRef.current.startInterval(() => fetchLogs(true), 5_000);
           } else {
             // Polling was stopped due to failures; restart the reconnect probe
             // (it was cleared when we went to background).
@@ -465,7 +438,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
 
   useEffect(() => {
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      pollControllerRef.current.clearInterval();
       if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
       if (toastTimer.current) clearTimeout(toastTimer.current);
       toastOpacity.stopAnimation();
