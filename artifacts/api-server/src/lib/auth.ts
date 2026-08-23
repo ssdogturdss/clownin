@@ -23,6 +23,9 @@ let systemUserId = 1;
 export function setSystemUserId(id: number): void {
   systemUserId = id;
 }
+export function getSystemUserId(): number {
+  return systemUserId;
+}
 
 export function signToken(payload: AuthPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
