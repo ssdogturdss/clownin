@@ -131,6 +131,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [pollingPaused, setPollingPaused] = useState(
     AppState.currentState !== 'active',
   );
+  /** True after 3 consecutive poll failures — interval stopped, manual retry shown. */
+  const [pollStopped, setPollStopped] = useState(false);
 
   const scrollRef    = useRef<ScrollView>(null);
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -147,6 +149,11 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // Tracks current AppState so every interval-start path can guard against
   // restarting the poll while the app is backgrounded/inactive.
   const appStateRef   = useRef(AppState.currentState);
+  // Consecutive poll-failure counter — stops the interval at 3.
+  const pollFailCountRef = useRef(0);
+  // Ref mirror of pollStopped so event-handler closures can read it synchronously
+  // without depending on stale React state.
+  const pollStoppedRef = useRef(false);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -188,7 +195,10 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       setDetail({ ...json, logs: merged });
       setLogCount(merged.length);
 
-      // Connection restored — clear any inline retry banner.
+      // Connection restored — clear any inline retry banner and reset failure counter.
+      pollFailCountRef.current = 0;
+      pollStoppedRef.current   = false;
+      setPollStopped(false);
       setError('');
       setPollError('');
 
@@ -200,11 +210,27 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       // Ignore aborted requests — they are intentional cancellations.
       if (err instanceof Error && err.name === 'AbortError') return;
       const msg = err instanceof Error ? err.message : 'Failed to load logs';
-      // If we already have accumulated log lines, keep them visible and only
-      // show an inline banner.  Otherwise surface a full-screen error so the
-      // user knows the initial load failed.
-      if (silent && accLogsRef.current.length > 0) {
-        setPollError(msg);
+      // All poll-tick (silent) failures count toward the consecutive-failure
+      // limit, regardless of whether we have accumulated log lines.
+      if (silent) {
+        pollFailCountRef.current += 1;
+        // After 3 consecutive failures, stop hammering the server and ask the
+        // user to retry manually.
+        if (pollFailCountRef.current >= 3) {
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          pollStoppedRef.current = true;
+          setPollStopped(true);
+        }
+        // Show inline banner if we have logs; otherwise surface a full-screen
+        // error so the user knows no data has been loaded yet.
+        if (accLogsRef.current.length > 0) {
+          setPollError(msg);
+        } else {
+          setError(msg);
+        }
       } else {
         setError(msg);
       }
@@ -233,6 +259,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     setDetail(null);
     setError('');
     setPollError('');
+    pollStoppedRef.current   = false;
+    setPollStopped(false);
+    pollFailCountRef.current = 0;
     userScrolled.current  = false;
     accLogsRef.current    = [];
     logOffsetRef.current  = 0;
@@ -250,7 +279,8 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     pollRef.current = null;
     if (!build) return;
     const status = detail?.status ?? build.status;
-    if (isActive(status) && appStateRef.current === 'active') {
+    // Don't start a new interval if the user must manually retry after failures.
+    if (isActive(status) && appStateRef.current === 'active' && !pollStoppedRef.current) {
       pollRef.current = setInterval(() => fetchLogs(true), 5_000);
     }
     return () => {
@@ -260,6 +290,26 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       }
     };
   }, [build, detail?.status, fetchLogs]);
+
+  // ── Manual retry after polling stopped ─────────────────────────────────────
+
+  const handlePollRetry = useCallback(() => {
+    pollFailCountRef.current = 0;
+    pollStoppedRef.current   = false;
+    setPollStopped(false);
+    setPollError('');
+    setError('');
+    // Immediate catch-up fetch.  Use silent=false if we have no logs yet so the
+    // loading spinner shows; silent=true if we already have lines to display.
+    fetchLogs(accLogsRef.current.length === 0 ? false : true);
+    // Only restart the interval when the build is still active and the app is
+    // in the foreground.
+    const currentStatus = detail?.status ?? build?.status ?? '';
+    if (isActive(currentStatus) && appStateRef.current === 'active') {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => fetchLogs(true), 5_000);
+    }
+  }, [fetchLogs, detail?.status, build?.status]);
 
   // ── Stop polling / reset on close ──────────────────────────────────────────
 
@@ -293,13 +343,15 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       } else if (nextState === 'active' && prevState !== 'active') {
         // Resume: only when we're actually transitioning back to foreground.
         // Always clear first to prevent duplicates, then restart if the build
-        // is still in a running state.
+        // is still running AND the user hasn't been forced to a manual retry.
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
         const currentStatus = detail?.status ?? build?.status ?? '';
-        if (build && isActive(currentStatus)) {
+        // Only restart automatic polling when it wasn't stopped due to
+        // consecutive failures — those require an explicit user retry.
+        if (build && isActive(currentStatus) && !pollStoppedRef.current) {
           // Immediate catch-up fetch, then regular 5-second cadence.
           fetchLogs(true);
           pollRef.current = setInterval(() => fetchLogs(true), 5_000);
@@ -501,15 +553,30 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
             </Pressable>
           </View>
         ) : logs.length === 0 ? (
+          // No log lines yet — either still waiting or polling was stopped after
+          // three consecutive failures while the build was still starting up.
           <View style={s.center}>
             <MaterialCommunityIcons
-              name={active ? 'timer-sand' : 'text-box-remove-outline'}
+              name={pollStopped ? 'wifi-off' : (active ? 'timer-sand' : 'text-box-remove-outline')}
               size={32}
-              color={colors.mutedForeground}
+              color={pollStopped ? colors.destructive : colors.mutedForeground}
             />
-            <Text style={[s.emptyText, { color: colors.mutedForeground }]}>
-              {active ? 'Waiting for log output…' : 'No logs available for this build.'}
+            <Text style={[s.emptyText, { color: pollStopped ? colors.destructive : colors.mutedForeground }]}>
+              {pollStopped
+                ? 'Lost connection — no logs received'
+                : active
+                  ? 'Waiting for log output…'
+                  : 'No logs available for this build.'}
             </Text>
+            {pollStopped && (
+              <Pressable
+                style={[s.retryBtn, { backgroundColor: colors.primary }]}
+                onPress={handlePollRetry}
+              >
+                <MaterialCommunityIcons name="refresh" size={14} color="#fff" />
+                <Text style={s.retryBtnText}>Retry</Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <>
@@ -517,16 +584,34 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
             {!!pollError && (
               <View style={[s.retryBanner, { backgroundColor: colors.destructive + '18', borderColor: colors.destructive + '44' }]}>
                 <MaterialCommunityIcons name="wifi-off" size={14} color={colors.destructive} />
-                <Text style={[s.retryBannerText, { color: colors.destructive }]} numberOfLines={1}>
-                  Lost connection — retrying…
-                </Text>
-                <Pressable
-                  onPress={() => setPollError('')}
-                  hitSlop={10}
-                  style={s.retryBannerDismiss}
-                >
-                  <MaterialCommunityIcons name="close" size={14} color={colors.destructive} />
-                </Pressable>
+                {pollStopped ? (
+                  <>
+                    <Text style={[s.retryBannerText, { color: colors.destructive }]} numberOfLines={1}>
+                      Connection lost
+                    </Text>
+                    <Pressable
+                      onPress={handlePollRetry}
+                      hitSlop={10}
+                      style={[s.retryBannerBtn, { backgroundColor: colors.destructive }]}
+                    >
+                      <MaterialCommunityIcons name="refresh" size={12} color="#fff" />
+                      <Text style={s.retryBannerBtnText}>Retry</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[s.retryBannerText, { color: colors.destructive }]} numberOfLines={1}>
+                      Lost connection — retrying…
+                    </Text>
+                    <Pressable
+                      onPress={() => setPollError('')}
+                      hitSlop={10}
+                      style={s.retryBannerDismiss}
+                    >
+                      <MaterialCommunityIcons name="close" size={14} color={colors.destructive} />
+                    </Pressable>
+                  </>
+                )}
               </View>
             )}
 
@@ -686,6 +771,11 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
     },
     retryBannerText: { flex: 1, fontSize: 12, fontWeight: '600' },
     retryBannerDismiss: { padding: 2 },
+    retryBannerBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4,
+    },
+    retryBannerBtnText: { color: '#fff', fontSize: 11, fontWeight: '700' },
 
     pollingBar: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
