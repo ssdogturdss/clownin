@@ -214,6 +214,22 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       if (!userScrolled.current && isActive(json.status) && newLines.length > 0) {
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
       }
+
+      // ── Background-resume log-gap recovery ──────────────────────────────
+      // If the build finished while the app was backgrounded AND the server
+      // truncated or rotated its log buffer, the offset-based catch-up fetch
+      // returns 0 new lines even though lines were missed.  Detect this by
+      // checking whether the build is now terminal and the server's logOffset
+      // did not advance past the offset we requested with.  In that case,
+      // silently re-fetch from offset 0 so no lines are lost.
+      const terminalStatus = !isActive(json.status);
+      const noNewLines = (json.logOffset ?? merged.length) <= offset;
+      if (silent && offset > 0 && terminalStatus && noNewLines) {
+        // Reset accumulated state so the full-load response replaces everything.
+        logOffsetRef.current = 0;
+        accLogsRef.current   = [];
+        fetchLogs(true);
+      }
     } catch (err) {
       // Ignore aborted requests — they are intentional cancellations.
       if (err instanceof Error && err.name === 'AbortError') return;
