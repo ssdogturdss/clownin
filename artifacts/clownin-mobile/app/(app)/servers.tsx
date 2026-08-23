@@ -81,6 +81,10 @@ export default function ServersScreen() {
   };
 
   const openEdit = (s: ServerConfig) => {
+    setTestResults((prev) => {
+      const { [s.id]: _staleResult, ...remaining } = prev;
+      return remaining;
+    });
     setEditingServer(s);
     setForm({ name: s.name, host: s.host, port: String(s.port), username: s.username, password: '', privateKey: '', useKey: false });
     setShowForm(true);
