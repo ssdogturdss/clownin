@@ -171,6 +171,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // Tracks current AppState so every interval-start path can guard against
   // restarting the poll while the app is backgrounded/inactive.
   const appStateRef   = useRef(AppState.currentState);
+  // Keeps the latest stopped state available to the AppState listener without
+  // relying on a potentially stale render closure.
+  const pollStoppedRef = useRef(pollStopped);
+  // The timestamp ticker is paused while the app is backgrounded and restarted
+  // explicitly on resume when polling is still stopped.
+  const lastUpdatedTickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Slow reconnect probe (30 s) that fires automatically after polling stops so
   // the user doesn't have to tap Retry after a transient network outage.
   const reconnectProbeRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -186,6 +192,25 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // against this value: if the refetch returned fewer lines than we originally
   // had, the server's log store was also discarded and lines are unrecoverable.
   const preRecoveryOffsetRef = useRef(0);
+
+  const restartLastUpdatedTicker = useCallback(() => {
+    if (lastUpdatedTickerRef.current) {
+      clearInterval(lastUpdatedTickerRef.current);
+      lastUpdatedTickerRef.current = null;
+    }
+    if (!pollStoppedRef.current) return;
+
+    // Re-render immediately on resume so the label reflects time spent away
+    // from the app instead of waiting for the next 30-second tick.
+    forceTickRender(c => c + 1);
+    lastUpdatedTickerRef.current = setInterval(() => {
+      forceTickRender(c => c + 1);
+    }, 30_000);
+  }, []);
+
+  useEffect(() => {
+    pollStoppedRef.current = pollStopped;
+  }, [pollStopped]);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -404,10 +429,14 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // ── Tick every 30 s while pollStopped so "N min ago" label stays live ──────
 
   useEffect(() => {
-    if (!pollStopped) return;
-    const id = setInterval(() => forceTickRender(c => c + 1), 30_000);
-    return () => clearInterval(id);
-  }, [pollStopped]);
+    restartLastUpdatedTicker();
+    return () => {
+      if (lastUpdatedTickerRef.current) {
+        clearInterval(lastUpdatedTickerRef.current);
+        lastUpdatedTickerRef.current = null;
+      }
+    };
+  }, [pollStopped, restartLastUpdatedTicker]);
 
   // ── Manual retry after polling stopped ─────────────────────────────────────
 
@@ -454,6 +483,10 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
         // Pause: clear the interval, the reconnect probe, and any in-flight
         // request so no network traffic fires while the app is invisible.
         pollControllerRef.current.clearInterval();
+        if (lastUpdatedTickerRef.current) {
+          clearInterval(lastUpdatedTickerRef.current);
+          lastUpdatedTickerRef.current = null;
+        }
         if (reconnectProbeRef.current) {
           clearInterval(reconnectProbeRef.current);
           reconnectProbeRef.current = null;
@@ -473,6 +506,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
             fetchLogs(true);
             pollControllerRef.current.startInterval(() => fetchLogs(true), 5_000);
           } else {
+            restartLastUpdatedTicker();
             // Polling was stopped due to failures; restart the reconnect probe
             // (it was cleared when we went to background).
             if (reconnectProbeRef.current) clearInterval(reconnectProbeRef.current);
@@ -487,7 +521,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
       }
     });
     return () => subscription.remove();
-  }, [build, detail?.status, fetchLogs]);
+  }, [build, detail?.status, fetchLogs, restartLastUpdatedTicker]);
 
   // ── Unmount cleanup ────────────────────────────────────────────────────────
 
