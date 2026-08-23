@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -28,7 +28,12 @@ import {
 import type { ServerConfig } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
 import { getConnectionHint, getErrorLabel } from '@/lib/sshErrorHint';
-import { clearServerTestResult } from '@/lib/serverTestResults';
+import {
+  clearServerTestResult,
+  loadPersistedTestResults,
+  persistTestResult,
+  removePersistedTestResult,
+} from '@/lib/serverTestResults';
 
 // ─── Form state ───────────────────────────────────────────────────────────────
 interface ServerForm {
@@ -79,11 +84,36 @@ export default function ServersScreen() {
   const [testing, setTesting] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { ok: boolean; error?: string; testedAt: number }>>({});
   const [now, setNow] = useState(() => Date.now());
+  const persistedLoadedRef = useRef(false);
+  // IDs cleared (edit opened / server deleted) before the initial async load
+  // resolves. Prevents the load's .then() from restoring a stale badge for a
+  // server that was already cleared while the read was in-flight.
+  const suppressLoadRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(interval);
   }, []);
+
+  // Load persisted results once, as soon as the server list is available.
+  // Merge with { ...persisted, ...prev } so any result produced in the current
+  // session always wins over what was stored. Entries whose IDs were cleared
+  // before this promise resolved are filtered out to avoid re-surfacing a badge
+  // the user just dismissed via edit or delete.
+  useEffect(() => {
+    if (persistedLoadedRef.current || isLoading) return;
+    persistedLoadedRef.current = true;
+    loadPersistedTestResults(servers.map((s) => s.id)).then((persisted) => {
+      const suppressed = suppressLoadRef.current;
+      const filtered: typeof persisted = {};
+      for (const [k, v] of Object.entries(persisted)) {
+        if (!suppressed.has(Number(k))) filtered[Number(k)] = v;
+      }
+      if (Object.keys(filtered).length > 0) {
+        setTestResults((prev) => ({ ...filtered, ...prev }));
+      }
+    });
+  }, [isLoading, servers]);
 
   const openCreate = () => {
     setEditingServer(null);
@@ -92,7 +122,9 @@ export default function ServersScreen() {
   };
 
   const openEdit = (s: ServerConfig) => {
+    suppressLoadRef.current.add(s.id);
     setTestResults((prev) => clearServerTestResult(prev, s.id));
+    removePersistedTestResult(s.id);
     setEditingServer(s);
     setForm({ name: s.name, host: s.host, port: String(s.port), username: s.username, password: '', privateKey: '', useKey: false });
     setShowForm(true);
@@ -193,6 +225,9 @@ export default function ServersScreen() {
           try {
             await deleteMutation.mutateAsync({ id: s.id });
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            suppressLoadRef.current.add(s.id);
+            removePersistedTestResult(s.id);
+            setTestResults((prev) => clearServerTestResult(prev, s.id));
             queryClient.invalidateQueries({ queryKey: getListServersQueryKey() });
           } catch {
             Alert.alert('Error', 'Failed to remove server.');
@@ -206,12 +241,16 @@ export default function ServersScreen() {
     setTesting(s.id);
     try {
       const res = await testMutation.mutateAsync({ id: s.id });
-      setTestResults((prev) => ({ ...prev, [s.id]: { ...res, testedAt: Date.now() } }));
+      const result = { ...res, testedAt: Date.now() };
+      setTestResults((prev) => ({ ...prev, [s.id]: result }));
+      persistTestResult(s.id, result);
       await Haptics.notificationAsync(
         res.ok ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error
       );
     } catch {
-      setTestResults((prev) => ({ ...prev, [s.id]: { ok: false, error: 'Request failed', testedAt: Date.now() } }));
+      const result = { ok: false, error: 'Request failed', testedAt: Date.now() };
+      setTestResults((prev) => ({ ...prev, [s.id]: result }));
+      persistTestResult(s.id, result);
     } finally {
       setTesting(null);
     }
