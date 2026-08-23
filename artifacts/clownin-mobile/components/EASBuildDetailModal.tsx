@@ -128,6 +128,9 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [pollError,   setPollError]   = useState('');
   const [logCount,    setLogCount]    = useState(0);
   const [toastText,   setToastText]   = useState('');
+  const [pollingPaused, setPollingPaused] = useState(
+    AppState.currentState !== 'active',
+  );
 
   const scrollRef    = useRef<ScrollView>(null);
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -286,6 +289,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
           pollRef.current = null;
         }
         abortRef.current?.abort();
+        setPollingPaused(true);
       } else if (nextState === 'active' && prevState !== 'active') {
         // Resume: only when we're actually transitioning back to foreground.
         // Always clear first to prevent duplicates, then restart if the build
@@ -300,6 +304,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
           fetchLogs(true);
           pollRef.current = setInterval(() => fetchLogs(true), 5_000);
         }
+        setPollingPaused(false);
       }
     });
     return () => subscription.remove();
@@ -575,9 +580,19 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
         {/* ── Polling indicator ──────────────────────────────────────────── */}
         {active && !!detail && (
           <View style={[s.pollingBar, { borderTopColor: colors.border }]}>
-            <ActivityIndicator size={11} color={colors.primary} />
+            {pollingPaused ? (
+              <MaterialCommunityIcons
+                name="pause-circle-outline"
+                size={11}
+                color={colors.mutedForeground}
+              />
+            ) : (
+              <ActivityIndicator size={11} color={colors.primary} />
+            )}
             <Text style={[s.pollingText, { color: colors.mutedForeground }]}>
-              Live · {logCount} {logCount === 1 ? 'line' : 'lines'}
+              {pollingPaused
+                ? 'Paused'
+                : `Live · ${logCount} ${logCount === 1 ? 'line' : 'lines'}`}
             </Text>
           </View>
         )}
