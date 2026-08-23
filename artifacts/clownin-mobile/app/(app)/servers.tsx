@@ -260,10 +260,24 @@ export default function ServersScreen() {
                         {testResult.ok ? 'Connected' : (testResult.error ?? 'Failed')}
                       </Text>
                     </View>
-                    {!testResult.ok && testResult.error && getConnectionHint(testResult.error) && (
-                      <Text style={[styles.testHintText, { color: colors.mutedForeground }]}>
-                        {getConnectionHint(testResult.error)}
-                      </Text>
+                    {!testResult.ok && (
+                      <View style={styles.testHintRow}>
+                        {testResult.error && getConnectionHint(testResult.error) && (
+                          <Text style={[styles.testHintText, { color: colors.mutedForeground, flex: 1 }]}>
+                            {getConnectionHint(testResult.error)}
+                          </Text>
+                        )}
+                        {testing !== item.id && (
+                          <Pressable
+                            onPress={() => handleTest(item)}
+                            hitSlop={8}
+                            style={[styles.retryBtn, { borderColor: colors.destructive + '66' }]}
+                          >
+                            <Ionicons name="refresh" size={12} color={colors.destructive} />
+                            <Text style={[styles.retryBtnText, { color: colors.destructive }]}>Retry</Text>
+                          </Pressable>
+                        )}
+                      </View>
                     )}
                   </View>
                 )}
@@ -438,6 +452,9 @@ const styles = StyleSheet.create({
   testBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' },
   testBadgeText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
   testHintText: { fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 16, paddingHorizontal: 2 },
+  testHintRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1 },
+  retryBtnText: { fontSize: 12, fontFamily: 'Inter_500Medium' },
   testBtn: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, alignItems: 'center' },
   testBtnText: { fontSize: 13, fontFamily: 'Inter_500Medium' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
