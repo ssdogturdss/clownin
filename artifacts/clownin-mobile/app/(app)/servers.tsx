@@ -28,6 +28,7 @@ import {
 import type { ServerConfig } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
 import { getConnectionHint, getErrorLabel } from '@/lib/sshErrorHint';
+import { clearServerTestResult } from '@/lib/serverTestResults';
 
 // ─── Form state ───────────────────────────────────────────────────────────────
 interface ServerForm {
@@ -91,10 +92,7 @@ export default function ServersScreen() {
   };
 
   const openEdit = (s: ServerConfig) => {
-    setTestResults((prev) => {
-      const { [s.id]: _staleResult, ...remaining } = prev;
-      return remaining;
-    });
+    setTestResults((prev) => clearServerTestResult(prev, s.id));
     setEditingServer(s);
     setForm({ name: s.name, host: s.host, port: String(s.port), username: s.username, password: '', privateKey: '', useKey: false });
     setShowForm(true);
