@@ -12,7 +12,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useCreateProject,
@@ -97,6 +97,8 @@ export default function TemplatesScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const { data: profile } = useProfile();
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const assistMode = mode === 'assist';
 
   const { data: templates, isLoading, isError, refetch } = useTemplates();
   const createMutation = useCreateProject();
@@ -140,11 +142,15 @@ export default function TemplatesScreen() {
   const handleSelectTemplate = useCallback(
     (template: Template) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (assistMode) {
+        router.replace({ pathname: '/(app)', params: { assistTemplateId: template.id } });
+        return;
+      }
       setSelected(template);
       setProjectName(template.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
       setShowNaming(true);
     },
-    []
+    [assistMode]
   );
 
   const handleCreate = useCallback(async () => {

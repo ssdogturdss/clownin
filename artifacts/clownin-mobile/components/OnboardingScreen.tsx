@@ -29,6 +29,7 @@ interface OnboardingScreenProps {
   isLoading: boolean;
   onBrowseTemplates?: () => void;
   pendingTemplate?: { id: string; name: string } | null;
+  assistTemplate?: { id: string; name: string } | null;
   onChangeTemplate?: () => void;
   onProceedWithTemplate?: () => void;
 }
@@ -41,6 +42,7 @@ export function OnboardingScreen({
   isLoading,
   onBrowseTemplates,
   pendingTemplate,
+  assistTemplate,
   onChangeTemplate,
   onProceedWithTemplate,
 }: OnboardingScreenProps) {
@@ -52,7 +54,7 @@ export function OnboardingScreen({
   const bannerOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (pendingTemplate) {
+    if (pendingTemplate || assistTemplate) {
       // Fade in the banner
       Animated.timing(bannerOpacity, {
         toValue: 1,
@@ -91,7 +93,7 @@ export function OnboardingScreen({
         countdownIntervalRef.current = null;
       }
     };
-  }, [pendingTemplate]);
+  }, [pendingTemplate, assistTemplate]);
 
   const handleSubmit = (text: string) => {
     const trimmed = text.trim();
@@ -103,6 +105,7 @@ export function OnboardingScreen({
   const topPad = Platform.OS === "web" ? 24 : insets.top;
   const bottomPad = Platform.OS === "web" ? 24 : insets.bottom;
   const progressWidth = COUNTDOWN_MS > 0 ? (countdown / COUNTDOWN_MS) * 100 : 0;
+  const selectedTemplate = assistTemplate ?? pendingTemplate;
 
   return (
     <KeyboardAvoidingView
@@ -118,27 +121,22 @@ export function OnboardingScreen({
       </View>
 
       {/* Template match notice banner */}
-      {pendingTemplate && (
+      {selectedTemplate && (
         <Animated.View style={[styles.templateBanner, { backgroundColor: colors.card, borderColor: colors.border, opacity: bannerOpacity }]}>
           <View style={styles.templateBannerRow}>
             <MaterialCommunityIcons name="layers-outline" size={15} color={colors.primary} style={{ marginTop: 1 }} />
             <Text style={[styles.templateBannerText, { color: colors.foreground }]} numberOfLines={1}>
-              Starting from{" "}
-              <Text style={{ fontFamily: "Inter_600SemiBold" }}>{pendingTemplate.name}</Text>
+              {assistTemplate ? "Assist with " : "Starting from "}
+              <Text style={{ fontFamily: "Inter_600SemiBold" }}>{selectedTemplate.name}</Text>
             </Text>
             <Pressable onPress={onChangeTemplate} hitSlop={8}>
               <Text style={[styles.templateBannerChange, { color: colors.primary }]}>Change</Text>
             </Pressable>
           </View>
           {/* Progress bar showing countdown */}
-          <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
-            <View
-              style={[
-                styles.progressFill,
-                { backgroundColor: colors.primary, width: `${progressWidth}%` as any },
-              ]}
-            />
-          </View>
+          {!assistTemplate && <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
+            <View style={[styles.progressFill, { backgroundColor: colors.primary, width: `${progressWidth}%` as any }]} />
+          </View>}
         </Animated.View>
       )}
 

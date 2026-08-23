@@ -14,7 +14,7 @@ import {
   ScrollView,
   Linking,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
   useListProjects,
   useCreateProject,
@@ -275,9 +275,17 @@ export default function ProjectsScreen() {
   const [filterLang, setFilterLang] = useState<string | null>(null);
   // Map of projectId → deployed URL (loaded from AsyncStorage)
   const [deployedUrls, setDeployedUrls] = useState<Record<number, string>>({});
+  const [assistTemplate, setAssistTemplate] = useState<TemplateForMatching | null>(null);
+  const { assistTemplateId } = useLocalSearchParams<{ assistTemplateId?: string }>();
 
   const { data: profile } = useProfile();
   const { data: matchableTemplates = [] } = useTemplatesForMatching();
+
+  useEffect(() => {
+    if (!assistTemplateId || assistTemplate) return;
+    const selected = matchableTemplates.find((template) => template.id === assistTemplateId);
+    if (selected) setAssistTemplate(selected);
+  }, [assistTemplateId, matchableTemplates, assistTemplate]);
 
   // Load deployed URLs from AsyncStorage whenever projects list changes
   useEffect(() => {
@@ -438,6 +446,10 @@ export default function ProjectsScreen() {
       setShowPaywall(true);
       return;
     }
+    if (assistTemplate) {
+      await doCreateProject(idea, assistTemplate);
+      return;
+    }
     const matchedTemplate = detectTemplate(idea, matchableTemplates);
     if (matchedTemplate) {
       // Show a brief notice so the user can see and optionally change the template
@@ -449,7 +461,7 @@ export default function ProjectsScreen() {
     } else {
       await doCreateProject(idea, null);
     }
-  }, [doCreateProject, profile, projects, matchableTemplates, clearPendingTimer]);
+  }, [assistTemplate, doCreateProject, profile, projects, matchableTemplates, clearPendingTimer]);
 
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
@@ -462,14 +474,16 @@ export default function ProjectsScreen() {
         isLoading={createMutation.isPending}
         onBrowseTemplates={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push('/(app)/templates');
+          router.push({ pathname: '/(app)/templates', params: { mode: 'assist' } });
         }}
         pendingTemplate={pendingSubmission ? { id: pendingSubmission.template.id, name: pendingSubmission.template.name } : null}
+        assistTemplate={assistTemplate ? { id: assistTemplate.id, name: assistTemplate.name } : null}
         onChangeTemplate={() => {
           clearPendingTimer();
           setPendingSubmission(null);
+          setAssistTemplate(null);
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push('/(app)/templates');
+          router.push({ pathname: '/(app)/templates', params: { mode: 'assist' } });
         }}
         onProceedWithTemplate={() => {
           if (pendingSubmission) {
