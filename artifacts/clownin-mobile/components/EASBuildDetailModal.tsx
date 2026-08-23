@@ -148,6 +148,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   const [lastSuccessAt, setLastSuccessAt] = useState<Date | null>(null);
   /** Incremented every 30 s while pollStopped so the "N min ago" label stays live. */
   const [, forceTickRender] = useState(0);
+  /**
+   * Set to true after a full-refetch recovery when the returned logOffset is
+   * suspiciously small relative to the build's duration — signals the server's
+   * own log buffer was also discarded while the app was backgrounded.
+   */
+  const [logMayBeIncomplete, setLogMayBeIncomplete] = useState(false);
 
   const scrollRef    = useRef<ScrollView>(null);
   /** Manages the 5-second poll interval and the consecutive-failure state machine. */
@@ -171,6 +177,15 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
   // Set to true for the duration of a probe fetch so fetchLogs skips its
   // normal failure-counter and error-banner logic on probe misses.
   const isReconnectProbeRef = useRef(false);
+  // Set to true just before the recursive full-refetch recovery call so the
+  // next successful fetch can detect it came from a recovery and check whether
+  // the server's buffer was also truncated.
+  const fullRefetchPendingRef = useRef(false);
+  // Stores the logOffset value that was in-use when shouldRecoverFullLog fired.
+  // After the subsequent full-refetch completes, its returned offset is compared
+  // against this value: if the refetch returned fewer lines than we originally
+  // had, the server's log store was also discarded and lines are unrecoverable.
+  const preRecoveryOffsetRef = useRef(0);
 
   // ── Fetch logs ──────────────────────────────────────────────────────────────
 
@@ -182,7 +197,16 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    if (!silent) setLoading(true);
+    if (!silent) {
+      setLoading(true);
+      // A user-initiated (non-silent) fetch always resets the incomplete notice.
+      setLogMayBeIncomplete(false);
+    }
+
+    // Capture and clear the recovery flag before any await so that the response
+    // handler below can act on it regardless of which fetch path is taken.
+    const isRecoveryRefetch = fullRefetchPendingRef.current;
+    fullRefetchPendingRef.current = false;
 
     try {
       const base = resolveApiBaseUrl();
@@ -224,22 +248,46 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
         setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
       }
 
+      // ── Incomplete-log notice after a recovery refetch ──────────────────
+      // When the previous fetch triggered a full-refetch recovery (the app
+      // came back from the background and the server's incremental buffer had
+      // rotated), we re-fetched from offset 0.  Compare the offset we were at
+      // before the recovery (preRecoveryOffsetRef) with the offset returned
+      // by the full refetch.  If the server returned fewer total lines than we
+      // originally had, the server's own log store was also discarded and those
+      // lines are unrecoverable — show a soft notice.  This check also covers
+      // the case where the full refetch returns 0 lines (complete buffer expiry).
+      if (isRecoveryRefetch && !isActive(json.status)) {
+        const priorOffset = preRecoveryOffsetRef.current;
+        const finalOffset = json.logOffset ?? merged.length;
+        if (priorOffset > 0 && finalOffset < priorOffset) {
+          setLogMayBeIncomplete(true);
+        }
+        preRecoveryOffsetRef.current = 0; // consumed — reset for the next build
+      }
+
       // ── Background-resume log-gap recovery ──────────────────────────────
       // If the build finished while the app was backgrounded AND the server
-      // truncated or rotated its log buffer, the offset-based catch-up fetch
-      // returns 0 new lines even though lines were missed.  Detect this by
-      // checking whether the build is now terminal and the server's logOffset
-      // did not advance past the offset we requested with.  In that case,
-      // silently re-fetch from offset 0 so no lines are lost.
+      // truncated or rotated its incremental log buffer, the offset-based
+      // catch-up fetch returns 0 new lines even though lines were missed.
+      // Detect this by checking whether the build is now terminal and the
+      // server's logOffset did not advance past the offset we requested with.
+      // In that case, silently re-fetch from offset 0 so no lines are lost.
       if (shouldRecoverFullLog({
         silent,
         requestedOffset: offset,
         terminalStatus: !isActive(json.status),
         serverLogOffset: json.logOffset ?? merged.length,
       })) {
+        // Save the current offset before resetting so the recovery-refetch
+        // response can compare against it to detect truncation.
+        preRecoveryOffsetRef.current = offset;
         // Reset accumulated state so the full-load response replaces everything.
         logOffsetRef.current = 0;
         accLogsRef.current   = [];
+        // Signal that the next successful fetch is coming from this recovery
+        // path so the truncation check above can run on its response.
+        fullRefetchPendingRef.current = true;
         fetchLogs(true);
       }
     } catch (err) {
@@ -297,9 +345,12 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     pollControllerRef.current.reset();
     setPollStopped(false);
     setLastSuccessAt(null);
-    userScrolled.current  = false;
-    accLogsRef.current    = [];
-    logOffsetRef.current  = 0;
+    setLogMayBeIncomplete(false);
+    userScrolled.current          = false;
+    accLogsRef.current            = [];
+    logOffsetRef.current          = 0;
+    fullRefetchPendingRef.current = false;
+    preRecoveryOffsetRef.current  = 0;
     fetchLogs(false);
   }, [build, fetchLogs]);
 
@@ -365,6 +416,7 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
     setPollStopped(false);
     setPollError('');
     setError('');
+    setLogMayBeIncomplete(false);
     // Immediate catch-up fetch.  Use silent=false if we have no logs yet so the
     // loading spinner shows; silent=true if we already have lines to display.
     fetchLogs(accLogsRef.current.length === 0 ? false : true);
@@ -738,6 +790,25 @@ export function EASBuildDetailModal({ build, authToken, onClose }: Props) {
           </>
         )}
 
+        {/* ── Incomplete-log notice ──────────────────────────────────────── */}
+        {/* Rendered outside the log/empty-state conditional so it is visible
+            even when the full-refetch recovery returns zero retained lines. */}
+        {logMayBeIncomplete && (
+          <View style={[s.incompleteBanner, { backgroundColor: '#d29922' + '18', borderColor: '#d29922' + '44' }]}>
+            <MaterialCommunityIcons name="information-outline" size={13} color="#d29922" />
+            <Text style={[s.incompleteBannerText, { color: '#d29922' }]}>
+              Log may be incomplete — build finished while the app was away
+            </Text>
+            <Pressable
+              onPress={() => setLogMayBeIncomplete(false)}
+              hitSlop={10}
+              style={s.incompleteDismiss}
+            >
+              <MaterialCommunityIcons name="close" size={13} color="#d29922" />
+            </Pressable>
+          </View>
+        )}
+
         {/* ── Polling indicator ──────────────────────────────────────────── */}
         {active && !!detail && (
           <View style={[s.pollingBar, { borderTopColor: colors.border }]}>
@@ -877,5 +948,14 @@ function makeStyles(colors: ReturnType<typeof useColors>) {
       elevation: 6,
     },
     toastText: { fontSize: 13, fontWeight: '600' },
+
+    incompleteBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      marginHorizontal: 12, marginTop: 4, marginBottom: 2,
+      paddingHorizontal: 10, paddingVertical: 7,
+      borderRadius: 8, borderWidth: 1,
+    },
+    incompleteBannerText: { flex: 1, fontSize: 12, fontWeight: '500', lineHeight: 17 },
+    incompleteDismiss: { padding: 2 },
   });
 }
